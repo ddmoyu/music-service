@@ -1,0 +1,22 @@
+# Locally cloned reference repositories keep their own Git history.
+/third_party/*
+!/third_party/README.md
+
+# CMake build output and local presets.
+/build/
+/out/
+/cpp/build/
+/cpp/out/
+cmake-build-*/
+CMakeUserPresets.json
+
+# Local environment and editor state.
+.env
+.env.*
+!.env.example
+.vs/
+.idea/
+*.user
+*.suo
+.DS_Store
+Thumbs.db
