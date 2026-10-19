@@ -1,6 +1,6 @@
 # music-service
 
-独立音乐后端服务，为单独维护的 GUI 和前端提供音乐搜索、音源解析、下载与任务管理等 API。当前处于研究与设计阶段，文档入口见 [项目文档](docs/README.md)。
+独立音乐后端服务，为单独维护的 GUI 和前端提供音乐搜索、音源解析、下载与任务管理等 API。本项目是纯后端，不包含 GUI；要求跨平台运行，并支持原生进程、系统服务及 Docker 部署。系统、架构和验证边界见[配置与部署](docs/design/cpp20-refactor/backend-service/configuration-and-deployment.md)。当前处于研究与设计阶段，文档入口见 [项目文档](docs/README.md)。
 
 ## 目录结构
 

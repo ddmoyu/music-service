@@ -29,6 +29,7 @@ infrastructure → application/ports + domain
 - api、media_server、event_server 只做协议转换与入场控制，共享应用服务。
 - application/media 管理媒体授权，audio_processing 处理文件，media_server 传输字节。
 - 跨模块使用项目类型和 Result<T>；C++20 不依赖 C++23 的 std::expected。
+- Windows／POSIX 原生接口限定在进程、文件、权限、网络、秘密等适配实现；业务公共头不暴露系统类型，入口不引入 GUI 或桌面运行时。
 
 ## 目录
 
@@ -176,6 +177,8 @@ music-dl/
 目标可按编译收益合并，第三方头不经公共头传播。audio_processing 初期可编入 infrastructure。Drogon 替换 HTTP／传输适配，业务用例共用。
 
 依赖获取与版本规则见[构建与依赖](build-and-dependencies.md)。
+
+上面的目录仅表示拟建结构，按实际交付目标补充打包规则；Windows／Linux 原生包、Dockerfile 与 Compose 共用服务可执行目标，macOS 等候选目标启用后再增加相应打包目录。系统和架构支持以[部署矩阵](configuration-and-deployment.md#部署方式)为准。
 
 ## 新增平台
 

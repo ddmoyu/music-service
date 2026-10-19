@@ -5,12 +5,26 @@
 | 项目 | 规则 |
 | --- | --- |
 | 语言 | C++20，target 显式要求标准，关闭语言扩展 |
+| 产品边界 | 纯后端、无 GUI；不获取 Qt、桌面运行时或前端构建依赖，构建和运行均不要求图形会话 |
 | 构建 | CMake + Presets；先验证 3.30+，最低版本由实际构建确定 |
 | 获取 | 顶层 FetchContent，Git 依赖统一浅克隆 |
 | 固定版本 | 发布 tag + 期望 commit + 实际 HEAD 校验 |
 | 使用 | 模块只链接 target，依赖宏和头文件按目标传播 |
 | 默认网络 | cpp-httplib，不同时获取备用框架 |
 | 系统组件 | 编译器、Git、SDK、系统库显式查找；不隐式替换第三方版本 |
+
+## 跨平台构建与交付
+
+系统、架构及支持级别以[配置与部署](configuration-and-deployment.md#部署方式)为准。Windows、Linux 和 Docker 从 S0 开始持续验证，不能等到发布阶段才验证系统兼容性；macOS 等候选目标未验证前不声明正式支持。
+
+- 同一份业务源码分别构建目标程序；Windows 产物不能直接放入 Linux 镜像运行。Docker 的构建阶段生成目标 Linux 程序，运行阶段打包它及其运行依赖。
+- Preset 和产物名称区分系统、CPU 架构、编译器、Debug／Release、C++ 运行库、glibc／musl、TLS 与功能组合；最低操作系统、运行库和 CPU 指令集写入发布说明。
+- 首轮验证 Windows x64／MSVC 与 Linux x86_64／GCC，按首批架构计划补齐 Linux ARM64；Clang 和其他目标纳入相应矩阵。交叉编译显式指定 toolchain／sysroot，所有依赖面向目标平台构建，不混用宿主库。
+- Schannel／CNG 等系统实现通过目标条件选择；Linux 和容器必须有覆盖同等必需能力的 TLS／协议加密实现。跨平台公共头和业务模块不暴露 Windows／POSIX 原生类型。
+- 核对静态／动态链接后的实际依赖，打包需要的 DLL／共享库、CA 证书与许可文件；不能仅因业务可执行文件生成成功就认定独立部署可用。
+- CI 分开记录编译、原生运行与镜像验证；首批发布组合均需在干净目标环境执行启动、HTTPS、下载、停止和持久数据恢复。模拟构建成功不能代替目标设备运行结果。
+
+容器采用多阶段构建，计划交付 Dockerfile、Compose 示例和 `linux/amd64`／`linux/arm64` 镜像。运行用户、持久卷、监听、健康与停止信号的要求集中维护在[Docker 交付约束](configuration-and-deployment.md#docker-与-compose-交付约束)。
 
 ## 版本与获取
 

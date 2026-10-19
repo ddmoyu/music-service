@@ -11,6 +11,7 @@
 - [内部接口与一致性](design/cpp20-refactor/backend-service/internal-contracts.md)：组件操作、对象所有权、数据库事务、文件发布与恢复。
 - [关键流程与验收](design/cpp20-refactor/backend-service/flows-and-acceptance.md)：搜索、下载、SSE 重连、播放和故障验收矩阵。
 - [构建与依赖设计](design/cpp20-refactor/backend-service/build-and-dependencies.md)：C++20、CMake、FetchContent 浅克隆、固定版本与缓存策略。
+- [配置与跨平台部署](design/cpp20-refactor/backend-service/configuration-and-deployment.md)：纯后端、无 GUI 边界，系统／CPU／运行库矩阵、NAS、Docker／Compose 与服务生命周期。
 - [重构架构](design/cpp20-refactor/architecture.md)：独立常驻后端、多端接入与部署、功能范围、模块边界、统一模型、任务调度、下载与换源流程。
 - [技术栈选型](design/cpp20-refactor/technology-stack.md)：cpp-httplib 暂定主方案、Drogon 备选，以及 HTTP 客户端、TLS、加密和音频元数据等配套选型。
 - [网络库对比与排序](design/cpp20-refactor/library-comparison.md)：10 个候选库的 Stars、更新频率、功能特点和当前项目的契合度。

@@ -6,6 +6,8 @@
 
 主方案的模块、目录、API、控制／媒体／事件三类监听与有界任务执行细节见[后端服务详细设计](backend-service/README.md)。这里保留库能力与取舍证据；初始资源值与协议契约由详细设计维护。
 
+本项目为纯后端，不包含 GUI。Windows、Linux 与 Docker 是选型必需约束，具体架构和支持状态见[配置与部署](backend-service/configuration-and-deployment.md#部署方式)；平台专用优化须有其他目标系统的对应实现。
+
 当前项目的综合排序、Stars、近期提交与 Release 数据见[网络库对比与排序](library-comparison.md)。2026-10-19 用户决定暂定 cpp-httplib 为主方案、Drogon 为备选；阻塞 I/O 不作为排除条件。
 
 ## 技术栈总览
@@ -13,20 +15,20 @@
 | 层次 | 当前方向或候选 | 状态与选择条件 |
 | --- | --- | --- |
 | 语言 | C++20 | 当前方案基线；验证语言特性与所选依赖，不把协程运行时作为前置条件 |
-| 构建 | CMake、CMakePresets | 已确定方向；后续建立可重复的 Windows 与目标平台构建 |
+| 构建 | CMake、CMakePresets | 已确定方向；从基础阶段建立可重复的 Windows／Linux 构建与容器验证 |
 | 依赖管理 | FetchContent，Git 源浅克隆 | 已确定；固定发布 tag 并校验期望 commit，不采用浮动分支 |
 | HTTP Server | cpp-httplib 主方案，Drogon 备选 | 控制、媒体与 SSE 在同进程使用独立 Server／工作池；其他库保留研究参考 |
 | 下载进度 | SSE 主动推送 + HTTP 查询 | 已确定；查询接口独立可用，支持初始状态、恢复与轮询兜底；SSE 不需要额外网络库 |
 | 普通 HTTP Client | 先验证 cpp-httplib Client | TLS 或功能必要时独立替换；仍需验证 Cookie、重定向、超时和取消 |
 | 下载传输 | 先验证 cpp-httplib 分块接收配合独立任务队列 | 验证 Range、进度、取消、资源一致性和稳定内存；必要时另配 curl |
-| TLS | Windows Schannel、OpenSSL、Botan；其他后端按库支持评估 | Schannel 为优先评估方向，是否作为硬性条件待定 |
-| 平台加密 | Windows CNG、Botan、裁剪加密库、LibTomCrypt 配合大整数库等 | 算法清单明确后再决定；不等同于 TLS 后端选择 |
+| TLS | 按网络库支持评估跨平台后端；Windows 可选 Schannel | 必须覆盖 Windows／Linux 与容器；Schannel 是 Windows 适配，不能作为共同实现 |
+| 平台加密 | 跨平台加密库；Windows CNG 可作目标适配 | 算法清单明确后再决定，各目标通过相同协议向量；不等同于 TLS 后端选择 |
 | JSON | 详细设计首轮拟用 nlohmann/json | 用于 HTTP／平台解析边界，尚未引入；业务公共模型不暴露该类型 |
 | 压缩 | zlib 等按协议需求引入 | 用于压缩响应、歌词等；区分 HTTP 自动解压和业务层解压 |
 | 音频标签与属性 | TagLib；有限格式自行实现 | 候选，按 MP3、FLAC、M4A 等实际需求验证 |
 | 转码与通用媒体处理 | FFmpeg 可选扩展 | 不作为原始下载和基础标签功能的默认强制依赖 |
 | 持久化 | SQLite | 详细设计的任务／资产存储基线；后台任务接受前需提交，纯网络预验证可暂不接入 |
-| 播放与界面 | Web 播放、CLI 或桌面界面 | 另行确定；不由 HTTP 框架选择隐含决定 |
+| 播放与界面 | 由外部客户端负责 | 本项目不引入 GUI、播放器内核或音频输出设备依赖；管理命令行属于后端入口 |
 
 ## 服务框架比较参考
 
@@ -92,6 +94,8 @@ cpp-httplib 当前仍使用阻塞 socket I/O，服务端默认通过线程池处
 ## TLS 与平台加密
 
 TLS 保护 HTTPS 连接；平台签名与加密用于生成参数、计算摘要、处理密钥或解密特定响应和音频。它们属于不同职责：即使用 Schannel 解决 HTTPS，也仍需实现平台协议中的加密算法。
+
+先验证满足 Windows／Linux 和 Linux 容器的共同实现，再评估按系统选用后端。Schannel／CNG 只用于 Windows 适配，不要求 Linux 复用 Windows 系统接口；不同实现必须满足相同的身份校验与协议契约。Botan 等能否接入取决于实际网络库支持，不因加密库跨平台就推断框架已经支持该 TLS 后端。
 
 | 方案 | 适用位置 | 需要明确的条件 |
 | --- | --- | --- |
@@ -161,7 +165,7 @@ Windows 状态需要同时看文档和代码。README 仍将官方平台组合�
 
 HTTP 消息本身提供 `read`、`write` 和流式传输接口，适合分块接收音频。原生 HTTP 实现和 curl 模块是分开的，`PHOTON_ENABLE_LIBCURL` 默认打开，可在不用该模块时评估关闭；自带 TLS 模块仍依赖 OpenSSL，没有因此切换到 Schannel。[消息流接口](https://github.com/alibaba/PhotonLibOS/blob/240cf60f69ad8084a846507abb266366c643ed70/net/http/message.h)、[模块与依赖配置](https://github.com/alibaba/PhotonLibOS/blob/240cf60f69ad8084a846507abb266366c643ed70/CMakeLists.txt)
 
-如果主要部署在 Linux 并同时重视网络与文件 I/O，Photon 值得进一步验证。按当前 Windows、精简依赖和 HTTP 应用开发的优先级，暂不进入 cpp-httplib 主方案与 Drogon 备选之外的实施路线。
+如果主要部署在 Linux 并同时重视网络与文件 I/O，Photon 值得进一步验证。按当前跨平台覆盖、精简依赖和 HTTP 应用开发的要求，暂不进入 cpp-httplib 主方案与 Drogon 备选之外的实施路线。
 
 ### CppServer
 

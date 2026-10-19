@@ -1,6 +1,6 @@
 # C++20 重构设计
 
-将 Go Music DL 的音乐平台适配与业务编排迁移到 C++20，先交付无界面、可独立常驻运行的音乐后端服务。网页、Electron、Tauri、Qt、Win32 等前端通过同一套 HTTP API 接入；后端通过 HTTP 客户端访问音乐平台。优先考虑 Windows、普通并发下的可用性与依赖体积；cpp-httplib 暂定为主方案，Drogon 作为备选。
+将 Go Music DL 的音乐平台适配与业务编排迁移到 C++20。本项目是纯后端，不开发或依赖 GUI，以可独立常驻运行的跨平台服务交付，并支持 Docker。网页、Electron、Tauri、Qt、Win32 等均为外部客户端，通过同一套 HTTP API 接入；后端通过 HTTP 客户端访问音乐平台。Windows 与 Linux 从基础阶段共同验证，兼顾普通并发下的可用性与依赖体积；cpp-httplib 暂定为主方案，Drogon 作为备选。
 
 更新日期：2026-10-19。状态：设计阶段，配套依赖待验证。
 
@@ -11,14 +11,16 @@
 | 语言 | 以 C++20 作为重构方案的语言基线 |
 | 构建与依赖 | CMake + CMakePresets；FetchContent 集中获取第三方依赖，Git 浅克隆并固定发布 tag |
 | 服务形式 | HTTP Server 对外提供接口，HTTP Client 调用平台接口 |
+| 产品边界 | 纯后端、无 GUI；构建与启动不依赖桌面会话、浏览器、音频设备或前端运行时 |
 | 交付入口 | 先提供可独立运行的后端可执行程序，不依赖前端窗口或桌面运行时 |
 | 多端接入 | 网页、Electron、Tauri、Qt、Win32、CLI 等通过统一的版本化 HTTP API 调用 |
 | 部署形态 | 本机伴随服务、独立主机、NAS 或 Docker；按操作系统和 CPU 架构构建与验证 |
+| 跨平台基线 | Windows、Linux 为必需目标；首批架构建议为 Windows x64、Linux x86_64／ARM64，macOS 为后续候选，详见配置与部署 |
 | 任务生命周期 | 下载任务归后端持有；关闭前端后继续运行，进程重启后的恢复依赖持久化策略 |
 | 网络模型 | 首轮采用 cpp-httplib 阻塞 I/O 配合有界线程池；搜索和下载分别限制并发，不将协程作为前置条件 |
 | 服务框架 | cpp-httplib 暂定主方案，Drogon 为备选；其他库保留选型参考 |
 | HTTP 客户端 | 先验证 cpp-httplib Client 与 Server 的组合；TLS 或下载需求必要时独立替换客户端 |
-| TLS | 优先评估 Windows Schannel；同时保留 OpenSSL、Botan 等后端的取舍 |
+| TLS | 先验证覆盖 Windows／Linux 与容器的实现；Schannel 仅作为 Windows 可选适配，不成为其他系统的依赖 |
 | 音频处理 | 以直接保存原始音频和写入元数据为主要需求，评估减少 FFmpeg 依赖 |
 | 实施状态 | 当前只整理设计和选型记录，尚未建立 C++ 工程或引入这些依赖 |
 
@@ -35,7 +37,7 @@
 | [公共模型与存储](backend-service/data-models.md) | 身份、品质、分页、任务快照、资产、幂等和 SQLite 表 |
 | [对外 HTTP API](backend-service/api-contract.md) | 完整路由、权限、错误、批次、SSE、HTTP 进度查询与媒体契约 |
 | [运行时与后台任务](backend-service/runtime-and-tasks.md) | 三套 httplib 监听、线程额度、下载状态机、事件分发、取消、续传、恢复与流桥接 |
-| [配置与部署](backend-service/configuration-and-deployment.md) | 初始默认值、配置来源、数据布局、Windows／NAS／Docker 与生命周期 |
+| [配置与部署](backend-service/configuration-and-deployment.md) | 纯后端边界、系统与架构矩阵、跨平台约束、默认值、数据布局和 Docker／NAS 生命周期 |
 | [构建与依赖](backend-service/build-and-dependencies.md) | C++20、CMake、FetchContent 浅克隆、版本固定、缓存与工具链隔离 |
 | [重构架构](architecture.md) | 迁移功能、层次划分、模型、API 草案、下载与换源流程 |
 | [技术栈选型](technology-stack.md) | 各候选库的适用位置、依赖关系、限制和待验证问题 |
