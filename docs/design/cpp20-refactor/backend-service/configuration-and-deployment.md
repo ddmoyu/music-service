@@ -1,7 +1,5 @@
 # 配置、部署与服务生命周期
 
-本文件描述拟实现的运行约定。没有创建配置文件、Windows 服务、容器镜像或启动脚本；以下示例仅用于设计评审。
-
 ## 配置来源与生效时机
 
 采用显式 JSON 配置，加载顺序为内置缺省 → 指定配置文件 → 已列明环境变量 → 已列明命令行覆盖项。未知键、类型错误、端口冲突或非法范围在启动阶段报错，不静默忽略。
@@ -13,6 +11,8 @@
 | `config_version` | 1；配置版本与 API、数据库版本分别管理 |
 | `control` | host=127.0.0.1，port=17632，workers=16，connection_queue=64 |
 | `media` | enabled 按构建／阶段启用，host=127.0.0.1，port=17633，workers=8，connection_queue=16 |
+| `features` 媒体项 | file_access 随下载闭环启用；media_proxy=false、direct_media_urls=false，在线能力按验证结果启用 |
+| `auth` | mode=bearer；principal、token 哈希与 scope 的唯一事实来源为 SQLite |
 | `events` | enabled 随下载闭环启用，host=127.0.0.1，port=17634，workers=8，connection_queue=16 |
 | `event_limits` | 全局订阅 6／每 principal 2；每订阅最多 128 条、256 KiB；单事件最大 16 KiB |
 | `event_stream` | progress_interval_ms=1000，heartbeat_seconds=15，write_idle_seconds=10，max_connection_seconds=1800 |
@@ -27,19 +27,26 @@
 | `processing` | workers=2，queue=16；外部工具如启用，必须另设可取消的时间上限 |
 | `media_limits` | 全局响应 6／每 principal 2，其中播放上游最多 4、本地文件最多 4 |
 | `media_stream` | bridge_buffer=256 KiB，connect_timeout=5 秒，read/write idle=30 秒，单流最长 30 分钟 |
-| `lifetimes` | 解析描述 5 分钟，游标 10 分钟，匹配上下文 5 分钟，播放会话 30 分钟，票据默认 60 秒 |
+| `lifetimes` | 解析描述 5 分钟，游标 10 分钟，匹配上下文 5 分钟，媒体访问／票据默认 60 秒；不设播放会话寿命 |
 | `storage` | SQLite WAL，单 writer、队列 128、读取连接最多 2、数据库等待预算 500 ms |
 | `cache` | catalog 128 项／总估算 16 MiB／60 秒，失败抑制最多 5 秒；其他短期句柄另有总量限制 |
 | `shutdown` | 在途工作软收尾预算 15 秒，之后保存检查点并请求停止 |
 | `filesystem` | 失败任务工作文件默认最多保留 24 小时；用户取消清理未发布工作文件，活动恢复文件不按终态 TTL 删除 |
 
-普通上游连接默认 3 秒，读取空闲不超过来源预算；每一次具体操作仍受总截止时间约束。provider 的较长超时只能在服务上限内调整，不能突破全局并发或媒体隔离。
+普通上游连接默认 3 秒，读取空闲不超过来源预算；所有操作受总截止时间和全局并发约束。
 
-短期内存句柄另设实例上限：context 10000、cursor 5000、asset 1000、match 1000、playback_session 200、media_ticket 2000，总估算额外 32 MiB；每 principal 不超过实例上限的可配置份额。到期优先清理，活跃会话不能被随意淘汰；无法接收新句柄时返回 SERVICE_BUSY。
+短期内存句柄另设实例上限：context 10000、cursor 5000、asset 1000、match 1000、media_ticket 2000，总估算额外 32 MiB；每 principal 不超过实例上限的可配置份额。到期优先清理，正在传输的请求持有独立资源引用直到结束；无法接收新句柄时返回 SERVICE_BUSY。媒体访问描述不另建句柄表，不保存播放器状态。
 
-## 示例配置片段
+## 监听地址与端口冲突
 
-下面仅展示主要启动项，未列项使用上表缺省；例子不包含可用凭证。
+- 独立服务／NAS／Docker 使用配置的固定端口；占用时启动失败并报告监听项与地址，由部署配置和客户端同步修改。所有必需监听成功后才报告 ready。
+- 桌面程序管理的子进程可将本机监听端口设为 0，由系统选择空闲端口。绑定完成后，后端通过专用启动通道输出实际 api_base_url、media_base_url、events_base_url 和 instance_id；桌面启动器传给前端。普通日志与启动消息分离，消息不含 token。
+- 前端先从配置或启动器取得 API 地址，再读取 info 中的媒体／事件地址，不按端口偏移推算。动态本机模式公布实际 loopback 地址；远程部署仍使用显式 public_urls／反向代理地址。
+- 独立网页使用用户配置的服务地址或同源反向代理，不能直接读取本机进程启动通道。端口被其他进程占用时不终止它，也不把它视为本服务。
+
+## 示例配置
+
+未列项使用默认值。
 
 ```json
 {
@@ -53,19 +60,21 @@
     "media_base": "http://127.0.0.1:17633",
     "events_base": "http://127.0.0.1:17634"
   },
-  "auth": {"mode": "bearer", "token_store": "./data/secrets/access-tokens.json"},
+  "auth": {"mode": "bearer"},
   "cors": {"allowed_origins": ["http://127.0.0.1:5173"]},
   "destinations": [{"id": "dst_default", "name": "默认下载", "root": "./downloads", "principals": ["prn_local"]}],
   "upstream": {"short_workers": 8, "queue": 64, "per_source_short": 2, "max_total_connections": 16},
   "downloads": {"workers": 3, "per_source": 2, "max_attempts": 3, "transport_retries": 2},
-  "features": {"automatic_fallback": false, "transcoding": false},
+  "features": {"file_access": true, "media_proxy": false, "direct_media_urls": false, "automatic_fallback": false, "transcoding": false},
   "logging": {"format": "json", "level": "info"}
 }
 ```
 
-media.enabled=true 需要该阶段已实现／构建的媒体功能，否则启动校验失败；示例不是让尚不存在的工程立刻运行。principal 与访问 token 通过初始化／管理配置建立，不能由前端自己声明一个 owner_id。
+启用功能必须已包含在构建中，否则启动失败。principal 与 token 由初始化／管理配置建立。
 
-events.enabled=true 同样要求构建包含 SSE 功能，且 event_limits 全局订阅上限至少比 events.workers 少 2。事件监听复用身份配置和允许的 CORS origins，具有独立长连接超时，不能直接继承控制请求总时限。首次目标版本的下载闭环默认启用 SSE；兼容部署可关闭并由 info 声明降级。
+file_access／media_proxy 要求 media.enabled=true。S1 提供文件出口和票据；media_proxy 单独控制在线代理。direct_media_urls 不依赖媒体监听，外发条件见 [API](api-contract.md)。
+
+events.enabled=true 同样要求构建包含 SSE 功能，且 event_limits 全局订阅上限至少比 events.workers 少 2。事件监听复用身份配置和允许的 CORS origins，具有独立长连接超时，下载闭环默认启用 SSE，关闭时由 info 声明降级。
 
 ### 环境变量与命令行
 
@@ -73,17 +82,17 @@ events.enabled=true 同样要求构建包含 SSE 功能，且 event_limits 全�
 
 事件监听补充 MUSIC_DL_EVENTS_LISTEN、MUSIC_DL_PUBLIC_EVENTS_URL；覆盖规则与控制／媒体一致。
 
-命令行拟提供 config、data-dir、check-config、init、version 等选项；端口和 worker 数主要走配置，避免两个并存但解释不同的参数系统。init 只生成初始身份／token 存储与目录，不覆盖已有实例；check-config 只检查配置、能力与路径，不创建下载任务。
+命令行提供 config、data-dir、check-config、init、version；端口和线程数走配置。init 不覆盖已有实例；check-config 校验配置、能力和路径。
 
 ## 凭证与 TLS
 
-访问 token 返回给用户后，仅存可验证哈希与身份信息；初始化时写入受权限保护的引导文件，日志只打印文件位置，不打印 token。平台 Cookie 放在独立 SecretStore，数据库只记录 secret_ref。
+SQLite 统一保存 token 哈希、principal 和 scopes。init 通过受权限保护的 bootstrap-token.txt 一次性交付明文 token，取走后删除；该文件不参与运行时认证。日志只打印文件位置。平台 Cookie 放 SecretStore，DB 保存 secret_ref。
 
-首版至少以操作系统文件权限保护数据与秘密，不声称已实现跨平台静态加密。Windows 凭证保护或 Linux 密钥管理若后续启用，应作为 SecretStore 实现替换，不改变 Provider 或 API；备份与恢复也要包含相应密钥策略。
+首版使用操作系统文件权限保护秘密。后续系统密钥管理作为 SecretStore 适配，备份须包含对应密钥策略。
 
-入站 TLS 可由经验证的 httplib TLS 构建或反向代理终止；出站 HTTPS 由传输适配器校验证书链与主机名。不能因为本地 API 是 HTTP，就认为访问平台不需要 TLS。启用上游平台却没有可用 HTTPS 构建时，启动失败，不偷偷改用明文接口。
+入站 TLS 使用 httplib 或反向代理；出站校验证书链与主机名。启用平台却缺少必需 HTTPS 构建时启动失败。
 
-具体 TLS 后端、信任根与可分发依赖继续按[技术栈研究](../technology-stack.md)选择；这里不强制采用尚未验证的 Schannel 接入，也不把平台协议 AES／RSA 与 HTTPS 后端当成同一件事。
+TLS 后端与信任根见[技术栈](../technology-stack.md)，平台协议加密单独选择。
 
 ## 运行数据布局
 
@@ -94,7 +103,7 @@ data_dir/
   service.sqlite3-wal              # 由 SQLite 维护
   service.sqlite3-shm
   secrets/
-    access-tokens.json             # 哈希与 principal 描述
+    bootstrap-token.txt            # 初始化一次性交付；取走后删除，不是运行时事实来源
     credentials/                  # SecretStore 私有文件
   cache/                           # 可丢弃，不存唯一任务事实
   logs/                            # 文件日志启用时使用；容器可仅 stdout
@@ -135,9 +144,9 @@ SSE 退出时停止接受订阅，唤醒等待并关闭现有流，注销订阅�
 | 同域反向代理 | `/api/v1` 与健康路径转控制，`/media/v1` 转媒体，`/events/v1` 转事件；SSE 关闭代理缓冲与压缩，代理空闲超时大于心跳间隔（初始 60 秒）；媒体配置适合长流的超时 |
 | 远程多个客户端 | public URLs 使用客户端可达地址；每调用方有 token，按需要选择共享或独立 principal |
 
-容器内若仍只绑定 127.0.0.1，单纯映射端口不等于外部可访问；部署配置需显式改为容器接口地址。API 返回宿主／代理可达的 public URL，不能把容器内部 localhost 返回给远程前端。
+容器须绑定可访问接口；public URL 使用客户端可达的宿主／代理地址。
 
-多个副本不能直接共享同一个 SQLite 目录同时写；首版为单实例。容器重建后恢复数据依赖持久卷，进程重启恢复能力不能替代磁盘数据保存。
+首版单实例，SQLite 目录禁止多进程并写；容器数据使用持久卷。
 
 ## 观测与维护
 

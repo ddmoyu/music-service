@@ -1,6 +1,6 @@
 # 公共模型与存储设计
 
-本文件定义[API](api-contract.md)与[任务运行时](runtime-and-tasks.md)共享的数据语义。内部领域对象不要求逐字段等同 JSON，但协议投影必须遵守这里的单位、身份和可见性约定。
+[API](api-contract.md)与[运行时](runtime-and-tasks.md)共用以下字段语义；内部对象可不同于 JSON 投影。
 
 ## 基础类型
 
@@ -9,7 +9,7 @@
 | 平台 `source` | 稳定的小写标识，如 `netease`、`qq`；显示名称可改变 |
 | 平台 `id` | UTF-8 不透明字符串，长度 1～1024 字节；禁止转成整数后再序列化 |
 | `TrackRef`／`CollectionRef` | `{source, id}`；平台身份不等于服务文件或任务身份 |
-| 服务 ID | 服务生成的不透明随机 ID，带类型前缀，如 `tsk_`、`bat_`、`fil_`、`ast_`、`pbs_`、`cre_`、`dst_` |
+| 服务 ID | 服务生成的不透明随机 ID，带类型前缀，如 `tsk_`、`bat_`、`fil_`、`ast_`、`cre_`、`dst_` |
 | 时间 | UTC RFC 3339 字符串，示例 `2026-10-19T08:00:00.000Z` |
 | 时长与耗时 | 整数毫秒，字段后缀 `_ms`；未知时为 null |
 | 大小与速度 | 整数字节／字节每秒，后缀 `_bytes`／`_bps`；非负 JSON 整数限制在 0～9007199254740991 的精确范围内 |
@@ -49,7 +49,7 @@
 | `Category` | source、id、name、group、catalog_kind |
 | `Chart` | ref、name、description、update_hint、updated_at、track_count、catalog_kind |
 
-缩略图只暴露可公开访问的展示 URL 或受授权的本地 asset 链接。需要秘密请求头的封面不直接塞给浏览器；按媒体资源规则缓存或代理。`links` 是服务自身的资源链接，不包含带账号秘密的上游 URL。
+缩略图首版只暴露可公开访问的展示 URL；需要秘密头的封面在缺少专用图片代理时返回 null／警告，不复用音频 asset 路由伪装支持。`links` 是服务自身的资源链接，不包含带账号秘密的上游 URL。
 
 `context_ref` 是平台 hash、资源参数等附加上下文的服务端句柄，按 principal、source、实体与有效期绑定。客户端可以原样回传，不能自行构造平台扩展 JSON。句柄过期时先按 ref 重新取详情；只有确实无法恢复所需上下文时返回 `422 CONTEXT_REQUIRED`。下载被接收前，将必要的非秘密上下文保存到任务私有快照，不能让排队任务依赖一条稍后过期的缓存。
 
@@ -67,7 +67,11 @@
 
 `ResolvedAsset` 内部保存 URL、必需请求头、解密信息、实际来源、有效期和资源指纹。公开 `AssetDescriptor` 只返回 asset_id、原曲／实际曲目、品质属性、access_state、completeness、expires_at、warnings 与证据摘要。
 
-资源描述与上游地址可能过期。公开 asset_id 默认最多有效 5 分钟，不能晚于已知上游有效期减安全余量；过期返回 `410 RESOURCE_EXPIRED`。下载任务执行时自行解析，不要求客户端先取得 asset_id。播放会话也在必要时重新解析，不持久保存签名 URL 当成歌曲身份。
+内部另保存平台可验证的传输条件：是否允许外发直链、必需请求头、是否需解密／处理、资源身份校验信息。条件未知不视为可直连；MediaAccessService 只读这些条件并叠加部署策略，不在访问接口中重新实现平台解析。
+
+资源描述与上游地址可能过期。公开 asset_id 默认最多有效 5 分钟，不能晚于已知上游有效期减安全余量；过期返回 `410 RESOURCE_EXPIRED`。下载任务执行时自行解析，不要求客户端先取得 asset_id。在线媒体读取复用 asset_id，不建立另一份播放会话；过期重新解析由客户端发起，播放位置仍由客户端保存。
+
+媒体访问描述是临时响应，不是独立持久实体。包含 target、delivery、url、auth、expires_at、content_type、range_supported 和实际曲目／品质摘要。默认 AssetDescriptor 不公开 CDN URL；只有 media-access 在显式策略允许时可返回经筛选的限时直链。签名参数作为敏感访问授权处理，不与公共歌曲数据混存。
 
 探测报告分开表达 HTTP 可访问性、格式迹象、大小、时长证据及整曲判断。未知完整性的资源不因 `allow_preview=false` 被假装认证为整曲：可按现有证据继续下载并保留 unknown 警告；若已明确为 preview，则按选项拒绝。要求严格整曲验证的扩展策略另行实现，首版不承诺完整解码证明。
 
@@ -109,20 +113,20 @@ phase 用 status 表达，`stage` 用于 processing 内部的 decrypt／validate
 
 不同任务可能得到相同展示文件名，输出路径必须单独预留并自动加确定性后缀；不覆盖另一个任务的临时文件。终态任务历史至少在首版保留，暂不开放删除任务接口；后续清理策略不能破坏文件资产索引。
 
-## 批次、文件、播放与媒体票据
+## 批次、文件、媒体访问与票据
 
 | 模型 | 关键规则 |
 | --- | --- |
 | `DownloadBatch` | batch_id、有序 task_ids、创建计数与复用计数、状态统计；items 最多 100，创建事务全有或全无，执行结果各自独立 |
 | `FileAsset` | file_id、owner、track、实际品质、相对目标路径、大小、容器、ETag、available／missing、创建任务；对外不返回服务器绝对路径 |
-| `PlaybackSession` | session_id、owner、原曲与固定实际曲目、品质、expires_at；默认 30 分钟绝对有效期，不是持久下载任务 |
+| `MediaAccessDescriptor` | target（file／asset）、delivery、url、auth、expires_at 与媒体属性；不分配新的播放 ID，不保存播放器状态 |
 | `MediaTicket` | 随机高熵 token 的哈希、owner、目标 kind/id、到期时刻；默认 60 秒，可申请 15～300 秒 |
 | `Destination` | destination_id、名称、可用性与允许的 principal；实际根目录由管理配置定义 |
 | `CredentialDescriptor` | credential_id、source、label、version、状态、验证时间；不包含 Cookie 内容 |
 
-媒体票据在新请求入场时检查到期，允许有效期内多次 Range 请求，不是一次性票据。入场成功的单次传输可继续到完成，但受传输时间／空闲限制及会话撤销约束。票据不得超过播放会话有效期；播放会话到期不延长，新建会话明确重新选择资源。
+媒体票据在新请求入场时检查到期，允许有效期内多次 Range 请求，不是一次性票据。入场成功的单次传输可继续到完成，但受传输时间／空闲限制及身份撤销约束。asset 票据不得超过 asset 有效期；票据续发不能延长音源寿命。file 票据到期不删除文件，重新授权读取即可。
 
-在线播放确定实际录音后不再自动换到另一版本；刷新过期地址必须验证资源身份。文件资产发布后视为不可变；需要重写标签时生成新资产，不在客户端 Range 读取期间原地改变文件。
+同一 asset 确定实际录音与字节表示后不再自动换到另一版本；刷新上游地址必须验证资源身份，否则要求重新解析并由客户端重新选择地址。文件资产发布后视为不可变；需要重写标签时生成新资产，不在客户端 Range 读取期间原地改变文件。
 
 ## SQLite 表设计
 
@@ -144,7 +148,7 @@ phase 用 status 表达，`stage` 用于 processing 内部的 decrypt／validate
 
 活动任务指纹、幂等 key、尝试号、默认凭证和发布路径的唯一性，以及事务与崩溃矩阵见[内部契约](internal-contracts.md)。首版任务历史保留，短期 SSE 通知不落为独立事件历史。
 
-解析缓存、游标状态、播放会话和媒体票据首版可仅保存在有上限的内存中；进程重启后失效，客户端按 410 重新建立。下载任务与批次必须落库，不能用同样的内存策略。
+解析缓存、游标状态和媒体票据首版可仅保存在有上限的内存中；进程重启后失效，客户端按 410 重新建立。下载任务与批次必须落库，不能用同样的内存策略。前端播放队列、当前播放位置和客户端保存进度不进入服务数据库。
 
 单进程持有 data_dir 实例锁；SQLite 采用 WAL、单写入执行器和少量读取连接。文件系统操作不在长数据库事务内执行，网络请求也不持数据库锁。所有表操作通过 repository，业务用例不散落 SQL。
 
@@ -154,4 +158,4 @@ phase 用 status 表达，`stage` 用于 processing 内部的 decrypt／validate
 
 文件强 ETag 从最终发布字节生成并存储，标签处理后再计算，读取接口不因一次请求临时重写文件。任务轮询使用弱版本 ETag，二者不能混用于 If-Range。
 
-普通查询发现文件被用户移走时，将 asset 标为 missing，文件获取返回 410；历史仍保留。DB 成功但文件丢失、文件存在但 DB 尚未提交、取消与发布竞争都必须按此协调流程处理，不能靠“最后写一次 done”掩盖不一致。
+文件被移走时将 asset 标为 missing，读取返回 410，历史保留。文件与 DB 不一致、取消与发布竞争按上述流程协调。

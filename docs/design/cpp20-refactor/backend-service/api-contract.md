@@ -1,6 +1,6 @@
 # 对外 HTTP API 详细契约
 
-状态：目标 v1 设计，尚未实现。实体语义见[模型与存储](data-models.md)，执行与取消见[运行时](runtime-and-tasks.md)。本契约取代旧总览中的候选路由；不提供原 Go 页面 `/music` 的隐含兼容。
+v1 契约。实体语义见[模型](data-models.md)，执行与取消见[运行时](runtime-and-tasks.md)。原 Go 页面 `/music` 需独立兼容层。
 
 ## 1. 地址、版本与功能发现
 
@@ -8,7 +8,9 @@
 
 事件 base URL 初始为 `http://127.0.0.1:17634`，前缀 `/events/v1`，独立监听与工作池。进度默认使用 SSE，HTTP 查询用于初始加载、重连同步和兼容兜底。
 
-`GET /api/v1/info` 声明已启用的服务级功能；`GET /api/v1/providers` 声明各平台能力。文档列出目标接口不等于所有平台都支持，也不等于 S0 就实现所有功能。
+`GET /api/v1/info` 声明已启用的服务级功能；`GET /api/v1/providers` 声明各平台能力。
+
+API 地址由配置或桌面启动器交付；动态端口与冲突处理见[部署约定](configuration-and-deployment.md#监听地址与端口冲突)。info 返回实际对外媒体／事件地址，不返回尚未绑定的端口 0。
 
 v1 允许新增可选响应字段；删除、改义、改变单位或必填参数属于破坏性变更，应进入新版本。客户端忽略未知字段；枚举未知值按通用展示处理。请求未知字段返回 400，避免拼错配置被静默忽略。
 
@@ -21,7 +23,8 @@ v1 允许新增可选响应字段；删除、改义、改变单位或必填参�
 | `catalog:read` | 来源、搜索、集合、歌词、解析、探测、匹配 |
 | `downloads:read` | 自己的下载任务、批次、结果与目标目录列表 |
 | `downloads:write` | 创建、取消、重试自己的任务与批次 |
-| `files:read` | 自己的文件元数据、媒体会话、媒体票据及音频读取 |
+| `files:read` | 自己的已保存文件元数据、文件读取及其访问票据 |
+| `media:read` | 自己的已解析 asset 的在线直链／代理读取及其访问票据；不管理播放器 |
 | `credentials:write` | 自己的凭证列表、创建、更新、校验与删除 |
 | `admin` | 运行状态与全局下载调度开关；不隐含向普通响应泄漏秘密 |
 
@@ -65,7 +68,7 @@ v1 允许新增可选响应字段；删除、改义、改变单位或必填参�
 | HTTP | 典型错误码／用途 |
 | --- | --- |
 | 200 | 查询成功、允许的部分成功、下载去重命中、幂等取消已结束的取消动作 |
-| 201 | 创建凭证、播放会话、媒体票据 |
+| 201 | 创建凭证 |
 | 202 | 已持久接受后台任务或异步取消，尚未完成 |
 | 304 | 任务／文件条件查询未变化，无 JSON body |
 | 400 | VALIDATION_FAILED、UNKNOWN_PROVIDER、CURSOR_MISMATCH、未知参数 |
@@ -74,7 +77,7 @@ v1 允许新增可选响应字段；删除、改义、改变单位或必填参�
 | 409 | IDEMPOTENCY_CONFLICT、TASK_FINALIZING、TASK_TERMINAL、ACTIVE_DUPLICATE、RESOURCE_CHANGED |
 | 410 | RESOURCE_EXPIRED、CURSOR_EXPIRED、FILE_MISSING、MEDIA_TICKET_EXPIRED |
 | 413／415 | PAYLOAD_TOO_LARGE／UNSUPPORTED_CONTENT_TYPE |
-| 422 | CAPABILITY_UNSUPPORTED、PROVIDER_DISABLED、CONTEXT_REQUIRED、QUALITY_UNAVAILABLE、PREVIEW_REJECTED、CREDENTIALS_REQUIRED、RESOURCE_RESTRICTED |
+| 422 | CAPABILITY_UNSUPPORTED、PROVIDER_DISABLED、CONTEXT_REQUIRED、QUALITY_UNAVAILABLE、PREVIEW_REJECTED、CREDENTIALS_REQUIRED、RESOURCE_RESTRICTED、DELIVERY_UNAVAILABLE |
 | 429 | CALLER_LIMIT_EXCEEDED／QUEUE_LIMIT_EXCEEDED，服务方对该调用者的额度限制 |
 | 500 | INTERNAL_ERROR，仅显示去敏错误与 request_id |
 | 501 | FEATURE_UNAVAILABLE，服务级功能尚未启用 |
@@ -122,7 +125,9 @@ info.data 示例：
   "features": {
     "search": true,
     "downloads": true,
-    "playback": false,
+    "file_access": true,
+    "media_proxy": false,
+    "direct_media_urls": false,
     "automatic_fallback": false,
     "progress_polling": true,
     "progress_sse": true
@@ -300,7 +305,7 @@ quality／策略默认见模型，duplicate_policy 为 reuse（默认）或 forc
 
 batch_id 过滤通过批次条目关系查询，列表中的同一 task_id 只返回一次；批次详情保留输入条目顺序和重复引用。批次统计按条目计算，批次取消按唯一 task_id 发起。
 
-HTTP 进度查询为独立保留的正式接口，不依赖 SSE 开启或已有订阅。列表返回各任务公开快照（包含 progress），单任务接口返回完整快照；客户端可以始终仅使用 HTTP 查询。SSE 与查询使用同一任务模型、权限和版本号。
+HTTP 进度查询为独立保留的正式接口，不依赖 SSE 开启或已有订阅。列表返回各任务公开快照（包含 progress），单任务接口返回完整快照；SSE 与查询使用同一任务模型、权限和版本号。
 
 task.data 示例：
 
@@ -374,9 +379,11 @@ progress 使用任务快照相同字段和未知值规则；消息是进度投�
 
 ### 9.5 SSE 验证要求
 
-验证并行搜索／取消不受满额 SSE 订阅占用控制线程；多任务共用连接；跨 principal 无事件泄漏；终态即时通知；网络分块和 UTF-8 边界；查询与事件竞争的版本合并；断线期间完成／服务重启恢复；慢客户端队列有界；凭证撤销；代理无缓冲；连接与内存全部释放。尚未编写实现或运行这些集成验证。
+验证并行搜索／取消不受满额 SSE 订阅占用控制线程；多任务共用连接；跨 principal 无事件泄漏；终态即时通知；网络分块和 UTF-8 边界；查询与事件竞争的版本合并；断线期间完成／服务重启恢复；慢客户端队列有界；凭证撤销；代理无缓冲；连接与内存全部释放。
 
-## 10. 文件与在线播放
+## 10. 文件与媒体访问
+
+本节只提供音频访问地址与字节传输，实际播放和播放状态由前端持有。下载任务 completed 表示文件已保存到后端 destination；客户端通过媒体响应保存到自己设备，是另一段由客户端统计进度的传输。
 
 ### 10.1 文件元数据与下载结果
 
@@ -394,28 +401,34 @@ completed 任务的 result 至少为：
 
 媒体 URL 指向已保存文件，不会重新调用音乐平台。客户端是否保存到自己本地，由客户端对媒体响应执行写盘决定。
 
-### 10.2 播放会话
+### 10.2 统一媒体访问描述
 
-`POST /api/v1/playback-sessions`，files:read，输入 track、context_ref、quality 与解析策略，成功 201 返回 session_id、actual_track、音频描述、expires_at 和 media_url。会话默认 30 分钟绝对有效，创建受解析额度约束；服务未启用 playback 返回 501。
-
-`DELETE /api/v1/playback-sessions/{session_id}`，files:read，撤销会话、关联票据并请求停止活动流；返回 200 closed=true，重复关闭仍成功。到期会话不能再发起新的 Range 请求，新建会话会重新解析。
-
-session 代表固定实际录音。URL 过期可以重取相同资源；不能在 seek 或中途错误时静默替换成别的演唱版本。
-
-### 10.3 浏览器媒体票据
-
-普通 audio 元素不便设置 Authorization，使用 `POST /api/v1/media-tickets`，files:read：
+`POST /api/v1/media-access` 输入已存在的目标引用，成功 200 返回访问描述，不创建播放会话。target.kind 为 file 时需要 files:read，为 asset 时需要 media:read；另检查目标 owner，身份不符返回 404。在线歌曲先通过 assets/resolve 获取 asset_id，不能在本接口重复提交歌曲和解析策略。
 
 ```json
 {
-  "target": {"kind": "file", "id": "fil_demo"},
+  "target": {"kind": "asset", "id": "ast_demo"},
+  "mode": "auto",
+  "auth": "ticket",
   "ttl_seconds": 60
 }
 ```
 
-kind 可为 file／playback_session，TTL 范围 15～300 秒，默认 60。返回 201，data 包含一次返回的随机票据 URL 与 expires_at；秘密 token 此后不通过查询接口再展示，响应 Cache-Control: no-store。
+mode 为 auto（默认）／direct／proxy；auth 为 ticket（默认）／bearer，仅影响后端代理／文件 URL。ttl_seconds 为访问描述申请的有效期，15～300 秒，默认 60，实际期限受目标和上游已知寿命限制。file 永远走后端文件读取，direct 对 file 返回 422 DELIVERY_UNAVAILABLE。
 
-票据仅允许对应媒体资源读取，可在有效期内多次 Range；不能拿来查询任务、调用搜索或读取其他文件。客户端在需要新 seek 请求且票据到期时重新申请。关闭会话或撤销身份后拒绝新的票据请求和媒体请求。
+auto 只有在 direct_media_urls 已启用、平台声明可外发且资源不需要秘密头／解密时才选择 direct，否则选择 proxy。强制 direct 而功能未启用返回 501，资源不满足条件返回 422；需要在线 proxy 但 media_proxy 未启用返回 501。未知资源条件不直接开放 URL。file_access 与在线 media_proxy 分开，关闭在线代理不影响已有文件读取。
+
+返回 data 包含 target、delivery（direct／proxy）、url、auth（url／bearer）、expires_at、content_type、range_supported（可为 null）、actual_track、actual_quality；不返回 Cookie、秘密请求头和解密密钥。仅 proxy 且 auth=ticket 时内部签发目标受限票据，输出 auth=url；direct 不创建后端票据，也返回 auth=url。
+
+direct URL 是可能携带限时授权参数的敏感能力，仅在此显式访问接口返回，Cache-Control: no-store，不写日志或搜索缓存。它的可用性还取决于客户端网络、格式和跨域环境；失败时客户端可改请求 proxy。后端无法对已发出的上游直链保证即时撤销、限速或观测播放状态，因此默认关闭 direct_media_urls。返回 expires_at 是要求客户端重新获取的期限，不宣称能强制上游 URL 在该时刻失效。
+
+### 10.3 资源寿命与媒体票据
+
+票据由 media-access 内部签发并映射到 file 或 asset，没有额外对外票据创建接口。票据 token 只在签发的 URL 中返回，服务存哈希和授权目标；秘密 token 不通过查询接口再次展示。
+
+票据在有效期内允许多次 Range；不能用于查询任务、搜索或读取其他资源。有效期取申请期限与 asset 到期时刻的较早值。asset 过期后先重新 resolve，再申请访问地址；只有票据过期而 asset 仍有效时直接重新请求 media-access。Bearer URL 的 expires_at 对 asset 表示实际入场期限，对 file 为 null；file 的授权在每次请求时重新检查，ttl_seconds 不给 Bearer 本身增加期限。
+
+同一 asset_id 绑定固定实际录音、品质和字节表示；过期地址刷新必须确认身份，不静默切换版本。资产或票据过期拒绝新请求；已经入场的响应可在传输预算内结束。媒体读请求断开只关闭自己的上游传输；换歌由前端停止读取旧地址，再使用新地址。撤销身份后拒绝新后端请求，活动代理按身份撤销检查和取消机制收尾。
 
 ### 10.4 媒体路由
 
@@ -424,8 +437,8 @@ kind 可为 file／playback_session，TTL 范围 15～300 秒，默认 60。返�
 | 方法与路径 | 授权 | 内容 |
 | --- | --- | --- |
 | `GET/HEAD /media/v1/files/{file_id}` | files:read Bearer | 已完成、不可变文件 |
-| `GET/HEAD /media/v1/playback/{session_id}` | files:read Bearer | 对应播放会话的上游音频 |
-| `GET/HEAD /media/v1/tickets/{token}` | 资源专用票据 | 映射到固定 file 或 playback_session |
+| `GET/HEAD /media/v1/assets/{asset_id}` | media:read Bearer | 固定音源的上游音频；要求 media_proxy 启用 |
+| `GET/HEAD /media/v1/tickets/{token}` | 资源专用票据 | 映射到固定 file 或 asset，不突破目标到期与权限 |
 
 媒体 CORS 允许配置的前端来源与 Range／条件请求，暴露 Content-Length、Content-Range、Accept-Ranges、ETag、Content-Disposition。票据不得写入 access log、错误回显或 Referer 外发。
 
@@ -474,11 +487,9 @@ paused 只停止领取新任务，已有任务继续；取消活动任务仍走�
 2. 搜索或进入集合详情，保留 TrackRef 与 context_ref；部分来源失败时展示明细。
 3. 创建任务前生成新的 Idempotency-Key；网络不确定时用同一个 key 重试提交。
 4. 建立 SSE 订阅后查询当前下载状态，按版本合并事件；重连时重新同步，无需重提下载。不支持订阅时条件轮询兜底。
-5. completed 后按 file_id 取描述；原生客户端用 Bearer 获取媒体，网页需要时申请票据。
+5. completed 表示保存到后端；按 file_id 取描述，原生客户端可用 Bearer 读取，网页通过 media-access 获取票据 URL；保存到当前设备的进度由客户端单独维护。
 6. 用户点取消则调用取消接口并等终态；关闭 SSE、停止轮询或关闭窗口不等于取消。
 
 ## 14. 契约验证清单
 
 重点验证 JSON 示例可解析、单位一致、逐源分页不重复第一页、所有错误有 request_id、下载提交可靠持久化、同键幂等、批次创建原子性、资源 owner 隔离、状态转换竞争、媒体票据范围与到期、Range／If-Range／304／416，以及关闭前端后任务生命周期独立。
-
-后续实现阶段再按本契约编写 OpenAPI 文档和契约验证；本轮不生成服务代码或客户端 SDK。

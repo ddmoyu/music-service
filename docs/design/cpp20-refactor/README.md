@@ -2,7 +2,7 @@
 
 将 Go Music DL 的音乐平台适配与业务编排迁移到 C++20，先交付无界面、可独立常驻运行的音乐后端服务。网页、Electron、Tauri、Qt、Win32 等前端通过同一套 HTTP API 接入；后端通过 HTTP 客户端访问音乐平台。优先考虑 Windows、普通并发下的可用性与依赖体积；cpp-httplib 暂定为主方案，Drogon 作为备选。
 
-更新日期：2026-10-19。状态：主框架已暂定，后端模块、目录、模型、API 与运行时详细设计已形成；尚未编写服务代码，配套技术栈待验证。
+更新日期：2026-10-19。状态：设计阶段，配套依赖待验证。
 
 ## 当前方向
 
@@ -22,16 +22,15 @@
 | 音频处理 | 以直接保存原始音频和写入元数据为主要需求，评估减少 FFmpeg 依赖 |
 | 实施状态 | 当前只整理设计和选型记录，尚未建立 C++ 工程或引入这些依赖 |
 
-这里的功能规划与技术建议用于后续实现，不表示已完成迁移。原 Go 项目的实际行为与新方案的改进项分开记录，避免把设计目标当作现有能力。
-
 ## 文档导航
 
 | 文档 | 内容 |
 | --- | --- |
 | [后端服务详细设计](backend-service/README.md) | 当前 C++20 + cpp-httplib 主方案的设计基线、文档分工与功能分期 |
-| [功能模块详细设计](backend-service/feature-modules.md) | 搜索与发现、平台适配、音源与换源、下载、播放、SSE、身份与存储的具体职责 |
+| [功能模块详细设计](backend-service/feature-modules.md) | 搜索与发现、平台适配、音源与换源、后端下载、媒体访问、SSE、身份与存储 |
 | [内部接口与一致性](backend-service/internal-contracts.md) | 操作契约、执行上下文、对象所有权、事务、索引和崩溃恢复 |
-| [关键流程与验收](backend-service/flows-and-acceptance.md) | 搜索／下载／播放时序，断线与取消处理，28 项故障验收条件 |
+| [关键流程与验收](backend-service/flows-and-acceptance.md) | 搜索／下载／媒体访问时序，断线与取消处理，34 项故障验收条件 |
+| [模块边界审查](backend-service/module-boundary-review.md) | 前后端职责、8 项边界修正、保留原因和明确的范围限制 |
 | [模块与目录结构](backend-service/modules-and-layout.md) | 组件职责、依赖方向、内部端口、拟建源代码目录与构建目标 |
 | [公共模型与存储](backend-service/data-models.md) | 身份、品质、分页、任务快照、资产、幂等和 SQLite 表 |
 | [对外 HTTP API](backend-service/api-contract.md) | 完整路由、权限、错误、批次、SSE、HTTP 进度查询与媒体契约 |
@@ -47,7 +46,7 @@
 
 ## 后续选型记录规则
 
-当前围绕 cpp-httplib 推进验证，Drogon 保留为备选。新增网络库先作为研究记录，不自动重新开启主框架选型。服务端、普通平台请求、文件下载和 TLS 后端分别记录，避免因为暂定框架就默认锁定所有网络依赖。
+当前围绕 cpp-httplib 推进验证，Drogon 保留为备选。服务端、客户端、下载传输和 TLS 分别验证。
 
 同一套应用可以使用框架自带客户端，也可以通过适配层使用独立客户端。只有在 HTTPS、Cookie、重定向、流式下载、取消和并发限制等关键路径得到验证后，才决定是否移除 curl。
 

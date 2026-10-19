@@ -1,6 +1,6 @@
 # 后端内部接口与数据一致性设计
 
-本文定义模块之间的操作、状态所有权和提交边界。所有操作名为拟实现职责，不是已经存在的 C++ API；公共类型仍遵守 [C++20 构建约定](build-and-dependencies.md)。对外请求与错误以 [API](api-contract.md)为准。
+内部操作、状态所有权和提交边界如下；对外契约见 [API](api-contract.md)。
 
 ## 1. 契约表达方式
 
@@ -13,7 +13,7 @@
 | RequestContext | principal、scope、request_id、绝对截止时间、取消信号 | 一次控制请求 |
 | ProviderContext | principal、source、凭证版本／只读秘密租约、截止时间、取消信号 | 一次平台操作 |
 | TaskExecutionContext | task_id、execution_id、attempt、配置快照、任务截止时间、取消源 | 一次任务执行，不持 HTTP Request |
-| MediaContext | owner、会话／文件身份、Range、传输预算、取消信号 | 一次媒体响应 |
+| MediaContext | owner、asset／file 身份、Range、传输预算、取消信号 | 一次媒体响应，无播放位置或播放器状态 |
 | SubscriptionContext | principal、订阅 ID、授权版本、连接期限、关闭信号 | 一条 SSE 连接 |
 
 截止时间用单调时钟控制进程内等待；持久 deadline 使用 UTC 时间保存，重启后计算剩余预算。系统时间大幅变化需记录诊断并保守处理，不把墙上时钟变化当成下载速度。底层不支持即时取消时，句柄和额度保留到真实退出。
@@ -35,12 +35,12 @@
 | DownloadCommandService.retry | owner、旧 task_id、新幂等 key → 新 task_id | 复制请求并重新校验，不重开旧终态 |
 | TaskQueryService.get/list | owner、过滤／游标 → 公开持久快照 | 不联网，投影删除秘密 |
 | TaskEventService.subscribe | SubscriptionContext → SubscriptionHandle | 注册有界订阅，按 owner 过滤 |
-| PlaybackService.create/close | 曲目与策略／session_id → 会话／结束 | 创建短期状态，取消相关媒体流 |
+| MediaAccessService.describe | owner、asset_id／file_id、mode、auth、期限 → 访问描述 | 复用已解析资源，选择安全直链／代理，按需签发票据，不创建播放实体 |
 | FileAccessService.describe/open | owner、file_id → 描述／只读文件租约 | 文件存在性、归属与 immutable 校验 |
-| MediaTicketService.issue/authorize | owner、目标、期限 → 票据／授权目标 | 目标受限，不授权任意路径或 URL |
+| MediaTicketService.issue/authorize | owner、file／asset 目标、期限 → 票据／授权目标 | 媒体模块内部组件，不提供另一套重复公开签发接口；不能延长 asset 寿命 |
 | CredentialService.put/verify/remove | owner、source、凭证输入 → 去敏描述 | 秘密存储与版本更新，不在验证中修改任务 |
 
-入口不能绕过应用层直接调用 Provider 来“少走一层”；否则账号选择、额度、缓存和错误策略会形成多份实现。Runner 可以调用 ResolveService 等用例，但它们必须接受 TaskExecutionContext 转换出的执行上下文，不要求存在 HTTP 请求。
+入口通过应用层调用 Provider。Runner 使用 TaskExecutionContext 调用 ResolveService 等用例，不依赖 HTTP 请求。
 
 ## 3. Provider 与传输端口
 
@@ -98,7 +98,7 @@ version 用于状态与进度并发控制，execution_id 用于区分执行世�
 | Subscription | EventHub 注册表与 responder 共享 | 标记关闭、从注册表移除、发送线程退出 |
 | CredentialLease | 单次平台操作独占秘密快照 | 操作结束，不作为全局当前账号 |
 
-默认以值传递和唯一所有权表达模型。只有跨线程状态确实需要共享生命周期时使用共享所有权，不能为了省事把所有服务与 DTO 都做成 shared_ptr。
+默认值传递与唯一所有权；跨线程共享生命周期时使用共享所有权。
 
 锁规则：短时间修改内存状态，释放锁后再做网络、磁盘或数据库等待；注册表锁只保护索引，不在持锁期间向所有订阅写 socket。数据库事务也不跨越网络与文件处理。
 
@@ -106,7 +106,7 @@ version 用于状态与进度并发控制，execution_id 用于区分执行世�
 
 ## 6. 持久实体与索引补充
 
-列类型、约束和迁移实现留待建库阶段，以下先确定关系与唯一性。已有表目录见[数据模型](data-models.md)。
+表目录见[数据模型](data-models.md)，索引和事务规则如下。
 
 | 实体／关系 | 关键唯一性与索引 | 目的 |
 | --- | --- | --- |
@@ -180,9 +180,9 @@ Finalizer 的输入是通过验证的临时产物和已确认策略，输出是�
 | 同曲 URL 失效 | Resolve／Resume 策略 | 重新解析并核对资源，不盲目追加 |
 | 跨平台候选选择 | Match／Resolve 策略 | 必须满足明确换源策略，记录 actual_track |
 | 用户取消与 finalizing 竞争 | TaskRepository | 事务决定接受取消或 409 |
-| 标签 best_effort 失败 | MediaProcessor + Runner | 音频可完成，结果保留 warnings |
+| 标签 best_effort 失败 | AudioProcessor + Runner | 音频可完成，结果保留 warnings |
 | SQLite 提交失败 | Repository + Runner | 不发布假版本；保留材料，进入恢复处理 |
 | SSE 慢消费者 | EventHub／SseResponder | 关闭该订阅，任务继续，客户端重连同步 |
 | 媒体消费者断开 | StreamBridge | 取消该次上游流，不取消持久下载 |
 
-日志记录足够定位内部原因，对外错误保持稳定且去敏。新增重试策略、任务状态或 API 错误码须同时更新规范与验证场景，不能只在某个平台里局部补一个特殊分支。
+日志保留内部原因，对外错误稳定且去敏。状态、重试和错误码变更同步更新规范及验收。

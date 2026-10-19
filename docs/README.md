@@ -7,6 +7,7 @@
 - [重构设计入口](design/cpp20-refactor/README.md)：当前方向、选型状态和文档导航。
 - [后端服务详细设计](design/cpp20-refactor/backend-service/README.md)：C++20 + cpp-httplib 主方案的模块与目录、公共模型、API 契约、任务运行时、配置与部署。
 - [功能模块详细设计](design/cpp20-refactor/backend-service/feature-modules.md)：各模块的职责、业务规则、输入输出和协作方式。
+- [模块边界审查](design/cpp20-refactor/backend-service/module-boundary-review.md)：前端播放、后端下载、媒体访问，以及重复状态和职责拆分的修正。
 - [内部接口与一致性](design/cpp20-refactor/backend-service/internal-contracts.md)：组件操作、对象所有权、数据库事务、文件发布与恢复。
 - [关键流程与验收](design/cpp20-refactor/backend-service/flows-and-acceptance.md)：搜索、下载、SSE 重连、播放和故障验收矩阵。
 - [构建与依赖设计](design/cpp20-refactor/backend-service/build-and-dependencies.md)：C++20、CMake、FetchContent 浅克隆、固定版本与缓存策略。

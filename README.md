@@ -1,11 +1,11 @@
-# music-dl
+# music-service
 
-音乐搜索与下载实现研究，以及 C++20 独立后端服务的设计工作区。当前文档入口见 [项目文档](docs/README.md)。
+独立音乐后端服务，为单独维护的 GUI 和前端提供音乐搜索、音源解析、下载与任务管理等 API。当前处于研究与设计阶段，文档入口见 [项目文档](docs/README.md)。
 
 ## 目录结构
 
 ```text
-music-dl/
+music-service/
   README.md
   docs/                        # 本项目的研究记录与设计文档
     research/
