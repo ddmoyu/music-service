@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T13 **已完成**，S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T14 **已完成**，S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,7 +262,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-下一项为 **T14**（下载意图、命令、查询与批次）；T15（最小音频验证）可并行，T16～T19 随后按前置推进。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+下一项为 **T15**（最小音频文件验证），T18（事件、SSE 与 HTTP 同步）可并行；T16、T17、T19 随后按前置推进。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
@@ -424,4 +424,15 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 | Linux 证据（CI 运行 39451786357） | ubuntu-24.04，GCC 13.3.0，glibc 2.39：0 条项目警告，179/179 通过；Windows 与容器任务同时通过 |
 | 过程问题 | 容器任务的发布构建（GCC 13 -O2）对 T12 酷我搜索解析中已检查的 optional 读取报告 -Wmaybe-uninitialized（调试构建不出现，误报），改为带哨兵的整数读取（提交 fix(kuwo)）；此后对全部源码执行 GCC -O2 严格警告检查无警告 |
 | 已知限制 | 歌单／专辑／歌手搜索与集合、分类、歌词归 T21／T23；匹配、自动换源归 T33；context_ref 在出现需要私有上下文的来源时实现；在途合并的跟随者只等到自己的截止时间，领头调用失败时跟随者得到同一错误 |
+
+### T14 下载意图、命令、查询与批次：已完成（2026-10-21，提交 7c610bb）
+
+| 项目 | 记录 |
+| --- | --- |
+| 交付 | `application/tasks` DownloadService：事务外准备意图（resolve_audio 的账号绑定按显式凭证／默认选择／能力允许的匿名模式固定，目标目录按 ACL、accept_new_tasks 与可用性校验，补全默认值与产物配置版本）、幂等创建与重放、已完成结果复用候选的事务外核验、取消、手动重试、列表与有限批次。任务仓储新增共用的事务内创建核心（按路由的幂等记录、活动意图复用、复核后的完成结果复用、配额、retry_of）、全有或全无的批次创建与查询、带过滤绑定游标的列表。控制入口新增 `POST/GET /api/v1/downloads`、`GET /api/v1/downloads/{task_id}`（弱 ETag、If-None-Match 返回 304）、`POST /api/v1/downloads/{task_id}/cancel`、`POST /api/v1/downloads/{task_id}/retry`、`POST /api/v1/download-batches`、`GET /api/v1/download-batches/{batch_id}`、`POST /api/v1/download-batches/{batch_id}/cancel` |
+| 规则落实 | Idempotency-Key 为 16～128 个可打印 ASCII（无空格），按 principal＋方法＋路由＋key 记录，保留 idempotency.retention；请求哈希基于规范化 JSON 请求体（键排序），与意图指纹分开。已提交的 key 先重放首个结果（含状态码），不再读取已变化的账号或上下文；同 key 不同请求 409。活动同意图返回 200 reused，force 与重试遇活动同意图 409 ACTIVE_DUPLICATE。完成结果仅在事务外确认文件仍在目标根内存在，且事务内任务版本、文件资产版本与 available 状态均未变化时复用，否则创建新任务。重试沿用持久意图与账号绑定，重新校验能力、目标目录与绑定可租用，不改选默认账号。批次 1～download_limits.max_batch_items 项，全部预检并列出所有失败项（取首个失败项的错误码），事务内任一项失败（如配额）整批不落库；批次内重复项复用前项；全部复用 200，否则 202。列表按 created_at、task_id 倒序。匹配与自动换源暂返回 CAPABILITY_UNSUPPORTED（T33）；任务在 T17 Runner 加入前只排队，info 仍声明 downloads=false |
+| 覆盖的验收 | A01：同 key 同输入只建一个任务并重放首个结果；A02：同 key 不同输入 409 且无副作用；A03：并发 8 次提交同一新意图只建一个任务，其余复用，force 冲突；A35：metadata_policy（skip／required）与 allow_preview 不同的意图互不复用；A36：手动目标以持久 TrackRef 进入意图，不同目标指纹不同、相同目标指纹相同（以领域与仓储替身验证，匹配接口在 T33）；A37：凭证撤销后同 key 重放仍返回首个结果，重试沿用持久绑定；A46：文件缺失时不返回 reused=true 而新建任务，完成结果在核验后被标记缺失（版本变化）时事务拒绝旧证据并新建任务；另有取消（排队即取消 200、运行中 canceling 202、终态 409）、重试的前置与重放、列表分页与游标过滤绑定、批次全有或全无与配额、HTTP 层的 Location、Idempotency-Replayed、ETag／304 与错误映射 |
+| Windows 证据（2026-10-21） | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 191/191 通过（2 项在线用例按设计跳过）；下载与服务集成测试连续 8 次无失败；GCC 16.2 在 -O2 严格警告下检查改动文件 0 条警告 |
+| Linux 证据（CI 运行 39455698718） | ubuntu-24.04，GCC 13.3.0，glibc 2.39：0 条项目警告，191/191 通过；Windows 与容器任务同时通过 |
+| 已知限制 | 执行、进度与结果写入归 T17；完成结果的复用目前只校验文件存在与版本，品质／试听／元数据证据随 T15～T17 的结果记录补充；任务快照中 actual_track、actual_quality、stage 与 warnings 在执行加入前为空 |
 
