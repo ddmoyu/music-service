@@ -45,3 +45,15 @@ target_link_libraries(music_service_unit_tests PRIVATE
     Catch2::Catch2WithMain
 )
 catch_discover_tests(music_service_unit_tests DISCOVERY_MODE PRE_TEST)
+
+# Infrastructure against real local resources (SQLite files); no network.
+add_executable(music_service_integration_tests
+    integration/storage_test.cpp
+)
+target_link_libraries(music_service_integration_tests PRIVATE
+    music_service::application
+    music_service::infrastructure
+    music_service::project_warnings
+    Catch2::Catch2WithMain
+)
+catch_discover_tests(music_service_integration_tests DISCOVERY_MODE PRE_TEST)

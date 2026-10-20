@@ -22,13 +22,19 @@ struct TaskRecord {
     std::uint32_t attempt{0};
     std::optional<domain::WaitReason> wait_reason;
     std::optional<std::chrono::system_clock::time_point> next_retry_at;
+    std::optional<domain::TaskStatus> resume_stage;
+    std::string destination_id;
     domain::DownloadFingerprint fingerprint;
+    std::chrono::system_clock::time_point created_at;
+    std::chrono::system_clock::time_point updated_at;
 };
 
 struct CreateTaskCommand {
     domain::NormalizedDownloadIntent intent;
     std::string idempotency_key;
-    std::string request_hash;
+    std::string request_hash; // normalized request body, see data-models.md 幂等与下载去重
+    // duplicate_policy=force: an equal active task is ACTIVE_DUPLICATE instead of reused.
+    bool force{false};
 };
 
 struct CreateTaskOutcome {
@@ -44,20 +50,28 @@ struct TransitionCommand {
     domain::TaskStatus to{domain::TaskStatus::failed};
     std::optional<domain::WaitReason> wait_reason;
     std::optional<std::chrono::system_clock::time_point> next_retry_at;
+    // Where a waiting_retry task resumes when claimed again (resolving by default).
+    std::optional<domain::TaskStatus> resume_stage;
 };
 
-// Single-writer persistence of download tasks (implemented on SQLite in T05).
+// Single-writer persistence of download tasks (SQLite implementation since T05).
 // Every write checks the expected version and, for runner writes, the execution id,
 // so a late callback from an older execution cannot overwrite newer state.
 class TaskRepository {
 public:
     virtual ~TaskRepository() = default;
 
-    // One transaction: idempotency, fingerprint uniqueness among active tasks, insert.
+    // One transaction: idempotency record (same key and request replays the first
+    // outcome, a different request is IDEMPOTENCY_CONFLICT), reuse of an equal active
+    // intent, per-principal and global active limits (QUEUE_LIMIT_EXCEEDED), insert.
     virtual domain::Result<CreateTaskOutcome> create(const CreateTaskCommand& command) = 0;
 
     virtual domain::Result<TaskRecord> get(const std::string& owner_id,
                                            const std::string& task_id) = 0;
+
+    // The persisted intent, for the runner and for retries.
+    virtual domain::Result<domain::NormalizedDownloadIntent>
+    get_intent(const std::string& task_id) = 0;
 
     // Claims the next runnable task (queued, or waiting_retry that is due) and assigns a
     // new execution id. Claiming does not consume an attempt.

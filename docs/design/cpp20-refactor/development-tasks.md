@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T03 **已完成**，T04 **待验收**（等待 Linux CI），其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T03 **已完成**，T04、T05 **待验收**（等待 Linux CI），其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,7 +262,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-下一项为 **T05**（SQLite 与仓储）与 **T06**（执行器与统一上游入场），二者可并行；T07、T09 完成后即可并行开始 T12。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+下一项为 **T06**（执行器与统一上游入场）与 **T07**（ProviderBundle 注册），二者可并行；T07、T09 完成后即可并行开始 T12。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
@@ -319,3 +319,14 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 | Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条警告；`ctest --preset windows-msvc-debug` 85/85 通过 |
 | GCC 证据（部分） | MinGW GCC 16.2 严格警告下编译 28 个项目目标文件 0 条警告（只覆盖 Windows 分支）；POSIX 分支（flock、O_EXCL、renameat2、0600／0700）的运行证据待推送后由 Linux CI 提供 |
 | 未覆盖 | 目标目录的不可变 ID 绑定落在 T05（SQLite）与 T10（启动校验）；NAS 断开与权限变化的实际环境验证在 T38 |
+
+### T05 SQLite 与仓储基础：待验收（等待 Linux CI）
+
+| 项目 | 记录 |
+| --- | --- |
+| 交付 | `infrastructure/storage/sqlite`：不暴露 sqlite3.h 的连接／语句封装与错误映射；Database（WAL、synchronous=FULL、foreign_keys、唯一 writer 有界等待与等待者上限、query_only 读取连接池、事务内执行并在错误时回滚）；带校验和的版本化迁移与 v1 表结构（数据模型中的全部 S1 表）；身份与 token、凭证与默认选择、目录绑定、任务（幂等、活动意图唯一、配额、领取、受执行世代与版本保护的迁移、取消决策、意图读取）、发布（路径预留、完成、放弃、待恢复意图、资产查询与 missing 标记）仓储；`storage/intent_codec`（下载意图 JSON，解码时重新归一校验）。新增端口：身份、凭证、目录绑定、发布仓储；任务仓储端口补充 force、resume_stage、get_intent 与时间字段。新增错误码 DESTINATION_ROOT_CHANGED、DESTINATION_IN_USE、IDEMPOTENCY_CONFLICT、ACTIVE_DUPLICATE、QUEUE_LIMIT_EXCEEDED |
+| 覆盖的验收 | 初始化与重开、迁移幂等、拒绝更新的 schema 与被改动的迁移；失败写入回滚；writer 被占用时在等待预算内返回可重试错误且读取不受阻；唯一约束（token 哈希、活动指纹、发布路径大小写不敏感）；A01～A03（同键重放、同键异请求冲突、活动意图复用、force 冲突）与配额；A22（旧执行世代与旧版本拒写，waiting_retry 到期后换新执行世代并从记录的阶段恢复）；A12 基础（finalizing 先到时取消返回 TASK_FINALIZING，完成后 TASK_TERMINAL）；A47 的存储部分（默认选择 A→B→A 递增、清除语义、撤销默认凭证在同一事务内清空并推进版本、跨重启保留）；A49 的存储部分（同 ID 改根拒绝、in_use 判断）；任务、默认选择与待恢复发布意图跨重开保留 |
+| 规则补充 | 已写回数据模型：STRICT 表、毫秒时间、synchronous=FULL、writer 有界等待、path_key 大小写不敏感、撤销清空 secret_ref |
+| Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条警告；`ctest --preset windows-msvc-debug` 97/97 通过（存储集成测试 12 项、239 个断言） |
+| GCC 证据（部分） | MinGW GCC 16.2 严格警告下编译 35 个项目目标文件 0 条警告（修复了 GCC 报告的 2 处变量遮蔽与 1 个未使用函数）；Linux 运行证据待推送后由 CI 提供 |
+| 未覆盖 | begin_attempt、checkpoint、defer_admission 与批次在 T14／T17 实现；token 哈希算法与签发在 T08；目录绑定的启动校验在 T10；幂等记录的定期清理随运行时任务加入 |

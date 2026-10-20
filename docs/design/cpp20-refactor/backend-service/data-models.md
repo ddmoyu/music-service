@@ -196,6 +196,8 @@ auto 来源顺序有语义，保留首次出现顺序去重并移除原曲来源
 
 单进程持有 data_dir 实例锁；SQLite 采用 WAL、单写入执行器和少量读取连接。文件系统操作不在长数据库事务内执行，网络请求也不持数据库锁。所有表操作通过 repository，业务用例不散落 SQL。
 
+T05 的实现约定：表使用 STRICT 模式；库内时间存为 UTC 毫秒整数，对外 API 再格式化为 RFC 3339；WAL 配合 synchronous=FULL，提交返回即已落盘；唯一 writer 以有界等待（storage.wait_budget）和等待者上限（storage.writer_queue）实现，超出返回可重试的 STORAGE_UNAVAILABLE；读取连接以 query_only 打开并在读事务内取得一致快照。发布路径的唯一性按 ASCII 小写化的 path_key 比较（兼顾 Windows 与多数 NAS 的大小写不敏感），资产与发布意图共用同一预留空间。撤销凭证时同时清空其 secret_ref，旧引用交给调用方在提交后清理。
+
 ## 文件与数据库的协调
 
 文件重命名和 SQLite 提交不能组成同一个原子事务。任务发布流程记录 finalization_intent、完成同文件系统重命名、再事务写入 file_asset 和 completed；启动恢复根据 intent、实际文件和校验证据补齐或标为需重新执行。

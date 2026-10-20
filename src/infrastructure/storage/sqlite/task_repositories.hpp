@@ -1,0 +1,66 @@
+#pragma once
+
+#include "application/ports/storage/publication_repository.hpp"
+#include "application/ports/storage/task_repository.hpp"
+#include "infrastructure/storage/sqlite/account_repositories.hpp"
+
+#include <chrono>
+#include <cstdint>
+
+namespace music_service::infrastructure::storage::sqlite {
+
+struct TaskRepositoryOptions {
+    std::uint32_t per_principal_active{500};
+    std::uint32_t global_active{2000};
+    std::chrono::hours idempotency_retention{24};
+};
+
+class SqliteTaskRepository final : public application::ports::TaskRepository {
+public:
+    SqliteTaskRepository(RepositoryContext context, TaskRepositoryOptions options)
+        : ctx_(std::move(context)), options_(options) {}
+
+    domain::Result<application::ports::CreateTaskOutcome>
+    create(const application::ports::CreateTaskCommand& command) override;
+    domain::Result<application::ports::TaskRecord> get(const std::string& owner_id,
+                                                       const std::string& task_id) override;
+    domain::Result<domain::NormalizedDownloadIntent> get_intent(const std::string& task_id) override;
+    domain::Result<std::optional<application::ports::TaskRecord>>
+    claim_next(std::chrono::system_clock::time_point now) override;
+    domain::Result<application::ports::TaskRecord>
+    transition(const application::ports::TransitionCommand& command) override;
+    domain::Result<application::ports::TaskRecord> request_cancel(const std::string& owner_id,
+                                                                  const std::string& task_id) override;
+
+private:
+    RepositoryContext ctx_;
+    TaskRepositoryOptions options_;
+};
+
+class SqlitePublicationRepository final : public application::ports::PublicationRepository {
+public:
+    explicit SqlitePublicationRepository(RepositoryContext context) : ctx_(std::move(context)) {}
+
+    domain::Result<application::ports::TaskRecord>
+    begin(const application::ports::PublicationIntent& intent,
+          std::uint64_t expected_version) override;
+    domain::Result<void> set_stage(const std::string& task_id, const std::string& execution_id,
+                                   const std::string& stage) override;
+    domain::Result<application::ports::CompletedPublication>
+    complete(const std::string& task_id, const std::string& execution_id,
+             std::uint64_t expected_version, const application::ports::NewFileAsset& asset,
+             const std::string& result_json) override;
+    domain::Result<application::ports::TaskRecord>
+    abandon(const std::string& task_id, const std::string& execution_id,
+            std::uint64_t expected_version, domain::TaskStatus to,
+            const std::string& error_json) override;
+    domain::Result<std::vector<application::ports::PublicationIntent>> pending() override;
+    domain::Result<application::ports::FileAssetRecord> get_asset(const std::string& owner_id,
+                                                                  const std::string& file_id) override;
+    domain::Result<application::ports::FileAssetRecord> mark_missing(const std::string& file_id) override;
+
+private:
+    RepositoryContext ctx_;
+};
+
+} // namespace music_service::infrastructure::storage::sqlite

@@ -50,6 +50,16 @@ std::string_view to_string(ErrorCode code) noexcept {
         return "STORAGE_UNAVAILABLE";
     case ErrorCode::destination_unavailable:
         return "DESTINATION_UNAVAILABLE";
+    case ErrorCode::destination_root_changed:
+        return "DESTINATION_ROOT_CHANGED";
+    case ErrorCode::destination_in_use:
+        return "DESTINATION_IN_USE";
+    case ErrorCode::idempotency_conflict:
+        return "IDEMPOTENCY_CONFLICT";
+    case ErrorCode::active_duplicate:
+        return "ACTIVE_DUPLICATE";
+    case ErrorCode::queue_limit_exceeded:
+        return "QUEUE_LIMIT_EXCEEDED";
     case ErrorCode::instance_locked:
         return "INSTANCE_LOCKED";
     case ErrorCode::file_system:
