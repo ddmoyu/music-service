@@ -21,7 +21,7 @@
 
 ```mermaid
 flowchart TB
-    composition["apps/server：CompositionRoot 与 ProcessHost，待实现"]
+    composition["src/server：CompositionRoot 与 ProcessHost，待实现"]
     subgraph adaptersLayer["外层模块：当前均为 INTERFACE 构建目标"]
         api["api / music_dl_http_api"]
         media["media_server"]
@@ -53,7 +53,7 @@ flowchart TB
     application --> domain
 ```
 
-实线对应 `cpp/src/*/CMakeLists.txt` 的直接业务目标依赖，省略统一编译选项 target 及 domain 的传递依赖。组装层也负责构造应用用例，图中省略这条重复组装关系。`apps/server` 当前只有预留 CMake 文件，没有 `music-dl-server` 可执行目标。
+实线对应 `src/*/CMakeLists.txt` 的直接业务目标依赖，省略统一编译选项 target 及 domain 的传递依赖。组装层也负责构造应用用例，图中省略这条重复组装关系。`src/server` 当前只有预留 CMake 文件，没有 `music-dl-server` 可执行目标。
 
 **application 运行时调用 Provider，但不编译依赖具体 providers 实现。** 应用层声明端口，外层实现它，组装层注入具体对象。同理，任务创建通过 DownloadQueuePort 唤醒下载模块；Runner 通过应用契约调用解析用例，双方不包含对方的具体实现。
 

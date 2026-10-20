@@ -4,7 +4,7 @@
 
 ## C++20 重构设计
 
-- [C++ 工程入口](../cpp/README.md)：已初始化的目录、模块依赖、CMake 预设与当前实现边界。
+- [项目入口与构建](../README.md)：目录结构、构建与测试命令、当前进度。
 - [重构设计入口](design/cpp20-refactor/README.md)：当前方向、选型状态和文档导航。
 - [后端服务详细设计](design/cpp20-refactor/backend-service/README.md)：C++20 + cpp-httplib 主方案的模块与目录、公共模型、API 契约、任务运行时、配置与部署。
 - [功能模块详细设计](design/cpp20-refactor/backend-service/feature-modules.md)：各模块的职责、业务规则、输入输出和协作方式。

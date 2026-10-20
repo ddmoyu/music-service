@@ -50,7 +50,7 @@
 
 本表是运行配额与期限默认值的唯一规范位置；API 请求字段的合法范围仍由 API 契约定义。普通上游读取空闲不超过来源预算；所有操作受总截止时间和全局并发约束。示例配置只演示组合，不另设一份默认值。
 
-T03 已按本表实现加载与校验（`cpp/src/infrastructure/config`），JSON 键名见[配置键名](../../../../cpp/resources/config/README.md)。在构建包含对应模块之前，media、events 与 file_access 的缺省值为关闭；T18／T19 交付后按本表“随下载闭环启用”。环境变量和命令行给出的相对路径相对于进程工作目录，文件中的相对路径相对于配置文件目录。端口 0 仅允许 loopback 地址；监听非 loopback 地址时必须配置对应的 public_urls。
+T03 已按本表实现加载与校验（`src/infrastructure/config`），JSON 键名见[配置键名](../../../../config/README.md)。在构建包含对应模块之前，media、events 与 file_access 的缺省值为关闭；T18／T19 交付后按本表“随下载闭环启用”。环境变量和命令行给出的相对路径相对于进程工作目录，文件中的相对路径相对于配置文件目录。端口 0 仅允许 loopback 地址；监听非 loopback 地址时必须配置对应的 public_urls。
 
 上述 source／origin／共享应用组及 helper 预算由 runtime/admission 统一执行，Transport 和平台包不得各建一套计数。配额组标识与凭证版本分开：多个平台或应用 profile 共用同一上游配额时配置为同组，token 刷新不新建配额。用户默认凭证保存在 SQLite，通过 API 提交后立即生效；启动配置不包含用户默认账号。既有任务使用保存的绑定和策略，不因默认选择或配置重启而静默迁移。
 
@@ -112,7 +112,7 @@ events.enabled=true 同样要求构建包含 SSE 功能，且 event_limits 全�
 
 ### 本机身份管理命令
 
-命令归属 `apps/server` 的薄 CLI 入口，调用 application 的 Principal／AccessToken 管理用例与 Repository；属于 T08／T10 的交付。首版采用离线管理：服务停止后取得同一个 data_dir 独占锁再操作。实例正在运行时返回非零退出码，不绕开单实例约束直接修改数据库；HTTP admin scope 不提供以下管理权限。
+命令归属 `src/server` 的薄 CLI 入口，调用 application 的 Principal／AccessToken 管理用例与 Repository；属于 T08／T10 的交付。首版采用离线管理：服务停止后取得同一个 data_dir 独占锁再操作。实例正在运行时返回非零退出码，不绕开单实例约束直接修改数据库；HTTP admin scope 不提供以下管理权限。
 
 | 命令 | 语义 |
 | --- | --- |

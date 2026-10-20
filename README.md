@@ -1,39 +1,70 @@
 # music-service
 
-独立音乐后端服务，为单独维护的 GUI 和前端提供音乐搜索、音源解析、下载与任务管理等 API。本项目是纯后端，不包含 GUI；要求跨平台运行，并支持原生进程、系统服务及 Docker 部署。系统、架构和验证边界见[配置与部署](docs/design/cpp20-refactor/backend-service/configuration-and-deployment.md)。当前已初始化 C++20 工程骨架，尚无业务实现，文档入口见[项目文档](docs/README.md)。
+跨平台的纯后端音乐服务，通过 HTTP API 提供音乐搜索、音源解析、下载与任务管理。本仓库只包含后端：GUI、网页、桌面等前端在各自独立的仓库中开发，通过版本化 API 接入。服务支持原生进程、系统服务和 Docker 部署，系统与架构范围见[配置与部署](docs/design/cpp20-refactor/backend-service/configuration-and-deployment.md)。
 
-命名约定：music-service 是产品名；仓库目录为 `music-dl`，CMake 项目与库目标前缀为 `music_dl`，服务可执行程序为 `music-dl-server`，`/api/v1/info` 的 service 字段为 `music-dl`。
+命名约定：music-service 是产品名；仓库目录为 `music-dl`，CMake 项目与库目标前缀为 `music_dl`，C++ 命名空间为 `music_dl`，服务可执行程序为 `music-dl-server`，`/api/v1/info` 的 service 字段为 `music-dl`。
+
+当前进度：T01～T03 已完成（固定版本依赖、领域规则与应用端口、配置／时钟／日志基础），尚无平台实现、存储、运行时或服务入口。任务与证据见[开发任务](docs/design/cpp20-refactor/development-tasks.md)。
 
 ## 目录结构
 
 ```text
 music-dl/
-  README.md
-  cpp/                         # C++20 库模块、服务入口与构建骨架
-    include/music_dl/          # 公共领域类型、应用契约与端口
-    src/                      # 分层库模块
-    apps/server/              # 服务入口与依赖组装
-    cmake/                    # 构建支持与依赖接入位置
-    resources/                # 配置资源
-    tests/                    # 测试与去凭证样本位置
-    packaging/                # 原生与容器交付位置
-  docs/                        # 本项目的研究记录与设计文档
-    research/
-    design/
-  third_party/                 # 外部项目源码，保留各自的 Git 仓库
-    cinatra-source/
-    cofetch-source/
-    cpr-source/
-    go-music-dl/
-    music-lib-source/
+  CMakeLists.txt               # 顶层 C++20 工程
+  CMakePresets.json            # Windows MSVC／Linux GCC 预设与测试预设
+  cmake/                       # 编译选项、依赖获取与校验、第三方适配、工具链
+  src/                         # 全部源码，头文件与实现放在同一模块目录
+    domain/                    # 值对象与纯规则，无 I/O
+    application/               # 用例、出站端口（ports）与配置类型（config）
+    providers/                 # 平台适配，酷我优先
+    downloads/                 # 持久任务调度、执行、重试、恢复与发布
+    audio_processing/          # 格式验证、解密与标签
+    infrastructure/            # 配置、日志、传输、存储、文件与秘密等实现
+    runtime/                   # 执行器、统一上游入场、取消与停机
+    api/                       # 控制 HTTP 入口
+    media_server/              # 文件与媒体入口
+    event_server/              # SSE 入口
+    server/                    # music-dl-server 可执行程序：main 与依赖组装
+  tests/                       # 依赖、单元、集成与契约测试及去凭证样本
+  config/                      # 配置键名说明与无秘密的示例配置
+  packaging/                   # Windows、Linux 与 Docker 交付
+  docs/                        # 研究记录与设计文档
+  third_party/                 # 研究用外部源码，不参与构建
+  .github/workflows/           # CI：Windows MSVC 与 Linux GCC
 ```
 
-外部项目源码统一放在 `third_party/`，不再直接放到项目根目录。目录用途及当前源码版本见 [第三方源码说明](third_party/README.md)。
+- 头文件与实现放在同一模块目录，所有模块都以 `src/` 为包含根，写作 `#include "domain/result.hpp"`。本项目只产出服务程序、不发布 C++ 库，因此不设单独的 `include/` 目录。
+- `src/server` 是后端自身的进程入口（参数解析、生命周期、依赖组装），不是前端。
+- 第三方依赖在配置阶段按固定版本拉取到构建目录，见[依赖说明](cmake/dependencies/README.md)。`third_party/` 只放研究用的参考源码，目录说明见[第三方源码说明](third_party/README.md)。
 
-C++ 工程位于 [cpp](cpp/README.md)，按[后端目录设计](docs/design/cpp20-refactor/backend-service/modules-and-layout.md)建立公共头、库模块和独立服务入口。当前只含构建配置、目录与说明，没有 C++ 源文件、第三方依赖或可运行服务；配置方法见[工程说明](cpp/README.md#配置与检查)。
+模块划分、依赖方向与目标结构见[模块与目录设计](docs/design/cpp20-refactor/backend-service/modules-and-layout.md)，各模块职责见 [src 说明](src/README.md)。
+
+## 构建与测试
+
+需要 CMake 3.30+、Ninja、Git、支持 C++20 的编译器，以及首次配置时的网络访问。命令在仓库根目录执行：
+
+```powershell
+# Windows：先进入 x64 Native Tools / Developer PowerShell 环境，确保 cl 与 ninja 可用。
+cmake --preset windows-msvc-debug
+cmake --build --preset windows-msvc-debug
+ctest --preset windows-msvc-debug
+```
+
+```sh
+# Linux：需要 gcc、g++ 与 ninja。
+cmake --preset linux-gcc-debug
+cmake --build --preset linux-gcc-debug
+ctest --preset linux-gcc-debug
+```
+
+- Debug 预设默认开启测试；Release 预设（windows-msvc-release、linux-gcc-release）不构建测试。构建目录为 `out/build/<预设名>`，按系统、编译器与配置隔离。Linux 使用当前主机架构，ARM64 等发布组合须单独验证。
+- 开发机差异放在已忽略的 CMakeUserPresets.json，不提交绝对工具链路径。
+- Windows 上使用官方 CMake 或 Visual Studio 自带的 CMake。MSYS2／MinGW 发行的 cmake 内置 curl 不带 CA 证书，下载依赖会失败；MinGW 不是支持的工具链。
+- 测试通过只说明已实现部分正确，不代表服务、跨平台运行或发布验收；当前还没有 music-dl-server 可执行程序。
 
 ## 文档入口
 
 - [项目文档](docs/README.md)
-- [Go Music DL 功能实现拆解](docs/research/go-music-dl/README.md)
 - [C++20 重构设计](docs/design/cpp20-refactor/README.md)
+- [开发任务与实施记录](docs/design/cpp20-refactor/development-tasks.md)
+- [配置键名](config/README.md)

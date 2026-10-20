@@ -2,7 +2,7 @@
 
 服务框架暂定 cpp-httplib，Drogon 作为备选。上游客户端、TLS、平台加密和音频处理分别验证；其他网络库保留为选型参考，不与当前主方案并列推进。
 
-更新日期：2026-10-20。状态：主框架已暂定；T01 已固定 cpp-httplib v0.62.0、Mbed TLS v3.6.7、nlohmann/json v3.12.0、SQLite 3.54.1 与 Catch2 v3.16.1，见[依赖清单](../../../cpp/cmake/dependencies/README.md)。其余配套选型待验证。
+更新日期：2026-10-20。状态：主框架已暂定；T01 已固定 cpp-httplib v0.62.0、Mbed TLS v3.6.7、nlohmann/json v3.12.0、SQLite 3.54.1 与 Catch2 v3.16.1，见[依赖清单](../../../cmake/dependencies/README.md)。其余配套选型待验证。
 
 主方案的模块、目录、API、控制／媒体／事件三类监听与有界任务执行细节见[后端服务详细设计](backend-service/README.md)。这里保留库能力与取舍证据；初始资源值与协议契约由详细设计维护。
 

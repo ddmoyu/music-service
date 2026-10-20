@@ -1,0 +1,12 @@
+# Dependency order: domain -> application -> adapters and execution modules -> server.
+add_subdirectory(domain)
+add_subdirectory(application)
+add_subdirectory(providers)
+add_subdirectory(downloads)
+add_subdirectory(audio_processing)
+add_subdirectory(infrastructure)
+add_subdirectory(runtime)
+add_subdirectory(api)
+add_subdirectory(media_server)
+add_subdirectory(event_server)
+add_subdirectory(server)

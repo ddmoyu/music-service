@@ -57,7 +57,7 @@
 
 见[系统总图](../architecture.md#图-1系统进程与部署边界)和[详细架构图](../architecture-details.md)。控制、媒体、SSE 是同一进程中的三个协议入口，各自拥有 HTTP 工作池，共享应用用例、身份和存储。持久下载由 Scheduler／Runner 执行，实际网络操作统一经过 runtime/admission；已提交的任务快照经有界 EventHub 通知客户端。
 
-编译依赖与运行调用分图表达：application 通过自身端口调用外部实现，具体实例由 apps/server 组装；Provider 和 HTTP 适配器不拥有第二套任务状态或持久队列。所有业务组件仍待实现。
+编译依赖与运行调用分图表达：application 通过自身端口调用外部实现，具体实例由 src/server 组装；Provider 和 HTTP 适配器不拥有第二套任务状态或持久队列。所有业务组件仍待实现。
 
 ## 功能分期
 

@@ -1,6 +1,6 @@
 # 构建与依赖
 
-[cpp 工程](../../../../cpp/README.md)最低 CMake 为 3.30，提供 Windows MSVC 与 Linux GCC 的 Debug／Release Ninja 预设及测试预设。T01 已按本页规则接入首批依赖，具体版本与许可证见[依赖清单](../../../../cpp/cmake/dependencies/README.md)；模块目标仍为 INTERFACE，没有业务源码、安装包或服务程序。
+CMake 工程位于仓库根目录（见[根目录说明](../../../../README.md#构建与测试)），最低 CMake 为 3.30，提供 Windows MSVC 与 Linux GCC 的 Debug／Release Ninja 预设及测试预设。T01 已按本页规则接入首批依赖，具体版本与许可证见[依赖清单](../../../../cmake/dependencies/README.md)；尚无安装包或服务程序。
 
 ## 基线
 
@@ -67,18 +67,19 @@
 ## CMake 布局
 
 ```text
-cpp/
+music-dl/                          # 仓库根目录即 CMake 工程根
   CMakeLists.txt
   CMakePresets.json
-  CMakeUserPresets.json             # 本机覆盖，不提交
+  CMakeUserPresets.json            # 本机覆盖，不提交
   cmake/
-    ProjectOptions.cmake
+    ProjectOptions.cmake           # C++20、MSVC UTF-8 等公共选项与项目警告
     dependencies/
       Versions.cmake               # URL、tag、期望 commit
       Dependencies.cmake           # 声明与 MakeAvailable 顺序
-      VerifyDependency.cmake
-    adapters/
+      VerifyDependency.cmake       # 实际 HEAD 与期望 commit 比对
+    adapters/                      # httplib.cmake、sqlite.cmake
     toolchains/
+  out/build/<preset>/              # 构建目录，已忽略
 ```
 
 目标划分见[模块与目录](modules-and-layout.md)。先设置第三方功能／测试／示例选项，再 MakeAvailable；编译器、架构、运行库、TLS 和功能组合纳入 Preset。

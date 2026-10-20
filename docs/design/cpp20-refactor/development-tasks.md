@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01 **已完成**，T02、T03 **待验收**（等待 Linux CI），其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T03 **已完成**，其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -39,7 +39,7 @@ T20 可作为首个可用的酷我预览版本；正式发布基线按 T40 管�
 | `providers/registry`、`providers/<source>` | T07、T12 | T22／T41、T25、T27、N／X 平台；协议、签名、解析与平台授权在平台包内 |
 | `application/accounts`、`infrastructure/auth` | T08 | T24 OAuth／刷新；前者协调平台凭证，后者处理服务 token，职责不同 |
 | `infrastructure/transport` | T09 | T29 传输可靠性、T34 流桥接；不拥有第二套下载队列 |
-| `apps/server`、`api/httplib` | T10 | 随每项用例补路由；仅组装、生命周期和协议转换，不最后集中补 API |
+| `src/server`、`api/httplib` | T10 | 随每项用例补路由；仅组装、生命周期和协议转换，不最后集中补 API |
 | `application/catalog`、`application/assets` | T13 | T21／T23 集合与发现，T33／T35 匹配；保留原曲与实际来源 |
 | `application/tasks`、`downloads` | T14、T16～T17 | T29／T31 强化；意图归一属于 application，执行与发布属于 downloads |
 | `audio_processing` | T15 | T30 标签、容器与解密；不控制账号、任务调度或平台匹配 |
@@ -270,8 +270,8 @@ T03 之后的下一项为 **T04** 与 **T06**（可并行）；T07、T09 完成�
 
 | 项目 | 记录 |
 | --- | --- |
-| 交付 | `cpp/cmake/dependencies`（版本、获取、提交校验）、`cpp/cmake/adapters`（cpp-httplib + Mbed TLS、SQLite）、项目编译与警告选项、测试预设、依赖测试 `tests/dependencies`、CI `.github/workflows/ci.yml`；适配模块（infrastructure、三个 HTTP 入口）已链接真实依赖目标 |
-| 选型 | cpp-httplib v0.62.0、Mbed TLS v3.6.7、nlohmann/json v3.12.0、SQLite 3.54.1、Catch2 v3.16.1；许可证、体积与选择理由见[依赖清单](../../../cpp/cmake/dependencies/README.md) |
+| 交付 | `cmake/dependencies`（版本、获取、提交校验）、`cmake/adapters`（cpp-httplib + Mbed TLS、SQLite）、项目编译与警告选项、测试预设、依赖测试 `tests/dependencies`、CI `.github/workflows/ci.yml`；适配模块（infrastructure、三个 HTTP 入口）已链接真实依赖目标 |
+| 选型 | cpp-httplib v0.62.0、Mbed TLS v3.6.7、nlohmann/json v3.12.0、SQLite 3.54.1、Catch2 v3.16.1；许可证、体积与选择理由见[依赖清单](../../../cmake/dependencies/README.md) |
 | Windows 证据（2026-10-20） | Windows 11 x64，MSVC 19.51.36257（VS 2026，工具集 14.51.36231），Windows SDK 10.0.28000.0，CMake 4.4.4，Ninja 1.13.2。从空目录 `cmake --preset windows-msvc-debug` 获取并校验全部依赖；构建 0 条项目警告；`ctest --preset windows-msvc-debug` 5/5 通过；windows-msvc-release 配置与构建通过 |
 | 校验失败验证 | 将 nlohmann/json 源码覆盖指向其他提交的检出，配置以 “HEAD is …, expected …” 失败 |
 | GCC 证据（部分） | MinGW GCC 16.2.0 在 `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion` 下编译项目测试文件无警告；该编译器构建 Mbed TLS 时发生内部编译器错误，MinGW 不是支持的工具链，不作为 Linux 证据 |
@@ -279,7 +279,7 @@ T03 之后的下一项为 **T04** 与 **T06**（可并行）；T07、T09 完成�
 | 后续 | Linux ARM64 与 Docker 最小容器属于 T11 |
 | 已知限制 | 首次配置需要联网；MSYS2／MinGW 发行的 cmake 无法校验 HTTPS 证书，Windows 须使用官方或 VS 自带 CMake；Mbed TLS 上游 CMakeLists 有 cmake_minimum_required 弃用警告，不影响构建 |
 
-### T02 领域规则与最小应用端口：待验收（等待 Linux CI）
+### T02 领域规则与最小应用端口：已完成（2026-10-20，提交 32cde52）
 
 | 项目 | 记录 |
 | --- | --- |
@@ -287,16 +287,20 @@ T03 之后的下一项为 **T04** 与 **T06**（可并行）；T07、T09 完成�
 | 覆盖的验收 | strict／allow_lower、已知试听拒绝、未知完整性与未知品质带警告；同版本不同凭证的身份键不同（A38 领域部分）；试听／标签策略、手动目标、账号绑定、auto 顺序与策略版本进入指纹（A35、A36 领域部分）；终态无出口、finalizing 不可取消、非法迁移报错；入场不阻塞并延后、其他来源可推进、租约只归还一次、传输拒绝不匹配的租约（替身） |
 | 规则补充 | 已写回规范：queued／waiting_retry → failed 迁移；品质未知与降级的警告规则、从不自动升档；指纹编码与 FNV-1a 摘要；auto 去除原曲来源、手动目标等于原曲时归一为同源、绑定按需裁剪 |
 | Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条警告；`ctest --preset windows-msvc-debug` 45/45 通过（含 5 项依赖测试） |
-| GCC 证据（部分） | MinGW GCC 16.2 在严格警告下编译 domain 与单元测试 0 条警告，单元测试 40 项、503 个断言全部通过；Linux 证据待推送后由 CI 提供 |
+| Linux 证据（CI 运行 39360376271） | ubuntu-24.04，GCC 13.3.0，glibc 2.39：domain 与单元测试 0 条项目警告，与 T03 合计 68/68 通过 |
 | 未覆盖 | 端口只有替身实现；真实入场账本（T06）、传输（T09）、仓储（T05）分别在对应任务实现和验收 |
 
-### T03 配置、时钟与可观测性基础：待验收（等待 Linux CI）
+### T03 配置、时钟与可观测性基础：已完成（2026-10-20，提交 52b7d3a）
 
 | 项目 | 记录 |
 | --- | --- |
 | 交付 | `application/config/ServiceConfig`（配置基线全部配置组的缺省值）；`infrastructure/config`：缺省 → JSON 文件 → MUSIC_DL_* 环境变量 → 命令行的加载、路径解析与组合校验；`SystemClock`／`ManualClock`；结构化日志（JSON 行／文本／内存 sink、绑定上下文、级别过滤）与字段脱敏；客户端 request_id 校验与服务 ID 生成；计数与延迟指标接口。infrastructure 改为静态库 |
 | 覆盖的验收 | 未知键、类型错误、越界值、无效 JSON、文件不可读均在启动前失败并一次报告全部字段；端口冲突、端口 0 非 loopback、非 loopback 缺 public_urls、远程 http、构建缺失功能、未编入平台、default_sources 不合法、事件／媒体额度超过 workers−2、目标目录 ID 与 principals 均被拒绝；文件内相对路径按配置文件目录、环境变量与命令行按工作目录解析，含 BOM 与中文路径；日志中 Authorization／Cookie／token／ticket 字段、URL 查询串与票据路径段、Bearer 文本均被脱敏，`*_id`／`*_version` 保留；ManualClock 可推进且墙钟跳变不影响单调时钟 |
-| 规则补充 | 已写回配置文档与[配置键名](../../../cpp/resources/config/README.md)：JSON 键名与单位后缀、相对路径基准、端口 0 与 public_urls 规则、构建前 media／events／file_access 缺省关闭、app_profiles 在 T24 前只接受空对象 |
+| 规则补充 | 已写回配置文档与[配置键名](../../../config/README.md)：JSON 键名与单位后缀、相对路径基准、端口 0 与 public_urls 规则、构建前 media／events／file_access 缺省关闭、app_profiles 在 T24 前只接受空对象 |
 | Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条警告；`ctest --preset windows-msvc-debug` 68/68 通过 |
-| GCC 证据（部分） | MinGW GCC 16.2 在严格警告下编译 domain、infrastructure 与单元测试共 21 个目标文件，0 条警告；未链接运行（该编译器构建 Mbed TLS 会崩溃）。Linux 运行证据待推送后由 CI 提供 |
+| Linux 证据（CI 运行 39360376271） | ubuntu-24.04，GCC 13.3.0，glibc 2.39：`ctest --preset linux-gcc-debug` 68/68 通过；GCC 13 报告 1 条 `-Wformat-truncation`（日志时间格式化缓冲区），已在目录调整提交中修复 |
 | 未覆盖 | `check-config` 等命令行入口归 T10；日志文件轮转与指标导出格式在有部署需求时补充 |
+
+### 目录结构调整（2026-10-20）
+
+本仓库是跨平台纯后端，前端另建仓库，因此 CMake 工程从 `cpp/` 移到仓库根目录；`cpp/include/music_dl/` 并入 `src/`，头文件与实现同目录、以 `src/` 为包含根；服务入口 `apps/server` 改为 `src/server`；配置说明从 `resources/config` 移到 `config/`。模块划分、目标名与命名空间不变，见[模块与目录](backend-service/modules-and-layout.md#目录)。调整后 Windows 68/68 测试通过。

@@ -5,8 +5,6 @@
 # CMake build output and local presets.
 /build/
 /out/
-/cpp/build/
-/cpp/out/
 cmake-build-*/
 CMakeUserPresets.json
 
