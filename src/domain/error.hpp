@@ -30,6 +30,7 @@ enum class ErrorCode {
     deadline_exceeded,
     canceled,
     storage_unavailable,
+    service_busy,
     destination_unavailable,
     destination_root_changed,
     destination_in_use,

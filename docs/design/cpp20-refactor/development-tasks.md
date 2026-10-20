@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T03 **已完成**，T04、T05 **待验收**（等待 Linux CI），其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T05 **已完成**，T06 **待验收**（等待 Linux CI），其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,7 +262,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-下一项为 **T06**（执行器与统一上游入场）与 **T07**（ProviderBundle 注册），二者可并行；T07、T09 完成后即可并行开始 T12。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+下一项为 **T07**（ProviderBundle 注册）与 **T08**（服务身份与 Cookie 凭证）；T07、T09 完成后即可并行开始 T12；T07、T09 完成后即可并行开始 T12。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
@@ -309,7 +309,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 
 项目与仓库名统一为 music-service：CMake 项目与目标前缀 `music_service`，C++ 命名空间 `music_service`，可执行程序 `music-service`，环境变量前缀 `MUSIC_SERVICE_`，`/api/v1/info` 的 service 字段 `music-service`，任务工作目录 `.music-service-work`。外部参考项目的 GitHub 地址保留其原仓库名，其余文字与目录统一称为 Go 参考实现（`docs/research/go-reference`）。改名后 Windows 68/68 测试通过。
 
-### T04 文件系统、工作目录与 SecretStore：待验收（等待 Linux CI）
+### T04 文件系统、工作目录与 SecretStore：已完成（2026-10-20，提交 10533ab）
 
 | 项目 | 记录 |
 | --- | --- |
@@ -317,10 +317,10 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 | 覆盖的验收 | 第二实例拒绝且释放后可再取得；越界、`..`、保留名与符号链接逃逸被拒绝（Windows 实际创建目录符号链接验证）；中文路径往返、中文目录下的配置与秘密文件；文件已存在时不覆盖、重命名不替换既有目标；目标根缺失时报 DESTINATION_UNAVAILABLE 且不自动创建；秘密引用不能指向其他文件，更新得到新引用，日志描述不含秘密值 |
 | 规则补充 | 已写回配置文档：秘密文件权限与命名、目标根从不自动创建、data_dir 与目标根不得互相包含 |
 | Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条警告；`ctest --preset windows-msvc-debug` 85/85 通过 |
-| GCC 证据（部分） | MinGW GCC 16.2 严格警告下编译 28 个项目目标文件 0 条警告（只覆盖 Windows 分支）；POSIX 分支（flock、O_EXCL、renameat2、0600／0700）的运行证据待推送后由 Linux CI 提供 |
+| Linux 证据（CI 运行 39363696302） | ubuntu-24.04，GCC 13.3.0，glibc 2.39：0 条项目警告，97/97 通过，覆盖 POSIX 分支（flock、O_EXCL、renameat2、0600／0700 权限断言） |
 | 未覆盖 | 目标目录的不可变 ID 绑定落在 T05（SQLite）与 T10（启动校验）；NAS 断开与权限变化的实际环境验证在 T38 |
 
-### T05 SQLite 与仓储基础：待验收（等待 Linux CI）
+### T05 SQLite 与仓储基础：已完成（2026-10-20，提交 c86a6f2）
 
 | 项目 | 记录 |
 | --- | --- |
@@ -328,5 +328,15 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 | 覆盖的验收 | 初始化与重开、迁移幂等、拒绝更新的 schema 与被改动的迁移；失败写入回滚；writer 被占用时在等待预算内返回可重试错误且读取不受阻；唯一约束（token 哈希、活动指纹、发布路径大小写不敏感）；A01～A03（同键重放、同键异请求冲突、活动意图复用、force 冲突）与配额；A22（旧执行世代与旧版本拒写，waiting_retry 到期后换新执行世代并从记录的阶段恢复）；A12 基础（finalizing 先到时取消返回 TASK_FINALIZING，完成后 TASK_TERMINAL）；A47 的存储部分（默认选择 A→B→A 递增、清除语义、撤销默认凭证在同一事务内清空并推进版本、跨重启保留）；A49 的存储部分（同 ID 改根拒绝、in_use 判断）；任务、默认选择与待恢复发布意图跨重开保留 |
 | 规则补充 | 已写回数据模型：STRICT 表、毫秒时间、synchronous=FULL、writer 有界等待、path_key 大小写不敏感、撤销清空 secret_ref |
 | Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条警告；`ctest --preset windows-msvc-debug` 97/97 通过（存储集成测试 12 项、239 个断言） |
-| GCC 证据（部分） | MinGW GCC 16.2 严格警告下编译 35 个项目目标文件 0 条警告（修复了 GCC 报告的 2 处变量遮蔽与 1 个未使用函数）；Linux 运行证据待推送后由 CI 提供 |
+| Linux 证据（CI 运行 39363696302） | ubuntu-24.04，GCC 13.3.0，glibc 2.39：0 条项目警告，97/97 通过（含存储集成测试） |
 | 未覆盖 | begin_attempt、checkpoint、defer_admission 与批次在 T14／T17 实现；token 哈希算法与签发在 T08；目录绑定的启动校验在 T10；幂等记录的定期清理随运行时任务加入 |
+
+### T06 执行器、取消与统一上游入场：待验收（等待 Linux CI）
+
+| 项目 | 记录 |
+| --- | --- |
+| 交付 | `runtime` 静态库：BoundedExecutor（固定线程、有界队列，满或停止时立即 SERVICE_BUSY，任务获得 stop_token，支持停止接收／等待空闲／请求停止／join 与统计）；DeadlineTimer（单线程按单调时间触发回调，可取消，用于截止取消与冷却到期唤醒）；AdmissionLedger 实现 UpstreamAdmissionPort（全局连接、principal、source×流量类别、origin 四维一次性预留；不足时返回带受限维度与重试时刻的 Deferred；Retry-After 按来源或配额组冷却，上限 max_cooldown，只延长不缩短；租约持有账本状态，账本销毁后归还仍安全；helper 进程维度在 T26 前返回不支持）；ShutdownSequence（停止接收 → 共享软预算等待空闲 → 触发服务停止信号并丢弃未开始的排队工作 → join，报告未在预算内空闲的执行器）。入场端口新增 readiness 提示；新增配置 upstream.per_principal、upstream.per_origin 与错误码 SERVICE_BUSY |
+| 覆盖的验收 | A43 的运行时部分：来源满额时 Deferred 不阻塞，其他来源可推进；各维度独立限额；被拒请求不留部分预留；租约只归还一次（含析构与移动），多连接计量；冷却到期前延后、到期后恢复，共享配额组一起冷却（A45 的入场基础）；截止已过与未启用的 helper 明确报错；执行器满队列拒绝、停止信号传到运行中的工作、未开始的排队工作被丢弃；停机在软预算内排空并报告超时的执行器；定时器按序触发与取消 |
+| Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条警告；`ctest --preset windows-msvc-debug` 110/110 通过；涉及线程与计时的 runtime 测试连续运行 20 次无失败 |
+| GCC 证据（部分） | MinGW GCC 16.2 严格警告下编译 41 个项目目标文件 0 条警告；Linux 运行证据待推送后由 CI 提供 |
+| 未覆盖 | 入场额度与真实传输的结合（重定向逐跳入场、租约与 Transport 校验）在 T09；下载的持久延后与执行槽在 T17；共享应用配额组的配置与 helper 上界在 T24／T26 |

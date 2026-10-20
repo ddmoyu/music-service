@@ -37,6 +37,8 @@ public:
     void feedback(const AdmissionRequest&,
                   std::optional<std::chrono::steady_clock::time_point>) override {}
 
+    std::optional<Deferred> readiness(const AdmissionRequest&) const override { return std::nullopt; }
+
     std::uint32_t in_use(const std::string& source) { return in_use_[source]; }
     int released() const { return released_; }
 

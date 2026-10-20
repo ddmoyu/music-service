@@ -26,7 +26,7 @@
 | `security` | allow_insecure_remote=false。任一 public URL 为非 loopback 地址且使用 http 时，check-config 与启动失败，必须改用入站 TLS 或前置 HTTPS 反向代理；仅内网测试可显式设为 true，启动时持续记录警告，因为 Bearer token 与媒体票据会以明文传输 |
 | `http` | body_limit=256 KiB，控制读写空闲各 10 秒，keep_alive_timeout=3 秒，单连接请求数上限 50 |
 | `admission` | 昂贵控制请求全局 8／每 principal 2；调用者超出 429，整体不足 503 |
-| `upstream` | short_workers=8，queue=64，per_source_short=2，max_total_connections=16，max_response=2 MiB，redirect_max=5；普通连接默认 3 秒 |
+| `upstream` | short_workers=8，queue=64，per_source_short=2，per_principal=8（单个 principal 同时进行的上游操作），per_origin=4（单个 origin 同时进行的操作），max_total_connections=16，max_response=2 MiB，redirect_max=5；普通连接默认 3 秒 |
 | `catalog` | 总查询预算 10 秒／上限 15 秒，每来源 5 秒，单请求 fanout=4、max_sources_per_request=8；default_sources 随发行 preset 生成，S1 为 [kuwo] |
 | `providers` | 按 source 配置 enabled、implementation、options、app_profile_id 和稳定配额组；app profile 包含版本及 app_secret_ref，按 bundle 的授权 schema 校验，不预设平台总数上限 |
 | `app_profiles` | 默认空；按稳定 ID 配置允许的 source／auth_profile、version、公开应用参数、app_secret_ref、scope 范围和 rate_limit_group；只由管理配置建立，秘密不直接写入配置 |

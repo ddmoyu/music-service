@@ -81,6 +81,8 @@ struct Upstream {
     std::uint32_t short_workers{8};
     std::uint32_t queue{64};
     std::uint32_t per_source_short{2};
+    std::uint32_t per_principal{8}; // concurrent upstream operations of one principal
+    std::uint32_t per_origin{4};    // concurrent operations against one scheme://host:port
     std::uint32_t max_total_connections{16};
     std::uint64_t max_response_bytes{2 * mib};
     std::uint32_t redirect_max{5};

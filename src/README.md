@@ -14,7 +14,7 @@
 | `providers` | 平台注册与各平台协议包 | 待实现 |
 | `downloads` | 持久任务调度、Runner、重试／续传、发布与恢复 | 待实现 |
 | `audio_processing` | 格式验证、解密、标签 | 待实现 |
-| `runtime` | 执行器、统一上游入场账本、取消与停机 | 待实现 |
+| `runtime` | 有界执行器、统一上游入场账本（AdmissionLedger）、截止定时器、停机序列 | 静态库，T06 |
 | `api`、`media_server`、`event_server` | 控制、媒体、SSE 三个 HTTP 入口的协议适配 | 待实现 |
 | `server` | music-service 可执行程序：参数、生命周期、依赖组装 | 待实现（T10） |
 

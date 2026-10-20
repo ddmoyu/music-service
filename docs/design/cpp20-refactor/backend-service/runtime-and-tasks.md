@@ -61,6 +61,8 @@ UpstreamAdmissionPort.try_acquire 返回 Granted（独占 UpstreamLease）、Def
 
 并发租约在实际 I/O 结束后才可归还；请求停止、HTTP 已返回或 worker 句柄超时都不等于操作结束。客户端连接可复用但不是额度本身，新操作仍须新租约；物理连接池同时计入活动与空闲连接上限，不能归还操作租约后无限保留空闲 socket。Retry-After 冷却与速率窗口独立于并发租约，释放连接不会重置它们。helper 按声明上界一次预留，由实际执行器消耗；其内部已预留连接不再重复申请，结束后才释放，超出声明上界的实现不能启用。
 
+T06 实现（`src/runtime/admission`）：S0 维度为全局连接（upstream.max_total_connections）、principal（upstream.per_principal）、来源×流量类别（short／auth 用 upstream.per_source_short，download 用 downloads.per_source，media 用 media_limits.upstream）与 origin（upstream.per_origin）。容量不足的 Deferred 给出受限维度和短暂的重试提示；冷却按配额组（未配置时按来源）记录，以上游 Retry-After 为准并设上限，只延长不缩短。readiness 只读判断，供调度器跳过受限项。
+
 ## httplib 适配规则
 
 | 位置 | 设计 |

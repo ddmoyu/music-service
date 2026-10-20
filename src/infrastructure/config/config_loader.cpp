@@ -337,6 +337,8 @@ void read_document(Reader& r, const json& doc, const std::filesystem::path& base
                                    {"short_workers", [&](const json& x, const std::string& q) { r.number(x, q, u.short_workers, 1, 1024); }},
                                    {"queue", [&](const json& x, const std::string& q) { r.number(x, q, u.queue, 1, 65535); }},
                                    {"per_source_short", [&](const json& x, const std::string& q) { r.number(x, q, u.per_source_short, 1, 1024); }},
+                                   {"per_principal", [&](const json& x, const std::string& q) { r.number(x, q, u.per_principal, 1, 4096); }},
+                                   {"per_origin", [&](const json& x, const std::string& q) { r.number(x, q, u.per_origin, 1, 4096); }},
                                    {"max_total_connections", [&](const json& x, const std::string& q) { r.number(x, q, u.max_total_connections, 1, 4096); }},
                                    {"max_response_bytes", [&](const json& x, const std::string& q) { r.number(x, q, u.max_response_bytes, 1024, 256 * cfg::mib); }},
                                    {"redirect_max", [&](const json& x, const std::string& q) { r.number(x, q, u.redirect_max, 0, 20); }},

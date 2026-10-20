@@ -90,6 +90,10 @@ public:
 
     virtual domain::Result<AdmissionOutcome> try_acquire(const AdmissionRequest& request) = 0;
 
+    // Hint for fair dispatch: nullopt when the request would be granted right now,
+    // otherwise when it is worth trying again. Not a reservation.
+    [[nodiscard]] virtual std::optional<Deferred> readiness(const AdmissionRequest& request) const = 0;
+
     // Trusted upstream feedback such as Retry-After; updates cooldowns only.
     virtual void feedback(const AdmissionRequest& request,
                           std::optional<std::chrono::steady_clock::time_point> retry_after) = 0;

@@ -27,7 +27,7 @@
 | `cors` | `allowed_origins` |
 | `auth` | `mode`（只能为 bearer） |
 | `admission` | `global`、`per_principal` |
-| `upstream` | `short_workers`、`queue`、`per_source_short`、`max_total_connections`、`max_response_bytes`、`redirect_max`、`connect_timeout_seconds` |
+| `upstream` | `short_workers`、`queue`、`per_source_short`、`per_principal`、`per_origin`、`max_total_connections`、`max_response_bytes`、`redirect_max`、`connect_timeout_seconds` |
 | `catalog` | `total_budget_ms`、`max_budget_ms`、`per_source_budget_ms`、`fanout`、`max_sources_per_request`、`default_sources` |
 | `providers.<source>` | `enabled`、`implementation`（native／external）、`options`（对象，由平台包校验）、`app_profile_id`、`rate_limit_group` |
 | `external_adapters` | `enabled`、`max_processes` |

@@ -48,6 +48,8 @@ std::string_view to_string(ErrorCode code) noexcept {
         return "CANCELED";
     case ErrorCode::storage_unavailable:
         return "STORAGE_UNAVAILABLE";
+    case ErrorCode::service_busy:
+        return "SERVICE_BUSY";
     case ErrorCode::destination_unavailable:
         return "DESTINATION_UNAVAILABLE";
     case ErrorCode::destination_root_changed:

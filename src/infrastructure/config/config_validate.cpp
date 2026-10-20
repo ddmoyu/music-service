@@ -136,6 +136,12 @@ void check_capacity(const cfg::ServiceConfig& c, Problems& p) {
     if (c.upstream.per_source_short > c.upstream.max_total_connections) {
         p.add("/upstream/per_source_short", "must not exceed max_total_connections");
     }
+    if (c.upstream.per_origin > c.upstream.max_total_connections) {
+        p.add("/upstream/per_origin", "must not exceed max_total_connections");
+    }
+    if (c.upstream.per_principal > c.upstream.max_total_connections) {
+        p.add("/upstream/per_principal", "must not exceed max_total_connections");
+    }
     if (c.downloads.per_source > c.upstream.max_total_connections) {
         p.add("/downloads/per_source", "must not exceed upstream.max_total_connections");
     }
