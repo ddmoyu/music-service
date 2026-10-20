@@ -30,6 +30,9 @@ enum class ErrorCode {
     deadline_exceeded,
     canceled,
     storage_unavailable,
+    destination_unavailable,
+    instance_locked,
+    file_system,
     internal,
 };
 

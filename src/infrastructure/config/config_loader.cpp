@@ -1,6 +1,7 @@
 #include "infrastructure/config/config_loader.hpp"
 
 #include "infrastructure/config/address.hpp"
+#include "infrastructure/filesystem/paths.hpp"
 
 #include "domain/catalog/refs.hpp"
 
@@ -20,16 +21,13 @@ namespace music_service::infrastructure::config {
 
 namespace cfg = application::config;
 using json = nlohmann::json;
+using filesystem::path_from_utf8;
 
 namespace {
 
 constexpr std::uint64_t u32_max = std::numeric_limits<std::uint32_t>::max();
 // Sizes stay within the exact JSON integer range used by the API.
 constexpr std::uint64_t json_safe_max = 9007199254740991ULL;
-
-std::filesystem::path path_from_utf8(std::string_view text) {
-    return std::filesystem::path{std::u8string{text.begin(), text.end()}};
-}
 
 std::filesystem::path resolve(const std::filesystem::path& base, const std::filesystem::path& p) {
     return (p.is_absolute() ? p : base / p).lexically_normal();

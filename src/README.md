@@ -9,8 +9,8 @@
 | 目录 | 职责 | 当前状态 |
 | --- | --- | --- |
 | `domain` | Result 与错误码、平台引用、曲目与分页、品质判定、账号绑定与授权身份、任务状态迁移与取消规则、下载意图与指纹 | 静态库，T02 |
-| `application` | `ports/`：平台能力、上游入场与租约、时钟、上游 HTTP、任务仓储等出站端口；`config/`：生效配置 ServiceConfig；用例按任务陆续加入 | 头文件，T02／T03 |
-| `infrastructure` | `config/`：配置加载与校验；`observability/`：结构化日志、脱敏、关联 ID、指标；`clock.hpp`；后续加入传输、存储、文件、秘密 | 静态库，T03 |
+| `application` | `ports/`：平台能力、上游入场与租约、时钟、上游 HTTP、任务仓储、SecretStore 等出站端口；`config/`：生效配置 ServiceConfig；用例按任务陆续加入 | 头文件，T02／T03 |
+| `infrastructure` | `config/`：配置加载与校验；`observability/`：结构化日志、脱敏、关联 ID、指标；`clock.hpp`；`filesystem/`：路径约束、安全文件原语、实例锁、数据目录与目标根；`secrets/`：文件 SecretStore；后续加入传输与存储 | 静态库，T03／T04 |
 | `providers` | 平台注册与各平台协议包 | 待实现 |
 | `downloads` | 持久任务调度、Runner、重试／续传、发布与恢复 | 待实现 |
 | `audio_processing` | 格式验证、解密、标签 | 待实现 |

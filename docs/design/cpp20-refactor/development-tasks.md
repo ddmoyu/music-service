@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T03 **已完成**，其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T03 **已完成**，T04 **待验收**（等待 Linux CI），其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,7 +262,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-T03 之后的下一项为 **T04** 与 **T06**（可并行）；T07、T09 完成后即可并行开始 T12。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+下一项为 **T05**（SQLite 与仓储）与 **T06**（执行器与统一上游入场），二者可并行；T07、T09 完成后即可并行开始 T12。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
@@ -308,3 +308,14 @@ T03 之后的下一项为 **T04** 与 **T06**（可并行）；T07、T09 完成�
 ### 项目改名（2026-10-20）
 
 项目与仓库名统一为 music-service：CMake 项目与目标前缀 `music_service`，C++ 命名空间 `music_service`，可执行程序 `music-service`，环境变量前缀 `MUSIC_SERVICE_`，`/api/v1/info` 的 service 字段 `music-service`，任务工作目录 `.music-service-work`。研究文档中的 go-music-dl 是参考项目原名，保持不变。改名后 Windows 68/68 测试通过。
+
+### T04 文件系统、工作目录与 SecretStore：待验收（等待 Linux CI）
+
+| 项目 | 记录 |
+| --- | --- |
+| 交付 | `infrastructure/filesystem`：UTF-8 路径转换与 ASCII 化的文件错误；相对路径检查（空段、`.`／`..`、绝对与盘符、反斜杠、冒号、控制与 Windows 禁用字符、首尾空格与结尾点、保留设备名）；`resolve_within` 解析最深已存在祖先以拒绝符号链接／重解析点逃逸；文件名清理（UTF-8 边界截断）；独占创建并落盘的写入、按大小上限读取、不覆盖目标的重命名（Windows MoveFileEx、Linux renameat2 或 link+unlink）、仅所有者权限目录与文件；进程级实例锁（Windows 独占打开、POSIX flock，写入 PID）；data_dir 布局与可写检查、目标根校验（必须已存在、可写、不与 data_dir 互相包含）、任务工作区。`application/ports/storage/SecretStore` 与不可打印、不可复制、析构清零的 SecretBytes；`infrastructure/secrets/FileSecretStore`（不可变 sec_ 引用、仅所有者文件、64 KiB 上限）。新增错误码 DESTINATION_UNAVAILABLE、INSTANCE_LOCKED、FILE_SYSTEM_ERROR |
+| 覆盖的验收 | 第二实例拒绝且释放后可再取得；越界、`..`、保留名与符号链接逃逸被拒绝（Windows 实际创建目录符号链接验证）；中文路径往返、中文目录下的配置与秘密文件；文件已存在时不覆盖、重命名不替换既有目标；目标根缺失时报 DESTINATION_UNAVAILABLE 且不自动创建；秘密引用不能指向其他文件，更新得到新引用，日志描述不含秘密值 |
+| 规则补充 | 已写回配置文档：秘密文件权限与命名、目标根从不自动创建、data_dir 与目标根不得互相包含 |
+| Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条警告；`ctest --preset windows-msvc-debug` 85/85 通过 |
+| GCC 证据（部分） | MinGW GCC 16.2 严格警告下编译 28 个项目目标文件 0 条警告（只覆盖 Windows 分支）；POSIX 分支（flock、O_EXCL、renameat2、0600／0700）的运行证据待推送后由 Linux CI 提供 |
+| 未覆盖 | 目标目录的不可变 ID 绑定落在 T05（SQLite）与 T10（启动校验）；NAS 断开与权限变化的实际环境验证在 T38 |

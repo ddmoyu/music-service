@@ -144,7 +144,7 @@ SQLite 统一保存 token 哈希、principal 和 scopes。init 通过受权限�
 
 平台注册的授权工厂负责协议，CredentialService 负责租约与刷新合并；配置只有应用秘密不会自动开启未实现的刷新／登录能力。身份键与提交规则见[账号模型](data-models.md#账号绑定与授权身份)和[内部契约](internal-contracts.md#62-凭证和秘密提交)。
 
-首版使用操作系统文件权限保护秘密。后续系统密钥管理作为 SecretStore 适配，备份须包含对应密钥策略。
+首版使用操作系统文件权限保护秘密：secrets 目录与秘密文件在 POSIX 上为 0700／0600，在 Windows 上为仅所有者与 SYSTEM 可访问的受保护 ACL；每个秘密是 `secrets/credentials/sec_*.secret` 中一个只写一次的文件，更新时写入新引用，不覆盖旧文件。后续系统密钥管理作为 SecretStore 适配，备份须包含对应密钥策略。
 
 入站 TLS 使用 httplib 或反向代理；出站校验证书链与主机名。启用平台却缺少必需 HTTPS 构建时启动失败。
 
@@ -160,7 +160,7 @@ data_dir/
   service.sqlite3-shm
   secrets/
     bootstrap-token.txt            # 初始化一次性交付；取走后删除，不是运行时事实来源
-    credentials/                  # SecretStore 私有文件
+    credentials/                  # SecretStore 私有文件，sec_*.secret，只写一次
   cache/                           # 可丢弃，不存唯一任务事实
   logs/                            # 文件日志启用时使用；容器可仅 stdout
 
@@ -175,7 +175,7 @@ destination_root/
       Track.ext
 ```
 
-工作文件与最终文件位于同一目标文件系统，便于重命名发布；data_dir 可以位于其他磁盘。checkpoint 文件与数据库版本互相核对，不能仅信任某个残留 .part 大小。目标目录离线、权限改变或 NAS 挂载断开要转成文件错误，不回落到意外的系统目录。
+工作文件与最终文件位于同一目标文件系统，便于重命名发布；data_dir 可以位于其他磁盘。checkpoint 文件与数据库版本互相核对，不能仅信任某个残留 .part 大小。目标目录离线、权限改变或 NAS 挂载断开要转成文件错误，不回落到意外的系统目录。目标根目录从不自动创建：缺失即 DESTINATION_UNAVAILABLE，避免未挂载的共享被一个空的本地目录取代；data_dir 与目标根不能互相包含。
 
 命名规则只在服务端配置，模板字段白名单展开，移除路径穿越与非法字符，校验 symlink／reparse point 解析后的实际目标仍位于授权根内。重名通过预留和后缀处理，不覆盖既有资产。
 
