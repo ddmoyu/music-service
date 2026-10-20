@@ -37,6 +37,8 @@ enum class ErrorCode {
     idempotency_conflict,
     active_duplicate,
     queue_limit_exceeded,
+    cursor_expired,
+    cursor_mismatch,
     instance_locked,
     file_system,
     internal,

@@ -22,8 +22,8 @@ target_compile_definitions(music_service_dependency_tests PRIVATE
 )
 catch_discover_tests(music_service_dependency_tests DISCOVERY_MODE PRE_TEST)
 
-# Domain rules, application ports and infrastructure basics. Uses temporary
-# directories but no network or databases.
+# Domain rules, application ports, the provider registry and infrastructure basics.
+# Uses temporary directories but no network or databases.
 add_executable(music_service_unit_tests
     unit/domain/account_test.cpp
     unit/domain/download_intent_test.cpp
@@ -36,12 +36,14 @@ add_executable(music_service_unit_tests
     unit/infrastructure/filesystem_test.cpp
     unit/infrastructure/observability_test.cpp
     unit/infrastructure/secret_store_test.cpp
+    unit/providers/registry_test.cpp
     unit/runtime/admission_ledger_test.cpp
     unit/runtime/executor_test.cpp
 )
 target_link_libraries(music_service_unit_tests PRIVATE
     music_service::application
     music_service::infrastructure
+    music_service::providers
     music_service::runtime
     nlohmann_json::nlohmann_json
     music_service::project_warnings

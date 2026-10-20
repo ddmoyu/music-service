@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T05 **已完成**，T06 **待验收**（等待 Linux CI），其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T05 **已完成**，T06、T07 **待验收**（等待 Linux CI），其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,7 +262,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-下一项为 **T07**（ProviderBundle 注册）与 **T08**（服务身份与 Cookie 凭证）；T07、T09 完成后即可并行开始 T12；T07、T09 完成后即可并行开始 T12。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+下一项为 **T08**（服务身份与 Cookie 凭证）与 **T09**（HTTP／TLS 上游传输）；T07、T09 完成后即可并行开始 T12。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
@@ -341,3 +341,14 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 | Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条警告；`ctest --preset windows-msvc-debug` 110/110 通过；涉及线程与计时的 runtime 测试连续运行 20 次无失败 |
 | GCC 证据（部分） | MinGW GCC 16.2 严格警告下编译 41 个项目目标文件 0 条警告；Linux 运行证据待推送后由 CI 提供 |
 | 未覆盖 | 入场额度与真实传输的结合（重定向逐跳入场、租约与 Transport 校验）在 T09；下载的持久延后与执行槽在 T17；共享应用配额组的配置与 helper 上界在 T24／T26 |
+
+### T07 ProviderBundle 注册与能力发现：待验收（等待 Linux CI）
+
+| 项目 | 记录 |
+| --- | --- |
+| 交付 | `application/ports/providers`：能力端口 ITrackSearch、ITrackDetail、ILinkParser、IAssetResolver、ILyrics 及键映射 capability_traits；授权端口 ICredentialVerifier 与只读 CredentialSnapshot；`bundle.hpp`：ProviderBundle（契约版本、descriptor 字段、CapabilitySpec、带端口类型的 CapabilityBinding、AuthProfileSpec、品质提示、options 校验器）。`providers` 改为静态库：ProviderRegistry（启动校验并一次报告全部问题、不可变、按需创建并复用能力对象、按 source + auth_profile + kind 取校验器、providers 分页与绑定游标）；`MUSIC_SERVICE_PROVIDERS` 生成直接引用 `make_bundle()` 的内置清单；`providers/kuwo` 占位 bundle（不声明能力）。新增错误码 CURSOR_EXPIRED、CURSOR_MISMATCH |
+| 覆盖的验收 | 酷我占位与 4 个模拟来源（仅目录、仅音源带 Cookie 校验、仅链接解析、目录加音源）同时注册；未声明能力返回 CAPABILITY_UNSUPPORTED，未注册与禁用分别为 UNKNOWN_PROVIDER、PROVIDER_DISABLED；同一段搜索代码服务所有来源，新增来源不改调用方；构建、describe、list 不创建任何对象，首次 require 才创建且并发首用只创建一次，工厂失败可重试；重复 source、配置未编入的 source、契约版本不符、implementation 不符、options 被拒、声明无工厂、工厂未声明、端口类型错误、未知能力键、重复 profile、引用未注册 profile、校验器与 verify_credentials 不一致均在注册时失败（A41 的 T07 部分）；supports_verify 由绑定生成，刷新／应用 token 恒为 false；分页按 source 排序，游标跨调用方或筛选为 CURSOR_MISMATCH，新注册表（重启）为 CURSOR_EXPIRED；内置 source 清单可直接用于配置校验 |
+| 规则补充 | 已写回[平台模块说明](../../../src/providers/README.md)与[配置键名](../../../config/README.md)：注册失败条件、没有 options 校验器的平台只接受空对象、未在配置中出现的已编入平台按 ProviderConfig 缺省（启用）处理但不会进入 default_sources |
+| Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条警告；`ctest --preset windows-msvc-debug` 132/132 通过；providers 用例（12 项、203 个断言）连续运行 20 次无失败 |
+| GCC 证据（部分） | MinGW GCC 16.2 在严格警告下对新增源文件与测试做语法检查 0 条警告；Linux 运行证据待推送后由 CI 提供 |
+| 未覆盖 | availability 与当前调用方凭证摘要的投影在 T08／T10；`GET /api/v1/providers` 路由与 CLI 组装在 T10；酷我实际能力在 T12；刷新／应用 token 端口在 T24；100 个来源的规模验证在 T28 |
