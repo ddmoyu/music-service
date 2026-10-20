@@ -14,6 +14,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <aclapi.h>
 #include <sddl.h>
 #else
 #include <cerrno>
@@ -59,6 +60,7 @@ public:
 
     [[nodiscard]] bool valid() const noexcept { return descriptor_ != nullptr; }
     SECURITY_ATTRIBUTES* get() noexcept { return &attributes_; }
+    [[nodiscard]] PSECURITY_DESCRIPTOR descriptor() const noexcept { return descriptor_; }
 
 private:
     PSECURITY_DESCRIPTOR descriptor_{nullptr};
@@ -102,25 +104,77 @@ private:
     int fd_;
 };
 
-// Makes a completed create or rename durable across power loss.
-void sync_directory(const fs::path& directory) {
+// Makes a completed create or rename durable across power loss. A file system that
+// cannot sync directories at all (EINVAL, ENOTSUP) is not an error; a failed sync is.
+std::error_code sync_directory(const fs::path& directory) {
     const Fd fd{::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC)};
-    if (fd.get() >= 0) {
-        ::fsync(fd.get());
+    if (fd.get() < 0) {
+        return last_error();
     }
+    while (::fsync(fd.get()) != 0) {
+        if (errno == EINTR) {
+            continue;
+        }
+        if (errno == EINVAL || errno == ENOTSUP) {
+            return {};
+        }
+        return last_error();
+    }
+    return {};
 }
 
 #endif
 
-} // namespace
+// Gives an existing directory owner-only permissions, so one restored from a backup or
+// created by hand cannot keep permissive entries.
+domain::Result<void> restrict_to_owner(const fs::path& path) {
+#ifdef _WIN32
+    OwnerOnlySecurity security{true};
+    if (!security.valid()) {
+        return file_error("build owner-only ACL", path, last_error());
+    }
+    BOOL present = FALSE;
+    BOOL defaulted = FALSE;
+    PACL dacl = nullptr;
+    if (!::GetSecurityDescriptorDacl(security.descriptor(), &present, &dacl, &defaulted) ||
+        !present) {
+        return file_error("build owner-only ACL", path, last_error());
+    }
+    // PROTECTED drops the entries inherited from the parent; the new inheritable entries
+    // replace inherited ones on everything below.
+    std::wstring name = path.native();
+    const auto status = ::SetNamedSecurityInfoW(
+        name.data(), SE_FILE_OBJECT,
+        DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr,
+        dacl, nullptr);
+    if (status != ERROR_SUCCESS) {
+        return file_error("restrict directory to owner", path,
+                          {static_cast<int>(status), std::system_category()});
+    }
+#else
+    struct stat info {};
+    if (::stat(path.c_str(), &info) != 0) {
+        return file_error("restrict directory to owner", path, last_error());
+    }
+    if (info.st_uid != ::geteuid()) {
+        // The owner could grant access again at any time.
+        return file_error("restrict directory to owner", path,
+                          std::make_error_code(std::errc::permission_denied));
+    }
+    if ((info.st_mode & 077) != 0 && ::chmod(path.c_str(), 0700) != 0) {
+        return file_error("restrict directory to owner", path, last_error());
+    }
+#endif
+    return domain::ok();
+}
 
-domain::Result<void> create_directories(const fs::path& path, Privacy privacy) {
+domain::Result<void> create_missing_directories(const fs::path& path, Privacy privacy) {
     std::error_code ec;
     if (fs::is_directory(path, ec)) {
         return domain::ok();
     }
     if (const auto parent = path.parent_path(); !parent.empty() && parent != path) {
-        if (auto created = create_directories(parent, privacy); !created) {
+        if (auto created = create_missing_directories(parent, privacy); !created) {
             return created;
         }
     }
@@ -147,6 +201,18 @@ domain::Result<void> create_directories(const fs::path& path, Privacy privacy) {
     if (!fs::is_directory(path, ec)) {
         return file_error("create directory", path,
                           ec ? ec : std::make_error_code(std::errc::not_a_directory));
+    }
+    return domain::ok();
+}
+
+} // namespace
+
+domain::Result<void> create_directories(const fs::path& path, Privacy privacy) {
+    if (auto created = create_missing_directories(path, privacy); !created) {
+        return created;
+    }
+    if (privacy == Privacy::owner_only) {
+        return restrict_to_owner(path);
     }
     return domain::ok();
 }
@@ -214,7 +280,10 @@ domain::Result<void> write_new_file(const fs::path& path, std::string_view bytes
         ::unlink(path.c_str());
         return file_error("flush file", path, ec);
     }
-    sync_directory(path.parent_path());
+    if (const auto ec = sync_directory(path.parent_path()); ec) {
+        ::unlink(path.c_str());
+        return file_error("flush directory", path.parent_path(), ec);
+    }
     return domain::ok();
 #endif
 }
@@ -251,7 +320,9 @@ domain::Result<void> rename_no_replace(const fs::path& from, const fs::path& to)
 #else
 #ifdef RENAME_NOREPLACE
     if (::renameat2(AT_FDCWD, from.c_str(), AT_FDCWD, to.c_str(), RENAME_NOREPLACE) == 0) {
-        sync_directory(to.parent_path());
+        if (const auto ec = sync_directory(to.parent_path()); ec) {
+            return file_error("flush directory", to.parent_path(), ec);
+        }
         return domain::ok();
     }
     if (errno != EINVAL && errno != ENOSYS) {
@@ -265,7 +336,9 @@ domain::Result<void> rename_no_replace(const fs::path& from, const fs::path& to)
     if (::unlink(from.c_str()) != 0) {
         return file_error("remove renamed source", from, last_error());
     }
-    sync_directory(to.parent_path());
+    if (const auto ec = sync_directory(to.parent_path()); ec) {
+        return file_error("flush directory", to.parent_path(), ec);
+    }
     return domain::ok();
 #endif
 }

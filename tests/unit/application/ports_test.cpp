@@ -54,7 +54,12 @@ class FakeTransport final : public HttpTransport {
 public:
     domain::Result<HttpResponse> request(const HttpRequest& request, const UpstreamLease& lease,
                                          const OperationContext&) override {
-        if (!lease.active() || request.url.rfind(lease.request().origin, 0) != 0) {
+        const auto& origin = lease.request().origin;
+        const bool same_origin =
+            request.url.rfind(origin, 0) == 0 &&
+            (request.url.size() == origin.size() ||
+             std::string_view{"/?#"}.find(request.url[origin.size()]) != std::string_view::npos);
+        if (!lease.active() || !same_origin) {
             return domain::Error{domain::ErrorCode::internal, "lease does not match target",
                                  false, {}};
         }
@@ -139,6 +144,10 @@ TEST_CASE("transport requires a matching lease", "[application][ports]") {
     CHECK(response->head.header("content-type") == "application/json");
     CHECK_FALSE(response->head.header("ETag").has_value());
     CHECK_FALSE(transport.request(other_origin, lease, context));
+    HttpRequest prefixed_host{HttpMethod::get, "http://search.kuwo.cn.evil.example/x", {}, {}, 0};
+    CHECK_FALSE(transport.request(prefixed_host, lease, context));
+    HttpRequest other_port{HttpMethod::get, "http://search.kuwo.cn:8080/x", {}, {}, 0};
+    CHECK_FALSE(transport.request(other_port, lease, context));
 
     lease.release();
     CHECK_FALSE(transport.request(same_origin, lease, context));

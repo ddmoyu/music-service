@@ -208,6 +208,8 @@ TEST_CASE("remote listeners need public https URLs", "[config]") {
     CHECK(allowed);
 
     CHECK(load(R"({"public_urls": {"api_base": "http://127.0.0.1:17632"}})"));
+    CHECK_FALSE(load(R"({"public_urls": {"api_base": "http://127.remote.example:17632"}})"));
+    CHECK_FALSE(load(R"({"public_urls": {"api_base": "http://127.0.0.1.nip.io:17632"}})"));
     CHECK_FALSE(load(R"({"public_urls": {"api_base": "https://user:pw@music.example"}})"));
     CHECK_FALSE(load(R"({"public_urls": {"api_base": "https://music.example/?t=1"}})"));
 }
@@ -218,6 +220,8 @@ TEST_CASE("port 0 is limited to loopback", "[config]") {
                                  "public_urls": {"api_base": "https://music.example"}})");
     REQUIRE_FALSE(remote);
     CHECK(has_problem(remote.error(), "/control/port"));
+    CHECK(load(R"({"control": {"host": "127.0.0.2", "port": 0}})"));
+    CHECK_FALSE(load(R"({"control": {"host": "127.remote.example", "port": 0}})"));
 }
 
 TEST_CASE("the download directory override needs dst_default", "[config]") {

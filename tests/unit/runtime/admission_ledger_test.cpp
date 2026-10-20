@@ -5,6 +5,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 
@@ -123,6 +125,36 @@ TEST_CASE("a refused request reserves nothing", "[runtime][admission]") {
     CHECK(after.principals == before.principals);
     CHECK(after.sources == before.sources);
     CHECK(after.origins == before.origins);
+}
+
+TEST_CASE("a huge request cannot wrap the counters past the limits", "[runtime][admission]") {
+    Fixture f;
+    AdmissionLedger ledger{f.limits(), f.clock};
+    auto held = granted(ledger.try_acquire(f.request("kuwo", "http://search.kuwo.cn")));
+
+    // 1 + UINT32_MAX wraps to 0 in 32 bits on every dimension.
+    auto huge = f.request("kuwo", "http://search.kuwo.cn");
+    huge.connections = std::numeric_limits<std::uint32_t>::max();
+    CHECK(ledger.try_acquire(huge).error().code == domain::ErrorCode::validation_failed);
+    CHECK(ledger.readiness(huge).has_value());
+    CHECK(ledger.usage().total == 1);
+}
+
+TEST_CASE("a request larger than any single limit is rejected, not deferred", "[runtime][admission]") {
+    Fixture f;
+    AdmissionLedger ledger{f.limits(), f.clock};
+    const auto too_big = [&](std::uint32_t connections, TrafficClass traffic = TrafficClass::short_request) {
+        auto r = f.request("kuwo", "http://search.kuwo.cn", "prn_a", traffic);
+        r.connections = connections;
+        const auto outcome = ledger.try_acquire(r);
+        return !outcome && outcome.error().code == domain::ErrorCode::validation_failed &&
+               !outcome.error().retryable;
+    };
+    CHECK(too_big(5));                         // total 4
+    CHECK(too_big(2, TrafficClass::download)); // download per source 1
+    CHECK(too_big(3));                         // short per source 2 (origin is 2 as well)
+    CHECK_FALSE(too_big(2));                   // fits every limit while idle
+    CHECK(ledger.usage().total == 0);
 }
 
 TEST_CASE("leases return quota exactly once", "[runtime][admission]") {

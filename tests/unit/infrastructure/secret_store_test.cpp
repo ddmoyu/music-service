@@ -94,4 +94,12 @@ TEST_CASE("moved-from secrets are empty", "[secrets]") {
     SecretBytes moved{std::move(original)};
     CHECK(moved.reveal() == "token");
     CHECK(original.empty()); // NOLINT(bugprone-use-after-move): verifying the move
+    CHECK(original.reveal().data() == nullptr); // NOLINT(bugprone-use-after-move)
+
+    // Short values fit std::string's inline buffer; the move must not leave a copy there.
+    SecretBytes assigned{"long secret replaced by the move"};
+    assigned = std::move(moved);
+    CHECK(assigned.reveal() == "token");
+    CHECK(moved.empty());                    // NOLINT(bugprone-use-after-move)
+    CHECK(moved.reveal().data() == nullptr); // NOLINT(bugprone-use-after-move)
 }

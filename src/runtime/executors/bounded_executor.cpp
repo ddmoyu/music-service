@@ -1,14 +1,24 @@
 #include "runtime/executors/bounded_executor.hpp"
 
+#include <exception>
 #include <utility>
 
 namespace music_service::runtime {
 
-BoundedExecutor::BoundedExecutor(std::string name, std::size_t threads, std::size_t queue_capacity)
-    : name_(std::move(name)), capacity_(queue_capacity) {
-    workers_.reserve(threads);
-    for (std::size_t i = 0; i < threads; ++i) {
-        workers_.emplace_back([this](std::stop_token) { run(stop_.get_token()); });
+BoundedExecutor::BoundedExecutor(std::string name, std::size_t threads, std::size_t queue_capacity,
+                                 FailureHandler on_failure)
+    : name_(std::move(name)), capacity_(queue_capacity), on_failure_(std::move(on_failure)) {
+    try {
+        workers_.reserve(threads);
+        for (std::size_t i = 0; i < threads; ++i) {
+            workers_.emplace_back([this](std::stop_token) { run(stop_.get_token()); });
+        }
+    } catch (...) {
+        // Workers wait on stop_, not on their jthread's own token: without this the
+        // threads already started would never leave run() and ~jthread would hang.
+        request_stop();
+        join();
+        throw;
     }
 }
 
@@ -33,6 +43,25 @@ domain::Result<void> BoundedExecutor::submit(Work work) {
     return domain::ok();
 }
 
+bool BoundedExecutor::run_guarded(Work& work, std::stop_token stop) noexcept {
+    std::string what;
+    try {
+        work(std::move(stop));
+        return true;
+    } catch (const std::exception& e) {
+        what = e.what();
+    } catch (...) {
+        what = "unknown exception";
+    }
+    if (on_failure_) {
+        try {
+            on_failure_(name_, what);
+        } catch (...) { // a failing diagnostic sink must not take the worker down
+        }
+    }
+    return false;
+}
+
 void BoundedExecutor::run(std::stop_token stop) {
     while (true) {
         Work work;
@@ -47,11 +76,14 @@ void BoundedExecutor::run(std::stop_token stop) {
             --stats_.queued;
             ++stats_.running;
         }
-        work(stop);
+        const bool failed = !run_guarded(work, stop);
         {
             const std::lock_guard lock{mutex_};
             --stats_.running;
             ++stats_.completed;
+            if (failed) {
+                ++stats_.failed;
+            }
             if (queue_.empty() && stats_.running == 0) {
                 idle_.notify_all();
             }

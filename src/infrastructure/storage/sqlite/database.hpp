@@ -97,17 +97,39 @@ private:
         if (auto started = connection.exec(begin); !started) {
             return started.error();
         }
+        // Rolls back on every exit that is not a successful commit, exceptions included,
+        // so the connection never stays inside a transaction.
+        RollbackGuard guard{connection};
         auto result = std::forward<F>(function)(connection);
         if (!result) {
-            (void)connection.exec("ROLLBACK");
             return result;
         }
         if (auto committed = connection.exec("COMMIT"); !committed) {
-            (void)connection.exec("ROLLBACK");
             return committed.error();
         }
+        guard.release();
         return result;
     }
+
+    class RollbackGuard {
+    public:
+        explicit RollbackGuard(Connection& connection) : connection_(&connection) {}
+        RollbackGuard(const RollbackGuard&) = delete;
+        RollbackGuard& operator=(const RollbackGuard&) = delete;
+        ~RollbackGuard() {
+            if (connection_ == nullptr) {
+                return;
+            }
+            try {
+                (void)connection_->exec("ROLLBACK");
+            } catch (...) {
+            }
+        }
+        void release() noexcept { connection_ = nullptr; }
+
+    private:
+        Connection* connection_;
+    };
 
     std::filesystem::path file_;
     DatabaseOptions options_;

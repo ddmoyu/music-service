@@ -443,9 +443,20 @@ SqliteTaskRepository::transition(const ports::TransitionCommand& command) {
             if (!command.wait_reason) {
                 return domain::Error::validation("wait_reason", "is required for waiting_retry");
             }
+            // A row claim_next() cannot claim (no due time) or cannot resume (illegal
+            // stage) would sit forever or block the head of the queue.
+            if (!command.next_retry_at) {
+                return domain::Error::validation("next_retry_at", "is required for waiting_retry");
+            }
+            const auto resume = command.resume_stage.value_or(TaskStatus::resolving);
+            if (resume != TaskStatus::resolving && resume != TaskStatus::probing &&
+                resume != TaskStatus::downloading) {
+                return domain::Error::validation("resume_stage",
+                                                 "must be resolving, probing or downloading");
+            }
             update.wait_reason = command.wait_reason;
-            update.next_retry_at = detail::to_millis(command.next_retry_at);
-            update.resume_stage = command.resume_stage.value_or(TaskStatus::resolving);
+            update.next_retry_at = detail::to_millis(*command.next_retry_at);
+            update.resume_stage = resume;
         }
         // Waiting or finished tasks belong to no execution; a later claim issues a new one.
         if (command.to != TaskStatus::waiting_retry && !domain::is_terminal(command.to)) {
@@ -579,6 +590,33 @@ SqlitePublicationRepository::complete(const std::string& task_id, const std::str
         if (auto legal = domain::check_transition(task->status, TaskStatus::completed); !legal) {
             return legal.error();
         }
+        auto reservation = db.prepare("SELECT destination_id, reserved_path FROM finalization_intents"
+                                      " WHERE task_id = ? AND execution_id = ?");
+        if (!reservation) {
+            return std::move(reservation).error();
+        }
+        reservation->bind(1, task_id).bind(2, execution_id);
+        auto reserved = first<std::pair<std::string, std::string>>(*reservation, [](const Statement& st) {
+            return std::pair{st.text(0), st.text(1)};
+        });
+        if (!reserved) {
+            return std::move(reserved).error();
+        }
+        if (!reserved.value()) {
+            return domain::Error{domain::ErrorCode::conflict,
+                                 "no publication intent for this execution", false, {}};
+        }
+        // The asset is exactly what this task reserved: its owner, destination and path.
+        const auto& [reserved_destination, reserved_path] = *reserved.value();
+        if (asset.owner_id != task->owner_id) {
+            return domain::Error::validation("owner_id", "differs from the task's owner");
+        }
+        if (asset.destination_id != reserved_destination) {
+            return domain::Error::validation("destination_id", "differs from the reserved destination");
+        }
+        if (asset.relative_path != reserved_path) {
+            return domain::Error::validation("relative_path", "differs from the reserved path");
+        }
         auto remove_intent = db.prepare("DELETE FROM finalization_intents WHERE task_id = ?"
                                         " AND execution_id = ?");
         if (!remove_intent) {
@@ -588,10 +626,6 @@ SqlitePublicationRepository::complete(const std::string& task_id, const std::str
         if (auto done = remove_intent->run(); !done) {
             return done.error();
         }
-        if (db.changes() == 0) {
-            return domain::Error{domain::ErrorCode::conflict,
-                                 "no publication intent for this execution", false, {}};
-        }
         auto insert = db.prepare(
             "INSERT INTO file_assets (id, owner_id, destination_id, relative_path, path_key,"
             " size_bytes, container, etag, status, properties, version, created_by_task, created_at)"
@@ -600,10 +634,10 @@ SqlitePublicationRepository::complete(const std::string& task_id, const std::str
             return std::move(insert).error();
         }
         insert->bind(1, file_id)
-            .bind(2, asset.owner_id)
-            .bind(3, asset.destination_id)
-            .bind(4, asset.relative_path)
-            .bind(5, path_key(asset.relative_path))
+            .bind(2, task->owner_id)
+            .bind(3, reserved_destination)
+            .bind(4, reserved_path)
+            .bind(5, path_key(reserved_path))
             .bind(6, static_cast<std::int64_t>(asset.size_bytes))
             .bind(7, asset.container)
             .bind(8, asset.etag)

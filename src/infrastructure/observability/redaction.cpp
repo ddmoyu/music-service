@@ -100,7 +100,10 @@ std::string redact_text(std::string_view text) {
     while (i < text.size()) {
         const auto rest = text.substr(i);
         if (starts_with_ci(rest, "bearer ") || starts_with_ci(rest, "basic ")) {
-            const auto scheme_len = rest.find(' ') + 1;
+            auto scheme_len = rest.find(' ') + 1;
+            while (scheme_len < rest.size() && (rest[scheme_len] == ' ' || rest[scheme_len] == '\t')) {
+                ++scheme_len;
+            }
             result.append(rest.substr(0, scheme_len)).append(redacted);
             i += scheme_len;
             while (i < text.size() && !is_space(text[i])) {

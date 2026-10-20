@@ -34,7 +34,8 @@ struct AdmissionLimits {
 // The process-wide upstream quota ledger (runtime-and-tasks.md, 上游入场与租约).
 // try_acquire reserves every dimension at once or none: global connections,
 // principal, source per traffic class, origin, and any cooldown of the source or its
-// rate-limit group. It never blocks; without capacity it returns Deferred.
+// rate-limit group. It never blocks; without capacity it returns Deferred. A request
+// larger than any single limit can never be granted and is VALIDATION_FAILED instead.
 // Leases keep the ledger's state alive, so a lease may be released after the ledger
 // object is gone. Thread-safe.
 class AdmissionLedger final : public application::ports::UpstreamAdmissionPort {

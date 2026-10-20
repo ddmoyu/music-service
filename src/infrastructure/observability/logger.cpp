@@ -24,6 +24,29 @@ nlohmann::json to_json(const LogValue& value) {
     return std::visit([](const auto& v) { return nlohmann::json(v); }, value);
 }
 
+// Keeps a text log record on one line: control characters and backslashes are escaped.
+std::string escape_text(std::string_view text) {
+    std::string result;
+    result.reserve(text.size());
+    for (const char c : text) {
+        switch (c) {
+        case '\\': result.append("\\\\"); break;
+        case '\n': result.append("\\n"); break;
+        case '\r': result.append("\\r"); break;
+        case '\t': result.append("\\t"); break;
+        default:
+            if (static_cast<unsigned char>(c) < 0x20 || c == 0x7f) {
+                char buffer[5];
+                std::snprintf(buffer, sizeof buffer, "\\x%02x", static_cast<unsigned char>(c));
+                result.append(buffer);
+            } else {
+                result.push_back(c);
+            }
+        }
+    }
+    return result;
+}
+
 std::string to_text(const LogValue& value) {
     return std::visit(
         [](const auto& v) -> std::string {
@@ -114,9 +137,10 @@ void TextSink::write(const LogRecord& record) {
         line.push_back(static_cast<char>(c - 'a' + 'A'));
     }
     line.push_back(' ');
-    line.append(record.event);
+    line.append(escape_text(record.event));
     for (const auto& field : record.fields) {
-        line.append(" ").append(field.key).append("=").append(to_text(field.value));
+        line.append(" ").append(escape_text(field.key)).append("=").append(
+            escape_text(to_text(field.value)));
     }
     const std::lock_guard lock{mutex_};
     out_ << line << '\n';

@@ -9,6 +9,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -39,6 +40,8 @@ TEST_CASE("URLs lose user info, query and ticket paths", "[observability][redact
 
 TEST_CASE("free text loses bearer tokens and URL secrets", "[observability][redaction]") {
     CHECK(redact_text("header Bearer abc.def ok") == "header Bearer [REDACTED] ok");
+    CHECK(redact_text("Bearer  DEMO_TOKEN") == "Bearer  [REDACTED]");
+    CHECK(redact_text("Basic \t DEMO_TOKEN ok") == "Basic \t [REDACTED] ok");
     CHECK(redact_text("fetch https://x.example/a?token=1 failed") ==
           "fetch https://x.example/a?[REDACTED] failed");
     CHECK(redact_field("cookie", "MUSIC_U=secret") == "[REDACTED]");
@@ -96,6 +99,12 @@ TEST_CASE("text sink is single-line and readable", "[observability][logger]") {
                         std::make_shared<ManualClock>()};
     logger.error("db.unavailable", {{"elapsed_ms", 500}});
     CHECK(out.str().find("ERROR db.unavailable elapsed_ms=500\n") != std::string::npos);
+
+    out.str("");
+    logger.info("track.added", {{"title", "a\r\n2026-01-01T00:00:00Z ERROR forged \\x"}});
+    const auto text = out.str();
+    CHECK(std::count(text.begin(), text.end(), '\n') == 1);
+    CHECK(text.find("title=a\\r\\n2026-01-01T00:00:00Z ERROR forged \\\\x\n") != std::string::npos);
 }
 
 TEST_CASE("log levels parse", "[observability][logger]") {

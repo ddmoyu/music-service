@@ -9,6 +9,17 @@
 #include <iterator>
 #include <string>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <aclapi.h>
+#endif
+
 using namespace music_service;
 using namespace music_service::infrastructure::filesystem;
 namespace fs = std::filesystem;
@@ -156,6 +167,40 @@ TEST_CASE("private directories are created with parents", "[filesystem][files]")
 #endif
 }
 
+TEST_CASE("existing secret directories are made private", "[filesystem][layout]") {
+    TempDir dir{"restored"};
+    const auto data = dir.path() / "data";
+    // A restored backup or a hand-made directory inherits the parent's permissions.
+    fs::create_directories(data / "secrets" / "credentials");
+#ifndef _WIN32
+    fs::permissions(data / "secrets", fs::perms::owner_all | fs::perms::group_all |
+                                          fs::perms::others_read | fs::perms::others_exec);
+#endif
+    const auto layout = prepare_data_dir(data);
+    REQUIRE(layout);
+    for (const auto& path : {layout->secrets, layout->credentials}) {
+        INFO(path_to_utf8(path));
+#ifdef _WIN32
+        PACL dacl = nullptr;
+        PSECURITY_DESCRIPTOR descriptor = nullptr;
+        std::wstring name = path.native();
+        REQUIRE(::GetNamedSecurityInfoW(name.data(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                                        nullptr, nullptr, &dacl, nullptr,
+                                        &descriptor) == ERROR_SUCCESS);
+        SECURITY_DESCRIPTOR_CONTROL control = 0;
+        DWORD revision = 0;
+        ::GetSecurityDescriptorControl(descriptor, &control, &revision);
+        CHECK((control & SE_DACL_PROTECTED) != 0); // nothing inherited from the parent
+        REQUIRE(dacl != nullptr);
+        CHECK(dacl->AceCount == 2); // owner and SYSTEM
+        ::LocalFree(descriptor);
+#else
+        const auto perms = fs::status(path).permissions();
+        CHECK((perms & (fs::perms::group_all | fs::perms::others_all)) == fs::perms::none);
+#endif
+    }
+}
+
 TEST_CASE("only one instance can hold the data directory", "[filesystem][lock]") {
     TempDir dir{"lock"};
     const auto lock_file = dir.path() / "instance.lock";
@@ -216,4 +261,28 @@ TEST_CASE("task workspaces live under the destination root", "[filesystem][layou
     CHECK(fs::is_directory(*workspace));
     CHECK(*workspace == dir.path() / ".music-service-work" / "tsk_abc123");
     CHECK_FALSE(task_workspace(dir.path(), "../tsk_x"));
+}
+
+TEST_CASE("task workspaces cannot be redirected outside the root", "[filesystem][layout]") {
+    TempDir root{"workspace-root"};
+    TempDir outside{"workspace-outside"};
+    std::error_code ec;
+    const auto link = root.path() / ".music-service-work";
+    fs::create_directory_symlink(outside.path(), link, ec);
+#ifdef _WIN32
+    if (ec) { // junctions need no privilege
+        const auto command = L"cmd /c mklink /J \"" + link.native() + L"\" \"" +
+                             outside.path().native() + L"\" >NUL";
+        if (::_wsystem(command.c_str()) == 0) {
+            ec.clear();
+        }
+    }
+#endif
+    if (ec) {
+        SKIP("creating directory symlinks needs extra privileges on this system");
+    }
+    const auto workspace = task_workspace(root.path(), "tsk_abc123");
+    REQUIRE_FALSE(workspace);
+    CHECK(workspace.error().code == domain::ErrorCode::validation_failed);
+    CHECK(fs::is_empty(outside.path()));
 }

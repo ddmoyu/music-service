@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <filesystem>
+#include <stdexcept>
 #include <thread>
 
 using namespace music_service;
@@ -155,6 +156,18 @@ TEST_CASE("failed writes roll back", "[storage][database]") {
     });
     REQUIRE_FALSE(failed);
     CHECK(s.destinations->get("dst_x").error().code == ErrorCode::not_found);
+}
+
+TEST_CASE("a throwing write rolls back and frees the writer", "[storage][database]") {
+    Store s{"throw"};
+    CHECK_THROWS_AS(s.database->write([](Connection& db) -> domain::Result<void> {
+        REQUIRE(db.exec("INSERT INTO destinations VALUES ('dst_x', '/x', 0)"));
+        throw std::runtime_error{"boom"};
+    }),
+                    std::runtime_error);
+    CHECK(s.destinations->get("dst_x").error().code == ErrorCode::not_found);
+    REQUIRE(s.destinations->bind("dst_y", "/y"));
+    CHECK(s.destinations->get("dst_y"));
 }
 
 TEST_CASE("the single writer is bounded by the wait budget", "[storage][database]") {
@@ -391,6 +404,31 @@ TEST_CASE("claims and runner transitions are fenced by execution and version", "
               .error().code == ErrorCode::version_conflict);
 }
 
+// A retry row must stay claimable: a due time and a stage claim_next() can resume.
+TEST_CASE("waiting_retry requires a due time and a resumable stage", "[storage][tasks]") {
+    Store s{"retry"};
+    REQUIRE(s.destinations->bind("dst_default", "/music"));
+    const auto owner = make_principal(s);
+    auto task = running_task(s, owner, "1");
+    task = step(s, task, TaskStatus::downloading);
+    const auto due = s.clock->now();
+
+    CHECK(s.tasks->transition({task.task_id, *task.execution_id, task.version, TaskStatus::waiting_retry,
+                               domain::WaitReason::upstream_retry, due, TaskStatus::processing})
+              .error().code == ErrorCode::validation_failed);
+    CHECK(s.tasks->transition({task.task_id, *task.execution_id, task.version, TaskStatus::waiting_retry,
+                               domain::WaitReason::upstream_retry, std::nullopt, TaskStatus::downloading})
+              .error().code == ErrorCode::validation_failed);
+    CHECK(s.tasks->get(owner, task.task_id)->status == TaskStatus::downloading);
+
+    // A valid retry does not block a later task.
+    REQUIRE(s.tasks->transition({task.task_id, *task.execution_id, task.version, TaskStatus::waiting_retry,
+                                 domain::WaitReason::upstream_retry, due, {}}));
+    REQUIRE(s.tasks->create(create_command(owner, "2", "key-2")));
+    REQUIRE(s.tasks->claim_next(s.clock->now())->has_value());
+    REQUIRE(s.tasks->claim_next(s.clock->now())->has_value());
+}
+
 TEST_CASE("cancel requests follow the task status", "[storage][tasks]") {
     Store s{"cancel"};
     REQUIRE(s.destinations->bind("dst_default", "/music"));
@@ -455,6 +493,16 @@ TEST_CASE("publication reserves, completes and releases paths", "[storage][publi
 
     const ports::NewFileAsset asset{owner, "dst_default", "歌手/Song.mp3", 3, std::string{"mp3"},
                                     "\"etag\"", R"({"quality":"standard"})"};
+    // The asset must match the task's owner and its own reservation.
+    auto foreign = asset;
+    foreign.owner_id = "prn_other";
+    auto elsewhere = asset;
+    elsewhere.relative_path = "歌手/Else.mp3";
+    for (const auto& bad : {foreign, elsewhere}) {
+        CHECK(s.publications->complete(task.task_id, *task.execution_id, finalizing->version, bad, "{}")
+                  .error().code == ErrorCode::validation_failed);
+    }
+    CHECK(s.publications->pending()->size() == 1);
     const auto completed = s.publications->complete(task.task_id, *task.execution_id,
                                                      finalizing->version, asset, R"({"metadata_status":"complete"})");
     REQUIRE(completed);

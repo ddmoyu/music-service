@@ -1,6 +1,9 @@
 #include "runtime/admission/admission_ledger.hpp"
 
 #include <algorithm>
+#include <optional>
+#include <string>
+#include <string_view>
 
 namespace music_service::runtime {
 
@@ -41,6 +44,30 @@ struct AdmissionLedger::State {
     Usage usage;
     std::uint64_t next_id{0};
 
+    std::uint32_t per_source_limit(ports::TrafficClass traffic) const {
+        const auto it = limits.per_source.find(traffic);
+        return it == limits.per_source.end() ? 1U : it->second;
+    }
+
+    // The first dimension whose limit alone is smaller than the request: such a request
+    // could never be granted, so it is rejected instead of deferred forever. Limits are
+    // fixed after construction; no lock needed.
+    std::optional<std::string_view> unsatisfiable(const ports::AdmissionRequest& r) const {
+        if (r.connections > limits.total_connections) {
+            return "total";
+        }
+        if (r.connections > limits.per_principal) {
+            return "principal";
+        }
+        if (r.connections > per_source_limit(r.traffic_class)) {
+            return "source";
+        }
+        if (r.connections > limits.per_origin) {
+            return "origin";
+        }
+        return std::nullopt;
+    }
+
     // Caller holds the mutex.
     std::optional<ports::Deferred> blocked(const ports::AdmissionRequest& r, SteadyTime now) const {
         if (const auto it = usage.cooldowns.find(cooldown_key(r));
@@ -48,23 +75,25 @@ struct AdmissionLedger::State {
             return ports::Deferred{"cooldown", it->second};
         }
         const auto later = now + limits.capacity_retry_hint;
+        // Compared in 64 bits: a huge request must not wrap the sum back under a limit.
+        const auto fits = [n = std::uint64_t{r.connections}](std::uint32_t used, std::uint32_t limit) {
+            return used + n <= limit;
+        };
         const auto count = [](const std::map<std::string, std::uint32_t>& m, const std::string& k) {
             const auto it = m.find(k);
             return it == m.end() ? 0U : it->second;
         };
-        const auto per_source = limits.per_source.count(r.traffic_class) != 0
-                                    ? limits.per_source.at(r.traffic_class)
-                                    : 1U;
-        if (usage.total + r.connections > limits.total_connections) {
+        const auto per_source = per_source_limit(r.traffic_class);
+        if (!fits(usage.total, limits.total_connections)) {
             return ports::Deferred{"total", later};
         }
-        if (count(usage.principals, r.principal_id) + r.connections > limits.per_principal) {
+        if (!fits(count(usage.principals, r.principal_id), limits.per_principal)) {
             return ports::Deferred{"principal", later};
         }
-        if (count(usage.sources, source_key(r)) + r.connections > per_source) {
+        if (!fits(count(usage.sources, source_key(r)), per_source)) {
             return ports::Deferred{"source", later};
         }
-        if (count(usage.origins, r.origin) + r.connections > limits.per_origin) {
+        if (!fits(count(usage.origins, r.origin), limits.per_origin)) {
             return ports::Deferred{"origin", later};
         }
         return std::nullopt;
@@ -105,6 +134,10 @@ domain::Result<ports::AdmissionOutcome>
 AdmissionLedger::try_acquire(const ports::AdmissionRequest& request) {
     if (request.connections == 0 || request.principal_id.empty() || request.origin.empty()) {
         return domain::Error::validation("admission", "principal, origin and connections are required");
+    }
+    if (const auto dimension = state_->unsatisfiable(request)) {
+        return domain::Error::validation("admission", "connections exceed the " + std::string{*dimension} +
+                                                          " limit and can never be granted");
     }
     if (request.helper_processes > 0) {
         return domain::Error{domain::ErrorCode::capability_unsupported,

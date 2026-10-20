@@ -60,11 +60,48 @@ std::optional<HostPort> parse_listen_address(std::string_view text) {
     return HostPort{std::string{host}, *parsed_port};
 }
 
+namespace {
+
+// Strict dotted-quad: four decimal octets 0-255, no leading zeros.
+bool is_loopback_ipv4(std::string_view host) {
+    int octets = 0;
+    int first = -1;
+    std::size_t i = 0;
+    while (true) {
+        const auto start = i;
+        int value = 0;
+        while (i < host.size() && host[i] >= '0' && host[i] <= '9') {
+            value = value * 10 + (host[i] - '0');
+            if (value > 255) {
+                return false;
+            }
+            ++i;
+        }
+        const auto len = i - start;
+        if (len == 0 || (len > 1 && host[start] == '0')) {
+            return false;
+        }
+        if (++octets == 1) {
+            first = value;
+        }
+        if (i == host.size()) {
+            break;
+        }
+        if (host[i] != '.' || octets == 4) {
+            return false;
+        }
+        ++i;
+    }
+    return octets == 4 && first == 127;
+}
+
+} // namespace
+
 bool is_loopback_host(std::string_view host) {
     if (!host.empty() && host.front() == '[' && host.back() == ']') {
         host = host.substr(1, host.size() - 2);
     }
-    return host == "localhost" || host == "::1" || host.rfind("127.", 0) == 0;
+    return host == "localhost" || host == "::1" || is_loopback_ipv4(host);
 }
 
 std::optional<BaseUrl> parse_base_url(std::string_view text) {

@@ -86,14 +86,26 @@ domain::Result<fs::path> task_workspace(const fs::path& canonical_root, std::str
     if (!domain::is_valid_service_id("tsk_", task_id)) {
         return domain::Error::validation("task_id", "must be a tsk_ service id");
     }
-    const auto workspace =
-        canonical_root / fs::path{workspace_directory_name} / path_from_utf8(task_id);
-    if (auto created = create_directories(workspace, Privacy::normal); !created) {
+    // A symlink or junction planted at the workspace path may point outside the root:
+    // check before creating, and again afterwards in case it was swapped in meanwhile.
+    auto workspace = resolve_within(canonical_root, std::string{workspace_directory_name} + "/" +
+                                                        std::string{task_id});
+    if (!workspace) {
+        return std::move(workspace).error();
+    }
+    if (auto created = create_directories(*workspace, Privacy::normal); !created) {
         auto error = created.error();
         error.code = domain::ErrorCode::destination_unavailable;
         return error;
     }
-    return workspace;
+    auto resolved = canonical_directory(*workspace);
+    if (!resolved) {
+        return std::move(resolved).error();
+    }
+    if (!is_within(canonical_root, resolved.value())) {
+        return domain::Error::validation("path", "resolves outside the root directory");
+    }
+    return resolved;
 }
 
 } // namespace music_service::infrastructure::filesystem

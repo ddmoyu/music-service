@@ -49,6 +49,17 @@ target_link_libraries(music_service_unit_tests PRIVATE
 )
 catch_discover_tests(music_service_unit_tests DISCOVERY_MODE PRE_TEST)
 
+# Fault injection through a replaced global allocator; kept out of the unit tests.
+add_executable(music_service_fault_tests
+    fault/executor_construction_test.cpp
+)
+target_link_libraries(music_service_fault_tests PRIVATE
+    music_service::runtime
+    music_service::project_warnings
+    Catch2::Catch2WithMain
+)
+catch_discover_tests(music_service_fault_tests DISCOVERY_MODE PRE_TEST)
+
 # Infrastructure against real local resources (SQLite files); no network.
 add_executable(music_service_integration_tests
     integration/storage_test.cpp

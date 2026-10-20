@@ -7,6 +7,10 @@
 #include <atomic>
 #include <chrono>
 #include <future>
+#include <mutex>
+#include <stdexcept>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -33,6 +37,40 @@ TEST_CASE("executor runs work on its threads", "[runtime][executor]") {
     REQUIRE(executor.wait_idle(2s));
     CHECK(done == 5);
     CHECK(executor.stats().completed == 5);
+}
+
+TEST_CASE("work that throws is reported and the worker keeps running", "[runtime][executor]") {
+    std::mutex mutex;
+    std::vector<std::string> reported;
+    BoundedExecutor executor{"throwing", 1, 8, [&](std::string_view name, std::string_view what) {
+        const std::lock_guard lock{mutex};
+        reported.push_back(std::string{name} + ": " + std::string{what});
+    }};
+    std::atomic<int> done{0};
+    REQUIRE(executor.submit([](std::stop_token) { throw std::runtime_error{"boom"}; }));
+    REQUIRE(executor.submit([](std::stop_token) { throw 42; }));
+    REQUIRE(executor.submit([&](std::stop_token) { ++done; }));
+    REQUIRE(executor.wait_idle(2s));
+
+    CHECK(done == 1);
+    const auto stats = executor.stats();
+    CHECK(stats.completed == 3);
+    CHECK(stats.failed == 2);
+    CHECK(stats.running == 0);
+    const std::lock_guard lock{mutex};
+    CHECK(reported == std::vector<std::string>{"throwing: boom", "throwing: unknown exception"});
+}
+
+TEST_CASE("a throwing failure handler does not take the worker down", "[runtime][executor]") {
+    BoundedExecutor executor{"sink", 1, 4, [](std::string_view, std::string_view) {
+        throw std::runtime_error{"sink broken"};
+    }};
+    std::atomic<bool> ran{false};
+    REQUIRE(executor.submit([](std::stop_token) { throw std::runtime_error{"boom"}; }));
+    REQUIRE(executor.submit([&](std::stop_token) { ran = true; }));
+    REQUIRE(executor.wait_idle(2s));
+    CHECK(ran);
+    CHECK(executor.stats().failed == 1);
 }
 
 TEST_CASE("a full queue rejects instead of blocking", "[runtime][executor]") {
@@ -137,6 +175,21 @@ TEST_CASE("deadline timer fires in order and can cancel", "[runtime][timer]") {
     const std::lock_guard lock{mutex};
     CHECK(fired == std::vector<int>{1, 2});
     CHECK(timer.pending() == 0);
+}
+
+TEST_CASE("a throwing timer callback is reported and later ones still fire", "[runtime][timer]") {
+    std::promise<std::string> reported;
+    DeadlineTimer timer{[&](std::string_view what) { reported.set_value(std::string{what}); }};
+    std::promise<void> later;
+    const auto now = DeadlineTimer::Clock::now();
+    timer.schedule(now + 5ms, [] { throw std::runtime_error{"boom"}; });
+    timer.schedule(now + 10ms, [&] { later.set_value(); });
+
+    REQUIRE(later.get_future().wait_for(2s) == std::future_status::ready);
+    auto what = reported.get_future();
+    REQUIRE(what.wait_for(2s) == std::future_status::ready);
+    CHECK(what.get() == "boom");
+    CHECK(timer.failed() == 1);
 }
 
 TEST_CASE("deadline timer can cancel an operation at its deadline", "[runtime][timer]") {
