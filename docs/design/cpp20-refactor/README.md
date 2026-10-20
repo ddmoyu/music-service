@@ -1,6 +1,6 @@
 # C++20 重构设计
 
-将 Go Music DL 的音乐平台适配与业务编排迁移到 C++20。本项目是纯后端，不开发或依赖 GUI，以可独立常驻运行的跨平台服务交付，并支持 Docker。网页、Electron、Tauri、Qt、Win32 等均为外部客户端，通过同一套 HTTP API 接入；后端通过 HTTP 客户端访问音乐平台。Windows 与 Linux 从基础阶段共同验证，兼顾普通并发下的可用性与依赖体积；cpp-httplib 暂定为主方案，Drogon 作为备选。
+将 Go 参考实现 的音乐平台适配与业务编排迁移到 C++20。本项目是纯后端，不开发或依赖 GUI，以可独立常驻运行的跨平台服务交付，并支持 Docker。网页、Electron、Tauri、Qt、Win32 等均为外部客户端，通过同一套 HTTP API 接入；后端通过 HTTP 客户端访问音乐平台。Windows 与 Linux 从基础阶段共同验证，兼顾普通并发下的可用性与依赖体积；cpp-httplib 暂定为主方案，Drogon 作为备选。
 
 更新日期：2026-10-20。状态：工程骨架已初始化，开发任务已拆分，业务未实现，配套依赖待验证。
 
@@ -49,7 +49,7 @@
 | [开发任务拆分](development-tasks.md) | S0～S5 任务、直接／可选前置、平台扩展与验收责任 |
 | [音乐平台开发顺序](platform-roadmap.md) | 平台难度、确定的接入顺序、首批范围和完成条件 |
 | [多平台适配与扩展](backend-service/provider-extensibility.md) | 平台包、注册、能力、凭证、外部工具、Spotify 路线与扩展验收 |
-| [Go Music DL 功能实现拆解](../../research/go-music-dl/README.md) | 原项目的源码依据、功能细节、平台差异和现有边界 |
+| [Go 参考实现 功能实现拆解](../../research/go-reference/README.md) | 原项目的源码依据、功能细节、平台差异和现有边界 |
 | [Lanyue 多平台音乐功能实现拆解](../../research/lanyue/README.md) | Electron 业务分层、八平台搜索与取流、下载队列、播放和换源策略的补充参考 |
 
 ## 后续选型记录规则
@@ -62,7 +62,7 @@
 
 | 仓库 | 分析提交 |
 | --- | --- |
-| [go-music-dl](https://github.com/guohuiyuan/go-music-dl) | `ddf2a4e550ca67086ff1f06edc5d15c7d4c8663d` |
+| [Go 参考应用](https://github.com/guohuiyuan/go-music-dl) | `ddf2a4e550ca67086ff1f06edc5d15c7d4c8663d` |
 | [music-lib](https://github.com/guohuiyuan/music-lib) | `7cc4467b4e300547edd5d3d5bf0eff1c21ffc2ec` |
 
 迁移时以固定提交理解原始行为，再单独验证上游平台接口；平台接口随时可能发生变化。

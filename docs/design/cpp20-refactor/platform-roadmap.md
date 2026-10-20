@@ -65,7 +65,7 @@ GitHub 的 [spotDL](https://github.com/spotDL/spotify-downloader) 读取 Spotify
 
 ## 依据与验证边界
 
-排序以本仓库的 [Go 研究](../../research/go-music-dl/README.md)、[Lanyue 研究](../../research/lanyue/README.md)及 `music-lib` 固定提交 `7cc4467b4e300547edd5d3d5bf0eff1c21ffc2ec` 为依据。2026-10-19 同时核对了[上游能力说明](https://github.com/guohuiyuan/music-lib)，其能力声明不能代替本项目的实现与在线验证。后续若更换端点或研究提交，更新对应行的难度判断和证据。
+排序以本仓库的 [Go 研究](../../research/go-reference/README.md)、[Lanyue 研究](../../research/lanyue/README.md)及 `music-lib` 固定提交 `7cc4467b4e300547edd5d3d5bf0eff1c21ffc2ec` 为依据。2026-10-19 同时核对了[上游能力说明](https://github.com/guohuiyuan/music-lib)，其能力声明不能代替本项目的实现与在线验证。后续若更换端点或研究提交，更新对应行的难度判断和证据。
 
 [kuwo-song]: https://github.com/guohuiyuan/music-lib/blob/7cc4467b4e300547edd5d3d5bf0eff1c21ffc2ec/kuwo/song.go
 [kuwo-core]: https://github.com/guohuiyuan/music-lib/blob/7cc4467b4e300547edd5d3d5bf0eff1c21ffc2ec/kuwo/kuwo.go

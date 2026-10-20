@@ -2,7 +2,7 @@
 
 Lanyue（揽乐）通过“平台插件注册表 → 统一网关 → 搜索聚合／音源解析 → 主进程下载队列”实现多平台音乐搜索与下载。它是 Electron 桌面应用，主要业务运行在 Node.js 主进程，前端通过 IPC 调用业务接口。
 
-它与 [Go Music DL 功能实现拆解](../go-music-dl/README.md) 适合对照阅读：前者更适合研究桌面应用的任务队列、流式播放和插件能力声明，后者更适合研究 Go 平台协议实现及 Web 服务。本篇沿用相同的拆解方式，重点追踪实际调用链和实现边界。
+它与 [Go 参考实现 功能实现拆解](../go-reference/README.md) 适合对照阅读：前者更适合研究桌面应用的任务队列、流式播放和插件能力声明，后者更适合研究 Go 平台协议实现及 Web 服务。本篇沿用相同的拆解方式，重点追踪实际调用链和实现边界。
 
 ## 分析范围与版本
 
@@ -645,7 +645,7 @@ B 站 `fallbackSource: false`，因为 UP 主等元数据不适合直接当作�
 
 ### 两个项目各自更值得参考的部分
 
-| 方面 | Go Music DL／music-lib | Lanyue |
+| 方面 | Go 参考实现／music-lib | Lanyue |
 | --- | --- | --- |
 | 应用入口 | Web、CLI／TUI、桌面壳等 | Electron 桌面，IPC 为主，另有可选 MCP |
 | 平台边界 | 应用与独立 Go 适配库分开 | 仓库内 JS 平台模块，网易云／QQ 部分依赖 NPM SDK |
@@ -657,7 +657,7 @@ B 站 `fallbackSource: false`，因为 UP 主等元数据不适合直接当作�
 | 跨平台换源 | 有对应手动／自动链路 | 候选与策略完整保留，但当前生产总开关关闭 |
 | 汽水协议 | 客户端、签名与加密相关路径可供研究 | 搜索 API 加分享网页取流，覆盖范围不同 |
 
-Go 一侧依据见[已有拆解](../go-music-dl/README.md)，这里的对比表示实现方式与覆盖范围，不是在线成功率排名。
+Go 一侧依据见[已有拆解](../go-reference/README.md)，这里的对比表示实现方式与覆盖范围，不是在线成功率排名。
 
 ### 适合迁移的设计
 
@@ -730,7 +730,7 @@ Lanyue 的 `async/await` 写法依赖 Node 异步网络 API；换成 C++20 的 `
 6. [音源服务][resolve] → [总开关][fallback-policy] → [候选匹配][match] → [健康度][health]：先看默认分支，再看保留机制。
 7. [队列 IPC][queue-ipc] → [队列引擎][queue] → [传输器][downloader]：分清任务、解析、网络传输和文件完成。
 8. [标签脚本][write-tags]、[历史存储][history]、[播放协议][stream-protocol]：补齐保存、播放和依赖分析。
-9. 对照[Go Music DL 拆解](../go-music-dl/README.md)与[C++20 架构](../../design/cpp20-refactor/architecture.md)，形成首批平台协议与公共模块清单。
+9. 对照[Go 参考实现 拆解](../go-reference/README.md)与[C++20 架构](../../design/cpp20-refactor/architecture.md)，形成首批平台协议与公共模块清单。
 
 [package]: https://github.com/maliang04110233-dot/Lanyue/blob/53309e73c73316b7dd2ce721be4d2b0aede327a3/package.json
 [lock]: https://github.com/maliang04110233-dot/Lanyue/blob/53309e73c73316b7dd2ce721be4d2b0aede327a3/package-lock.json

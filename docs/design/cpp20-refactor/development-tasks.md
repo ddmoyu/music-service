@@ -307,7 +307,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 
 ### 项目改名（2026-10-20）
 
-项目与仓库名统一为 music-service：CMake 项目与目标前缀 `music_service`，C++ 命名空间 `music_service`，可执行程序 `music-service`，环境变量前缀 `MUSIC_SERVICE_`，`/api/v1/info` 的 service 字段 `music-service`，任务工作目录 `.music-service-work`。研究文档中的 go-music-dl 是参考项目原名，保持不变。改名后 Windows 68/68 测试通过。
+项目与仓库名统一为 music-service：CMake 项目与目标前缀 `music_service`，C++ 命名空间 `music_service`，可执行程序 `music-service`，环境变量前缀 `MUSIC_SERVICE_`，`/api/v1/info` 的 service 字段 `music-service`，任务工作目录 `.music-service-work`。外部参考项目的 GitHub 地址保留其原仓库名，其余文字与目录统一称为 Go 参考实现（`docs/research/go-reference`）。改名后 Windows 68/68 测试通过。
 
 ### T04 文件系统、工作目录与 SecretStore：待验收（等待 Linux CI）
 

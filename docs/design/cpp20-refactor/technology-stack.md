@@ -113,7 +113,7 @@ Windows CNG、Botan 或裁剪库是否适用，需要逐项对照算法表。Lib
 
 ## FFmpeg 与轻量媒体处理
 
-原 Go 实现中，MP3 直接写 ID3v2.3，其他部分格式通过 FFmpeg 写入元数据；本地媒体信息和 TUI 试听还涉及 ffprobe、ffplay。去掉元数据处理中的 FFmpeg，不代表同时替代了转码、媒体探测和播放。[原实现分析](../../research/go-music-dl/README.md#音频下载)、[原元数据处理源码](https://github.com/guohuiyuan/go-music-dl/blob/ddf2a4e550ca67086ff1f06edc5d15c7d4c8663d/core/service.go#L1700)
+原 Go 实现中，MP3 直接写 ID3v2.3，其他部分格式通过 FFmpeg 写入元数据；本地媒体信息和 TUI 试听还涉及 ffprobe、ffplay。去掉元数据处理中的 FFmpeg，不代表同时替代了转码、媒体探测和播放。[原实现分析](../../research/go-reference/README.md#音频下载)、[原元数据处理源码](https://github.com/guohuiyuan/go-music-dl/blob/ddf2a4e550ca67086ff1f06edc5d15c7d4c8663d/core/service.go#L1700)
 
 | 实际需求 | 轻量方向 | 边界 |
 | --- | --- | --- |

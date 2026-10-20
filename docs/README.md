@@ -24,6 +24,6 @@
 
 ## 源码研究
 
-- [Go Music DL 功能实现拆解](research/go-music-dl/README.md)：整体架构、单曲搜索、歌单与专辑、分类、排行榜、下载、换源，以及平台差异和实现边界。
+- [Go 参考实现 功能实现拆解](research/go-reference/README.md)：整体架构、单曲搜索、歌单与专辑、分类、排行榜、下载、换源，以及平台差异和实现边界。
 - [Lanyue 多平台音乐功能实现拆解](research/lanyue/README.md)：八个平台的搜索与音源解析、插件能力、歌单与榜单、下载队列、流式播放、换源开关，以及对 C++20 重构的参考。
 - [Lanyue 搜索使用的 NPM SDK](research/lanyue/npm-sdks.md)：网易云与 QQ 的锁定依赖、SDK 搜索实现、加密与 Cookie 传递，以及原生迁移要点。

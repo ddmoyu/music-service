@@ -99,7 +99,7 @@ flowchart TB
 | api／media_server／event_server | HTTP、二进制与 SSE 协议适配 | internal/web，按新契约重写 |
 | runtime | 有界执行器、额度、截止时间、停机 | C++ 服务新增 |
 
-研究依据：[Go Music DL](../../research/go-music-dl/README.md)、[Lanyue](../../research/lanyue/README.md)。
+研究依据：[Go 参考实现](../../research/go-reference/README.md)、[Lanyue](../../research/lanyue/README.md)。
 
 ## 迁移要求
 

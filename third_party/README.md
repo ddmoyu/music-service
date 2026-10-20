@@ -11,7 +11,7 @@
 | [cinatra-source](cinatra-source/) | C++ HTTP 服务框架研究 | `cf095d224cb60ae7dfc623fde51c5c60db03c96d` |
 | [cofetch-source](cofetch-source/) | 网络库研究 | `e25a2f6322e2b7866c22fd78364e3888efa60eef` |
 | [cpr-source](cpr-source/) | C++ HTTP 客户端研究 | `cdbbd90fb01c29dd52ed3e19f606bb4980e71541` |
-| [go-music-dl](go-music-dl/) | 音乐搜索、下载与应用业务实现参考 | `ddf2a4e550ca67086ff1f06edc5d15c7d4c8663d` |
+| [go-reference](go-reference/) | 音乐搜索、下载与应用业务实现参考 | `ddf2a4e550ca67086ff1f06edc5d15c7d4c8663d` |
 | [music-lib-source](music-lib-source/) | 各音乐平台的搜索、音频地址解析与协议实现参考 | `7cc4467b4e300547edd5d3d5bf0eff1c21ffc2ec` |
 
 ## 放置约定
