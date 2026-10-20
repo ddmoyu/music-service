@@ -5,7 +5,7 @@
 #include <memory>
 #include <string>
 
-using namespace music_dl::domain;
+using namespace music_service::domain;
 
 TEST_CASE("result holds a value or an error", "[domain][result]") {
     Result<int> value{42};

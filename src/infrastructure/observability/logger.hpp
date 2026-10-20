@@ -14,7 +14,7 @@
 #include <variant>
 #include <vector>
 
-namespace music_dl::infrastructure::observability {
+namespace music_service::infrastructure::observability {
 
 enum class LogLevel { trace, debug, info, warn, error };
 
@@ -119,4 +119,4 @@ private:
 // UTC RFC 3339 with milliseconds, e.g. 2026-10-19T08:00:00.000Z.
 std::string format_utc(std::chrono::system_clock::time_point time);
 
-} // namespace music_dl::infrastructure::observability
+} // namespace music_service::infrastructure::observability

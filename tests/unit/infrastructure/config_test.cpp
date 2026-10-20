@@ -8,7 +8,7 @@
 #include <map>
 #include <string>
 
-using namespace music_dl;
+using namespace music_service;
 using infrastructure::config::BuildCapabilities;
 using infrastructure::config::LoadOptions;
 using infrastructure::config::load_service_config;
@@ -18,7 +18,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-fs::path test_root() { return fs::temp_directory_path() / "music-dl-config-test"; }
+fs::path test_root() { return fs::temp_directory_path() / "music-service-config-test"; }
 
 LoadOptions options(std::map<std::string, std::string> env = {}, BuildCapabilities build = {}) {
     LoadOptions o;
@@ -31,7 +31,7 @@ LoadOptions options(std::map<std::string, std::string> env = {}, BuildCapabiliti
     return o;
 }
 
-fs::path config_path() { return test_root() / "conf" / "music-dl.json"; }
+fs::path config_path() { return test_root() / "conf" / "music-service.json"; }
 
 domain::Result<application::config::ServiceConfig> load(std::string_view text,
                                                           const LoadOptions& o = options()) {
@@ -173,38 +173,38 @@ TEST_CASE("environment overrides the file and the command line overrides both", 
     CHECK(from_file->control.port == 18000);
     CHECK(from_file->data_dir == (test_root() / "conf" / "file-data").lexically_normal());
 
-    const auto from_env = load(text, options({{"MUSIC_DL_DATA_DIR", "env-data"},
-                                              {"MUSIC_DL_CONTROL_LISTEN", "127.0.0.1:19000"}}));
+    const auto from_env = load(text, options({{"MUSIC_SERVICE_DATA_DIR", "env-data"},
+                                              {"MUSIC_SERVICE_CONTROL_LISTEN", "127.0.0.1:19000"}}));
     REQUIRE(from_env);
     CHECK(from_env->control.port == 19000);
     CHECK(from_env->data_dir == (test_root() / "cwd" / "env-data").lexically_normal());
 
-    auto cli = options({{"MUSIC_DL_DATA_DIR", "env-data"}});
+    auto cli = options({{"MUSIC_SERVICE_DATA_DIR", "env-data"}});
     cli.data_dir = fs::path{"cli-data"};
     const auto from_cli = load(text, cli);
     REQUIRE(from_cli);
     CHECK(from_cli->data_dir == (test_root() / "cwd" / "cli-data").lexically_normal());
 
-    CHECK_FALSE(load(text, options({{"MUSIC_DL_CONTROL_LISTEN", "no-port"}})));
+    CHECK_FALSE(load(text, options({{"MUSIC_SERVICE_CONTROL_LISTEN", "no-port"}})));
 }
 
 TEST_CASE("remote listeners need public https URLs", "[config]") {
-    const auto no_url = load("{}", options({{"MUSIC_DL_CONTROL_LISTEN", "0.0.0.0:17632"}}));
+    const auto no_url = load("{}", options({{"MUSIC_SERVICE_CONTROL_LISTEN", "0.0.0.0:17632"}}));
     REQUIRE_FALSE(no_url);
     CHECK(has_problem(no_url.error(), "/control/host"));
 
-    const auto plain_http = load("{}", options({{"MUSIC_DL_CONTROL_LISTEN", "0.0.0.0:17632"},
-                                                {"MUSIC_DL_PUBLIC_API_URL", "http://nas.lan:17632"}}));
+    const auto plain_http = load("{}", options({{"MUSIC_SERVICE_CONTROL_LISTEN", "0.0.0.0:17632"},
+                                                {"MUSIC_SERVICE_PUBLIC_API_URL", "http://nas.lan:17632"}}));
     REQUIRE_FALSE(plain_http);
     CHECK(has_problem(plain_http.error(), "/public_urls/api_base"));
 
-    const auto https = load("{}", options({{"MUSIC_DL_CONTROL_LISTEN", "0.0.0.0:17632"},
-                                           {"MUSIC_DL_PUBLIC_API_URL", "https://music.example"}}));
+    const auto https = load("{}", options({{"MUSIC_SERVICE_CONTROL_LISTEN", "0.0.0.0:17632"},
+                                           {"MUSIC_SERVICE_PUBLIC_API_URL", "https://music.example"}}));
     CHECK(https);
 
     const auto allowed = load(R"({"security": {"allow_insecure_remote": true}})",
-                              options({{"MUSIC_DL_CONTROL_LISTEN", "0.0.0.0:17632"},
-                                       {"MUSIC_DL_PUBLIC_API_URL", "http://nas.lan:17632"}}));
+                              options({{"MUSIC_SERVICE_CONTROL_LISTEN", "0.0.0.0:17632"},
+                                       {"MUSIC_SERVICE_PUBLIC_API_URL", "http://nas.lan:17632"}}));
     CHECK(allowed);
 
     CHECK(load(R"({"public_urls": {"api_base": "http://127.0.0.1:17632"}})"));
@@ -221,12 +221,12 @@ TEST_CASE("port 0 is limited to loopback", "[config]") {
 }
 
 TEST_CASE("the download directory override needs dst_default", "[config]") {
-    const auto missing = load("{}", options({{"MUSIC_DL_DOWNLOAD_DIR", "dl"}}));
+    const auto missing = load("{}", options({{"MUSIC_SERVICE_DOWNLOAD_DIR", "dl"}}));
     REQUIRE_FALSE(missing);
-    CHECK(has_problem(missing.error(), "env:MUSIC_DL_DOWNLOAD_DIR"));
+    CHECK(has_problem(missing.error(), "env:MUSIC_SERVICE_DOWNLOAD_DIR"));
 
     const auto applied = load(R"({"destinations": [{"id": "dst_default", "root": "music"}]})",
-                              options({{"MUSIC_DL_DOWNLOAD_DIR", "dl"}}));
+                              options({{"MUSIC_SERVICE_DOWNLOAD_DIR", "dl"}}));
     REQUIRE(applied);
     CHECK(applied->destinations[0].root == (test_root() / "cwd" / "dl").lexically_normal());
 }
@@ -250,7 +250,7 @@ TEST_CASE("destinations are validated", "[config]") {
 TEST_CASE("a real file with BOM and non-ASCII paths loads", "[config]") {
     const auto dir = test_root() / fs::path{u8"配置"};
     fs::create_directories(dir);
-    const auto file = dir / "music-dl.json";
+    const auto file = dir / "music-service.json";
     {
         std::ofstream out{file, std::ios::binary};
         out << "\xEF\xBB\xBF" << R"({"data_dir": "数据", "logging": {"format": "text"}})";

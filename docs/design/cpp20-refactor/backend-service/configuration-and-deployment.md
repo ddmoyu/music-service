@@ -2,7 +2,7 @@
 
 ## 产品与运行边界
 
-本项目是纯后端，以无 GUI 的独立进程 `music-dl-server` 交付。构建与启动不依赖 Qt、Electron、Tauri、WebView、图形桌面、显示服务、浏览器或音频输出设备；命令行用于启动、配置校验、初始化和管理。播放器、交互式界面与客户端本机保存由外部客户端负责，部署验证不要求启动任何前端。
+本项目是纯后端，以无 GUI 的独立进程 `music-service` 交付。构建与启动不依赖 Qt、Electron、Tauri、WebView、图形桌面、显示服务、浏览器或音频输出设备；命令行用于启动、配置校验、初始化和管理。播放器、交互式界面与客户端本机保存由外部客户端负责，部署验证不要求启动任何前端。
 
 跨平台和 Docker 是必需能力。原生运行、系统服务、NAS 与容器复用同一套业务代码和 HTTP 契约；操作系统差异通过适配层处理。文档中的“音乐平台”指网易云等上游来源，“运行平台”指操作系统、CPU 架构与运行环境，二者分别管理。
 
@@ -104,9 +104,9 @@ events.enabled=true 同样要求构建包含 SSE 功能，且 event_limits 全�
 
 ### 环境变量与命令行
 
-首版仅支持确定的覆盖项：MUSIC_DL_CONFIG、MUSIC_DL_DATA_DIR、MUSIC_DL_CONTROL_LISTEN、MUSIC_DL_MEDIA_LISTEN、MUSIC_DL_PUBLIC_API_URL、MUSIC_DL_PUBLIC_MEDIA_URL、MUSIC_DL_DOWNLOAD_DIR。最后一项只覆盖默认 destination 的待校验配置，仍受下文不可变根绑定约束，不允许从普通 HTTP 请求改写。
+首版仅支持确定的覆盖项：MUSIC_SERVICE_CONFIG、MUSIC_SERVICE_DATA_DIR、MUSIC_SERVICE_CONTROL_LISTEN、MUSIC_SERVICE_MEDIA_LISTEN、MUSIC_SERVICE_PUBLIC_API_URL、MUSIC_SERVICE_PUBLIC_MEDIA_URL、MUSIC_SERVICE_DOWNLOAD_DIR。最后一项只覆盖默认 destination 的待校验配置，仍受下文不可变根绑定约束，不允许从普通 HTTP 请求改写。
 
-事件监听补充 MUSIC_DL_EVENTS_LISTEN、MUSIC_DL_PUBLIC_EVENTS_URL；覆盖规则与控制／媒体一致。
+事件监听补充 MUSIC_SERVICE_EVENTS_LISTEN、MUSIC_SERVICE_PUBLIC_EVENTS_URL；覆盖规则与控制／媒体一致。
 
 启动参数提供 config、data-dir，基础命令为 check-config、init、version、healthcheck；healthcheck 请求本机控制入口的 `/health/ready` 并以退出码报告结果，供不含 shell／curl 的最小镜像作为容器健康探测，不读取 token 或修改数据；端口和线程数走配置。init 不覆盖已有实例；check-config 校验配置、能力、路径及已有目录绑定，不修改持久状态。身份维护另使用下列明确的本机子命令。
 
@@ -165,7 +165,7 @@ data_dir/
   logs/                            # 文件日志启用时使用；容器可仅 stdout
 
 destination_root/
-  .music-dl-work/
+  .music-service-work/
     tsk_xxx/
       input.part
       processed.part
@@ -245,7 +245,7 @@ SSE 退出时停止接受订阅，唤醒等待并关闭现有流，注销订阅�
 - 默认非 root 运行，明确 UID／GID 与持久卷所有权；不依赖 privileged 或 host 网络。配置可只读挂载，`data_dir` 与下载目录可写并持久化，临时目录和日志去向明确。
 - 容器内通过 exec 形式的 ENTRYPOINT 直接运行前台服务；若有启动脚本，最终 exec 服务。必须实测收到停止信号后执行收尾，Compose 停止宽限期大于配置的停机预算。[ENTRYPOINT 与信号](https://docs.docker.com/reference/dockerfile/#entrypoint)
 - Compose 示例显式配置启用入口的容器监听、宿主映射、public URLs、持久卷和运行用户；本机原生默认 loopback，容器按需监听 `0.0.0.0`，不把容器内部 `127.0.0.1` 公布为远程访问地址。
-- 日志默认输出 stdout／stderr，健康探测使用现有本地健康接口，不依赖 GUI 或上游音乐平台在线；最小镜像未包含 shell／curl 时，HEALTHCHECK 使用 exec 形式调用 `music-dl-server healthcheck`。
+- 日志默认输出 stdout／stderr，健康探测使用现有本地健康接口，不依赖 GUI 或上游音乐平台在线；最小镜像未包含 shell／curl 时，HEALTHCHECK 使用 exec 形式调用 `music-service healthcheck`。
 - Compose 示例对外发布端口时同时提供 HTTPS 反向代理，或明确仅映射到宿主 127.0.0.1；不得以 http 公布远程 public URL，除非按 security 规则显式允许。
 - 分别验证 amd64／arm64 镜像启动、HTTPS、下载与停止；交叉编译或模拟构建成功只证明构建完成。删除并重建容器后任务与文件仍可恢复，不把可写镜像层作为持久存储。
 

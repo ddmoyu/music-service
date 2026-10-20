@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <array>
 
-namespace music_dl::infrastructure::observability {
+namespace music_service::infrastructure::observability {
 
 namespace {
 
@@ -133,4 +133,4 @@ std::string redact_field(std::string_view key, std::string_view value) {
     return redact_text(value);
 }
 
-} // namespace music_dl::infrastructure::observability
+} // namespace music_service::infrastructure::observability

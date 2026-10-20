@@ -9,4 +9,4 @@
 
 平台需要授权能力时，在自身 auth 目录实现可选 ICredentialVerifier、ICredentialRefresher、IApplicationTokenProvider，并通过 bundle 的 auth_profiles 绑定。平台协议只返回校验结果或秘密候选；账号选择、刷新合并与条件提交属于 application/accounts。所有上游请求共用入场端口，不建立平台私有线程池或 semaphore。
 
-music_dl_providers 当前只是表示依赖方向的 INTERFACE 目标，没有平台注册或实现，也不声明任何平台已支持。后续每个平台独立 target，再由聚合目标选择链接。
+music_service_providers 当前只是表示依赖方向的 INTERFACE 目标，没有平台注册或实现，也不声明任何平台已支持。后续每个平台独立 target，再由聚合目标选择链接。

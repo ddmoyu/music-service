@@ -9,7 +9,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace music_dl::infrastructure::observability {
+namespace music_service::infrastructure::observability {
 
 namespace {
 
@@ -158,4 +158,4 @@ void Logger::log(LogLevel level, std::string_view event,
     sink_->write(record);
 }
 
-} // namespace music_dl::infrastructure::observability
+} // namespace music_service::infrastructure::observability

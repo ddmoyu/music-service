@@ -9,7 +9,7 @@
 #include <optional>
 #include <string>
 
-namespace music_dl::application::ports {
+namespace music_service::application::ports {
 
 // Persistent task snapshot as seen through the repository. Secrets, leases and
 // short-lived URLs are never part of it.
@@ -71,4 +71,4 @@ public:
                                                       const std::string& task_id) = 0;
 };
 
-} // namespace music_dl::application::ports
+} // namespace music_service::application::ports

@@ -2,11 +2,11 @@
 
 #include "domain/identity/account.hpp"
 
-using namespace music_dl::domain;
-using music_dl::test::anonymous;
-using music_dl::test::source;
-using music_dl::test::unwrap;
-using music_dl::test::user;
+using namespace music_service::domain;
+using music_service::test::anonymous;
+using music_service::test::source;
+using music_service::test::unwrap;
+using music_service::test::user;
 
 TEST_CASE("account bindings enforce the mode rules", "[domain][identity]") {
     const auto kuwo = source("kuwo");

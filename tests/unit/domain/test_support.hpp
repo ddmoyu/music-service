@@ -10,7 +10,7 @@
 #include <string_view>
 #include <utility>
 
-namespace music_dl::test {
+namespace music_service::test {
 
 template <class T> T unwrap(domain::Result<T> result) {
     REQUIRE(result.has_value());
@@ -38,4 +38,4 @@ inline domain::AccountBinding user(std::string principal, std::string_view src,
                                                std::move(credential_id), std::nullopt));
 }
 
-} // namespace music_dl::test
+} // namespace music_service::test

@@ -13,7 +13,7 @@
 // docs/design/cpp20-refactor/backend-service/configuration-and-deployment.md;
 // JSON key names are listed in config/README.md.
 // Plain data: no JSON or filesystem access happens here.
-namespace music_dl::application::config {
+namespace music_service::application::config {
 
 using std::chrono::hours;
 using std::chrono::milliseconds;
@@ -261,4 +261,4 @@ struct ServiceConfig {
     std::vector<DestinationConfig> destinations;
 };
 
-} // namespace music_dl::application::config
+} // namespace music_service::application::config

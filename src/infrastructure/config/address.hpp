@@ -5,7 +5,7 @@
 #include <string>
 #include <string_view>
 
-namespace music_dl::infrastructure::config::detail {
+namespace music_service::infrastructure::config::detail {
 
 struct HostPort {
     std::string host;
@@ -26,4 +26,4 @@ struct BaseUrl {
 // Absolute http(s) base URL without user info, query or fragment.
 std::optional<BaseUrl> parse_base_url(std::string_view text);
 
-} // namespace music_dl::infrastructure::config::detail
+} // namespace music_service::infrastructure::config::detail

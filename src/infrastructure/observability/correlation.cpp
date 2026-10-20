@@ -2,7 +2,7 @@
 
 #include <array>
 
-namespace music_dl::infrastructure::observability {
+namespace music_service::infrastructure::observability {
 
 namespace {
 
@@ -52,4 +52,4 @@ std::string accept_or_generate_request_id(std::optional<std::string_view> client
     return generator.next("req_");
 }
 
-} // namespace music_dl::infrastructure::observability
+} // namespace music_service::infrastructure::observability

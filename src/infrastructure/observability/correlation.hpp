@@ -7,7 +7,7 @@
 #include <string>
 #include <string_view>
 
-namespace music_dl::infrastructure::observability {
+namespace music_service::infrastructure::observability {
 
 // Client-supplied X-Request-Id: 1..64 characters of [A-Za-z0-9._-].
 [[nodiscard]] bool is_valid_client_request_id(std::string_view id) noexcept;
@@ -31,4 +31,4 @@ private:
 [[nodiscard]] std::string accept_or_generate_request_id(std::optional<std::string_view> client_id,
                                                         IdGenerator& generator);
 
-} // namespace music_dl::infrastructure::observability
+} // namespace music_service::infrastructure::observability

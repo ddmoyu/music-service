@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace music_dl::domain {
+namespace music_service::domain {
 
 namespace {
 
@@ -93,4 +93,4 @@ bool is_valid_utf8(std::string_view text) noexcept {
     return true;
 }
 
-} // namespace music_dl::domain
+} // namespace music_service::domain

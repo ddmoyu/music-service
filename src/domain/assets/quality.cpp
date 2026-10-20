@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace music_dl::domain {
+namespace music_service::domain {
 
 std::string_view to_string(Quality value) noexcept {
     switch (value) {
@@ -118,4 +118,4 @@ Result<ResourceVerdict> evaluate_resource(const ResourceRequirement& requirement
     return verdict;
 }
 
-} // namespace music_dl::domain
+} // namespace music_service::domain

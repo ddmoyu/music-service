@@ -4,7 +4,7 @@
 
 #include <utility>
 
-namespace music_dl::domain {
+namespace music_service::domain {
 
 namespace {
 
@@ -111,4 +111,4 @@ std::string AuthIdentityKey::canonical() const {
     return writer.str();
 }
 
-} // namespace music_dl::domain
+} // namespace music_service::domain

@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace music_dl::domain {
+namespace music_service::domain {
 
 struct ArtistSummary {
     std::string name;
@@ -50,4 +50,4 @@ template <class Item> struct SourcePage {
     PageInfo page;
 };
 
-} // namespace music_dl::domain
+} // namespace music_service::domain

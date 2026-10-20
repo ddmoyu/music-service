@@ -8,7 +8,7 @@
 #include <string>
 #include <string_view>
 
-namespace music_dl::infrastructure::observability {
+namespace music_service::infrastructure::observability {
 
 // Collection points for counters and latencies. Names are dotted, e.g.
 // "upstream.requests" or "admission.wait"; areas follow the design: control, provider,
@@ -68,4 +68,4 @@ private:
     std::map<std::string, LatencySummary, std::less<>> latencies_;
 };
 
-} // namespace music_dl::infrastructure::observability
+} // namespace music_service::infrastructure::observability

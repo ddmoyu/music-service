@@ -48,7 +48,7 @@ flowchart TB
     clients["外部客户端：网页、桌面、CLI"]
     proxy["可选反向代理：TLS、同源路由"]
     clients -.->|"远程接入"| proxy
-    subgraph processBoundary["单进程 music-dl-server：原生、系统服务或 Linux 容器；待实现"]
+    subgraph processBoundary["单进程 music-service：原生、系统服务或 Linux 容器；待实现"]
         control["控制入口 :17632 /api/v1"]
         media["媒体入口 :17633 /media/v1"]
         events["事件入口 :17634 /events/v1"]

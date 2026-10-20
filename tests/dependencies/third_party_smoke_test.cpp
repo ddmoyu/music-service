@@ -13,14 +13,14 @@
 #include <thread>
 
 TEST_CASE("pinned dependency versions", "[dependencies]") {
-    CHECK(std::string_view{CPPHTTPLIB_VERSION} == MUSIC_DL_EXPECTED_HTTPLIB_VERSION);
-    CHECK(std::string_view{MBEDTLS_VERSION_STRING} == MUSIC_DL_EXPECTED_MBEDTLS_VERSION);
-    CHECK(std::string_view{sqlite3_libversion()} == MUSIC_DL_EXPECTED_SQLITE_VERSION);
+    CHECK(std::string_view{CPPHTTPLIB_VERSION} == MUSIC_SERVICE_EXPECTED_HTTPLIB_VERSION);
+    CHECK(std::string_view{MBEDTLS_VERSION_STRING} == MUSIC_SERVICE_EXPECTED_MBEDTLS_VERSION);
+    CHECK(std::string_view{sqlite3_libversion()} == MUSIC_SERVICE_EXPECTED_SQLITE_VERSION);
 
     const auto json_version = std::to_string(NLOHMANN_JSON_VERSION_MAJOR) + "." +
                               std::to_string(NLOHMANN_JSON_VERSION_MINOR) + "." +
                               std::to_string(NLOHMANN_JSON_VERSION_PATCH);
-    CHECK(json_version == MUSIC_DL_EXPECTED_JSON_VERSION);
+    CHECK(json_version == MUSIC_SERVICE_EXPECTED_JSON_VERSION);
 }
 
 TEST_CASE("json round-trips UTF-8 text", "[dependencies][json]") {

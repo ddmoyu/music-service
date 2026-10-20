@@ -11,7 +11,7 @@
 #include <variant>
 #include <vector>
 
-namespace music_dl::domain {
+namespace music_service::domain {
 
 enum class MetadataPolicy { best_effort, required, skip };
 
@@ -113,4 +113,4 @@ struct DownloadFingerprint {
 
 DownloadFingerprint fingerprint(const NormalizedDownloadIntent& intent);
 
-} // namespace music_dl::domain
+} // namespace music_service::domain

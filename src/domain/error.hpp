@@ -4,7 +4,7 @@
 #include <string_view>
 #include <vector>
 
-namespace music_dl::domain {
+namespace music_service::domain {
 
 // Stable error categories shared across modules. to_string() yields the code used
 // by the public API; adapters map codes to HTTP status, the domain does not.
@@ -52,4 +52,4 @@ struct Error {
     static Error validation(std::string field, std::string reason);
 };
 
-} // namespace music_dl::domain
+} // namespace music_service::domain

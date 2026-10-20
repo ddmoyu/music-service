@@ -1,6 +1,6 @@
 # 构建支持
 
-ProjectOptions.cmake 维护公共 C++20 要求（MSVC 另加 /utf-8、/permissive- 等）与项目代码的警告选项；警告只作用于项目目标，不作用于第三方源码。MUSIC_DL_WARNINGS_AS_ERRORS 可把警告升级为错误。
+ProjectOptions.cmake 维护公共 C++20 要求（MSVC 另加 /utf-8、/permissive- 等）与项目代码的警告选项；警告只作用于项目目标，不作用于第三方源码。MUSIC_SERVICE_WARNINGS_AS_ERRORS 可把警告升级为错误。
 
 - dependencies：集中声明、获取并校验固定版本的第三方源码，见[依赖说明](dependencies/README.md)。
 - adapters：为没有合适 CMake 目标的第三方源码提供目标，目前有 cpp-httplib（启用 Mbed TLS）与 SQLite。

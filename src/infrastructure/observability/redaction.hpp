@@ -3,7 +3,7 @@
 #include <string>
 #include <string_view>
 
-namespace music_dl::infrastructure::observability {
+namespace music_service::infrastructure::observability {
 
 inline constexpr std::string_view redacted = "[REDACTED]";
 
@@ -23,4 +23,4 @@ inline constexpr std::string_view redacted = "[REDACTED]";
 // through redact_url and other text through redact_text.
 [[nodiscard]] std::string redact_field(std::string_view key, std::string_view value);
 
-} // namespace music_dl::infrastructure::observability
+} // namespace music_service::infrastructure::observability

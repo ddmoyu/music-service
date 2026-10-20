@@ -2,7 +2,7 @@
 
 #include <charconv>
 
-namespace music_dl::infrastructure::config::detail {
+namespace music_service::infrastructure::config::detail {
 
 namespace {
 
@@ -107,4 +107,4 @@ std::optional<BaseUrl> parse_base_url(std::string_view text) {
     return url;
 }
 
-} // namespace music_dl::infrastructure::config::detail
+} // namespace music_service::infrastructure::config::detail

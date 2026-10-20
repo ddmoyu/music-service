@@ -42,10 +42,10 @@ audio_processing、runtime → application/ports + domain
 
 ## 目录
 
-本仓库是跨平台的纯后端：只产出 music-dl-server 服务程序，不发布 C++ 库，也不包含任何前端代码，GUI 与网页在独立仓库开发。因此 CMake 工程直接位于仓库根目录；头文件与实现放在同一模块目录，所有模块以 `src/` 为包含根（`#include "domain/result.hpp"`），不另设 `include/` 目录；`src/server` 是服务自身的进程入口。
+本仓库是跨平台的纯后端：只产出 music-service 服务程序，不发布 C++ 库，也不包含任何前端代码，GUI 与网页在独立仓库开发。因此 CMake 工程直接位于仓库根目录；头文件与实现放在同一模块目录，所有模块以 `src/` 为包含根（`#include "domain/result.hpp"`），不另设 `include/` 目录；`src/server` 是服务自身的进程入口。
 
 ```text
-music-dl/
+music-service/
   CMakeLists.txt
   CMakePresets.json
   cmake/                           # 编译选项、依赖与第三方适配、工具链
@@ -121,7 +121,7 @@ music-dl/
     api/httplib/                   # 控制入口：server、middleware、dto、routes
     media_server/httplib/          # 媒体入口：server、range、文件响应、stream_bridge
     event_server/httplib/          # SSE 入口：server、sse_responder、subscription
-    server/                        # music-dl-server：main、ProcessHost、CompositionRoot、子命令
+    server/                        # music-service：main、ProcessHost、CompositionRoot、子命令
   tests/
     dependencies/                  # 固定依赖的版本与可用性
     unit/                          # 领域规则、端口替身、配置与日志、协议向量与解析
@@ -144,20 +144,20 @@ auth_profiles 工厂与平台能力一起注册；UpstreamAdmissionPort 实例�
 
 | 目标 | 依赖方向 |
 | --- | --- |
-| `music_dl_domain` | C++20 标准库 |
-| `music_dl_application` | domain，业务端口 |
-| `music_dl_provider_<source>` | application 端口、domain、该平台实际需要的 JSON／协议加密适配 |
-| `music_dl_providers` | 聚合选中的平台 target、注册表与生成工厂绑定，不强制链接所有平台依赖 |
-| `music_dl_downloads` | application 端口、domain |
-| `music_dl_audio_processing` | application 端口、domain；具体格式、解密和标签依赖后续接入 |
-| `music_dl_infrastructure` | application 端口、httplib、SQLite、JSON、媒体适配等实际依赖 |
-| `music_dl_runtime` | application 端口、domain；执行器、额度、取消与停机 |
-| `music_dl_http_api` | application、控制 HTTP 适配 |
-| `music_dl_media_server` | application、媒体 HTTP 适配 |
-| `music_dl_event_server` | application、SSE HTTP 适配 |
-| `music-dl-server`（待实现） | 组装上述目标与运行时，当前没有可执行目标 |
+| `music_service_domain` | C++20 标准库 |
+| `music_service_application` | domain，业务端口 |
+| `music_service_provider_<source>` | application 端口、domain、该平台实际需要的 JSON／协议加密适配 |
+| `music_service_providers` | 聚合选中的平台 target、注册表与生成工厂绑定，不强制链接所有平台依赖 |
+| `music_service_downloads` | application 端口、domain |
+| `music_service_audio_processing` | application 端口、domain；具体格式、解密和标签依赖后续接入 |
+| `music_service_infrastructure` | application 端口、httplib、SQLite、JSON、媒体适配等实际依赖 |
+| `music_service_runtime` | application 端口、domain；执行器、额度、取消与停机 |
+| `music_service_http_api` | application、控制 HTTP 适配 |
+| `music_service_media_server` | application、媒体 HTTP 适配 |
+| `music_service_event_server` | application、SSE HTTP 适配 |
+| `music-service`（待实现） | 组装上述目标与运行时，当前没有可执行目标 |
 
-目标可按编译收益合并，第三方头不经公共类型传播。music_dl_domain 与 music_dl_infrastructure 已是静态库，music_dl_application 目前是只含端口头文件的 INTERFACE 目标；尚未创建具体平台 target。Drogon 替换 HTTP／传输适配，业务用例共用。
+目标可按编译收益合并，第三方头不经公共类型传播。music_service_domain 与 music_service_infrastructure 已是静态库，music_service_application 目前是只含端口头文件的 INTERFACE 目标；尚未创建具体平台 target。Drogon 替换 HTTP／传输适配，业务用例共用。
 
 依赖获取与版本规则见[构建与依赖](build-and-dependencies.md)。
 

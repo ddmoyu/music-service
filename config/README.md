@@ -1,6 +1,6 @@
 # 配置资源
 
-配置由 `infrastructure/config` 加载：内置缺省 → JSON 文件 → 已列明的 `MUSIC_DL_*` 环境变量 → 命令行 `--config`／`--data-dir`。默认值的规范位置是[配置与部署](../docs/design/cpp20-refactor/backend-service/configuration-and-deployment.md#配置来源与生效时机)，本页只列 JSON 键名。未知键、类型错误和越界值都会让启动失败，一次报告全部问题，字段路径形如 `/control/port`。
+配置由 `infrastructure/config` 加载：内置缺省 → JSON 文件 → 已列明的 `MUSIC_SERVICE_*` 环境变量 → 命令行 `--config`／`--data-dir`。默认值的规范位置是[配置与部署](../docs/design/cpp20-refactor/backend-service/configuration-and-deployment.md#配置来源与生效时机)，本页只列 JSON 键名。未知键、类型错误和越界值都会让启动失败，一次报告全部问题，字段路径形如 `/control/port`。
 
 真实 token、Cookie、API key、OAuth 秘密和本机目录留在源码树之外。
 
@@ -8,7 +8,7 @@
 
 - 文件中的相对路径相对于配置文件所在目录；环境变量和命令行给出的相对路径相对于进程工作目录。
 - 未指定 data_dir 时为 `<配置文件目录或工作目录>/data`。
-- `MUSIC_DL_DOWNLOAD_DIR` 只替换 id 为 `dst_default` 的目标根目录，未配置该目标时报错。
+- `MUSIC_SERVICE_DOWNLOAD_DIR` 只替换 id 为 `dst_default` 的目标根目录，未配置该目标时报错。
 
 ## 键名
 

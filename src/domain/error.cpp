@@ -2,7 +2,7 @@
 
 #include <utility>
 
-namespace music_dl::domain {
+namespace music_service::domain {
 
 std::string_view to_string(ErrorCode code) noexcept {
     switch (code) {
@@ -60,4 +60,4 @@ Error Error::validation(std::string field, std::string reason) {
     return error;
 }
 
-} // namespace music_dl::domain
+} // namespace music_service::domain

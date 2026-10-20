@@ -4,7 +4,7 @@
 
 #include <string_view>
 
-namespace music_dl::domain {
+namespace music_service::domain {
 
 enum class TaskStatus {
     queued,
@@ -48,4 +48,4 @@ enum class CancelAction {
 // terminal states reject with TASK_FINALIZING / TASK_TERMINAL.
 Result<CancelAction> decide_cancel(TaskStatus status);
 
-} // namespace music_dl::domain
+} // namespace music_service::domain

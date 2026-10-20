@@ -5,7 +5,7 @@ find_package(Git REQUIRED)
 # Fails the configure step unless the populated source tree is a Git checkout
 # whose HEAD equals the expected commit. This also covers FETCHCONTENT_SOURCE_DIR_*
 # overrides used for offline builds: a prepared source must still be the pinned commit.
-function(music_dl_verify_git_dependency name source_dir expected_commit)
+function(music_service_verify_git_dependency name source_dir expected_commit)
     if(NOT EXISTS "${source_dir}")
         message(FATAL_ERROR "Dependency ${name}: source directory '${source_dir}' does not exist.")
     endif()

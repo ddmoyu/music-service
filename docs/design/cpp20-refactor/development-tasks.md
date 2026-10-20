@@ -283,7 +283,7 @@ T03 之后的下一项为 **T04** 与 **T06**（可并行）；T07、T09 完成�
 
 | 项目 | 记录 |
 | --- | --- |
-| 交付 | `music_dl::domain` 静态库：Result／错误码、SourceId／PlatformId／TrackRef 与 UTF-8 校验、曲目与分页、品质选择与资源判定、AccountBinding／AuthIdentityKey、任务状态迁移与取消决策、NormalizedDownloadIntent 归一与指纹。`application/ports` 头文件端口：平台描述与搜索／音源解析能力、上游入场与租约、时钟与操作上下文、上游 HTTP、任务仓储 |
+| 交付 | `music_service::domain` 静态库：Result／错误码、SourceId／PlatformId／TrackRef 与 UTF-8 校验、曲目与分页、品质选择与资源判定、AccountBinding／AuthIdentityKey、任务状态迁移与取消决策、NormalizedDownloadIntent 归一与指纹。`application/ports` 头文件端口：平台描述与搜索／音源解析能力、上游入场与租约、时钟与操作上下文、上游 HTTP、任务仓储 |
 | 覆盖的验收 | strict／allow_lower、已知试听拒绝、未知完整性与未知品质带警告；同版本不同凭证的身份键不同（A38 领域部分）；试听／标签策略、手动目标、账号绑定、auto 顺序与策略版本进入指纹（A35、A36 领域部分）；终态无出口、finalizing 不可取消、非法迁移报错；入场不阻塞并延后、其他来源可推进、租约只归还一次、传输拒绝不匹配的租约（替身） |
 | 规则补充 | 已写回规范：queued／waiting_retry → failed 迁移；品质未知与降级的警告规则、从不自动升档；指纹编码与 FNV-1a 摘要；auto 去除原曲来源、手动目标等于原曲时归一为同源、绑定按需裁剪 |
 | Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条警告；`ctest --preset windows-msvc-debug` 45/45 通过（含 5 项依赖测试） |
@@ -294,7 +294,7 @@ T03 之后的下一项为 **T04** 与 **T06**（可并行）；T07、T09 完成�
 
 | 项目 | 记录 |
 | --- | --- |
-| 交付 | `application/config/ServiceConfig`（配置基线全部配置组的缺省值）；`infrastructure/config`：缺省 → JSON 文件 → MUSIC_DL_* 环境变量 → 命令行的加载、路径解析与组合校验；`SystemClock`／`ManualClock`；结构化日志（JSON 行／文本／内存 sink、绑定上下文、级别过滤）与字段脱敏；客户端 request_id 校验与服务 ID 生成；计数与延迟指标接口。infrastructure 改为静态库 |
+| 交付 | `application/config/ServiceConfig`（配置基线全部配置组的缺省值）；`infrastructure/config`：缺省 → JSON 文件 → MUSIC_SERVICE_* 环境变量 → 命令行的加载、路径解析与组合校验；`SystemClock`／`ManualClock`；结构化日志（JSON 行／文本／内存 sink、绑定上下文、级别过滤）与字段脱敏；客户端 request_id 校验与服务 ID 生成；计数与延迟指标接口。infrastructure 改为静态库 |
 | 覆盖的验收 | 未知键、类型错误、越界值、无效 JSON、文件不可读均在启动前失败并一次报告全部字段；端口冲突、端口 0 非 loopback、非 loopback 缺 public_urls、远程 http、构建缺失功能、未编入平台、default_sources 不合法、事件／媒体额度超过 workers−2、目标目录 ID 与 principals 均被拒绝；文件内相对路径按配置文件目录、环境变量与命令行按工作目录解析，含 BOM 与中文路径；日志中 Authorization／Cookie／token／ticket 字段、URL 查询串与票据路径段、Bearer 文本均被脱敏，`*_id`／`*_version` 保留；ManualClock 可推进且墙钟跳变不影响单调时钟 |
 | 规则补充 | 已写回配置文档与[配置键名](../../../config/README.md)：JSON 键名与单位后缀、相对路径基准、端口 0 与 public_urls 规则、构建前 media／events／file_access 缺省关闭、app_profiles 在 T24 前只接受空对象 |
 | Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条警告；`ctest --preset windows-msvc-debug` 68/68 通过 |
@@ -303,4 +303,8 @@ T03 之后的下一项为 **T04** 与 **T06**（可并行）；T07、T09 完成�
 
 ### 目录结构调整（2026-10-20）
 
-本仓库是跨平台纯后端，前端另建仓库，因此 CMake 工程从 `cpp/` 移到仓库根目录；`cpp/include/music_dl/` 并入 `src/`，头文件与实现同目录、以 `src/` 为包含根；服务入口 `apps/server` 改为 `src/server`；配置说明从 `resources/config` 移到 `config/`。模块划分、目标名与命名空间不变，见[模块与目录](backend-service/modules-and-layout.md#目录)。调整后 Windows 68/68 测试通过。
+本仓库是跨平台纯后端，前端另建仓库，因此 CMake 工程从 `cpp/` 移到仓库根目录；`cpp/include/music_service/` 并入 `src/`，头文件与实现同目录、以 `src/` 为包含根；服务入口 `apps/server` 改为 `src/server`；配置说明从 `resources/config` 移到 `config/`。模块划分、目标名与命名空间不变，见[模块与目录](backend-service/modules-and-layout.md#目录)。调整后 Windows 68/68 测试通过。
+
+### 项目改名（2026-10-20）
+
+项目与仓库名统一为 music-service：CMake 项目与目标前缀 `music_service`，C++ 命名空间 `music_service`，可执行程序 `music-service`，环境变量前缀 `MUSIC_SERVICE_`，`/api/v1/info` 的 service 字段 `music-service`，任务工作目录 `.music-service-work`。研究文档中的 go-music-dl 是参考项目原名，保持不变。改名后 Windows 68/68 测试通过。

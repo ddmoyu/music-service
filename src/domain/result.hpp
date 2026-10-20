@@ -8,7 +8,7 @@
 #include <utility>
 #include <variant>
 
-namespace music_dl::domain {
+namespace music_service::domain {
 
 namespace detail {
 // Reading the wrong alternative of a Result is a programming error, not a runtime
@@ -89,4 +89,4 @@ private:
 
 inline Result<void> ok() { return {}; }
 
-} // namespace music_dl::domain
+} // namespace music_service::domain

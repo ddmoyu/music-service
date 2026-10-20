@@ -4,7 +4,7 @@
 
 #include <array>
 
-using namespace music_dl::domain;
+using namespace music_service::domain;
 using enum TaskStatus;
 
 namespace {
@@ -17,7 +17,7 @@ constexpr std::array all{queued,     resolving,     probing,   downloading,
 
 TEST_CASE("status names round-trip", "[domain][tasks]") {
     for (const auto status : all) {
-        CHECK(music_dl::test::unwrap(parse_task_status(to_string(status))) == status);
+        CHECK(music_service::test::unwrap(parse_task_status(to_string(status))) == status);
     }
     CHECK_FALSE(parse_task_status("running"));
 }

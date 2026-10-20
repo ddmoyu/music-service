@@ -122,7 +122,7 @@ info.data 示例：
 
 ```json
 {
-  "service": "music-dl",
+  "service": "music-service",
   "version": "0.1.0-design-example",
   "api_version": "v1",
   "instance_id": "inst_demo",

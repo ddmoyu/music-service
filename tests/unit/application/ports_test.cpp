@@ -10,8 +10,8 @@
 #include <string>
 #include <vector>
 
-using namespace music_dl;
-using namespace music_dl::application::ports;
+using namespace music_service;
+using namespace music_service::application::ports;
 
 namespace {
 

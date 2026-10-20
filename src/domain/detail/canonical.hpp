@@ -5,7 +5,7 @@
 #include <string>
 #include <string_view>
 
-namespace music_dl::domain::detail {
+namespace music_service::domain::detail {
 
 // Internal to the domain library. Length-prefixed field encoding: "<tag>=<bytes>:<value>;". Any byte sequence,
 // including separators, encodes unambiguously. Absent optionals encode as "<tag>~;".
@@ -44,4 +44,4 @@ private:
     std::string out_;
 };
 
-} // namespace music_dl::domain::detail
+} // namespace music_service::domain::detail

@@ -13,8 +13,8 @@
 #include <sstream>
 #include <string>
 
-using namespace music_dl::infrastructure;
-using namespace music_dl::infrastructure::observability;
+using namespace music_service::infrastructure;
+using namespace music_service::infrastructure::observability;
 
 TEST_CASE("sensitive keys are recognized", "[observability][redaction]") {
     for (const auto* key : {"Authorization", "cookie", "Set-Cookie", "access_token", "password",
@@ -109,9 +109,9 @@ TEST_CASE("request ids are accepted or generated", "[observability][correlation]
           "client-1.a_b");
 
     const auto generated = accept_or_generate_request_id(std::string_view{"bad id!"}, generator);
-    CHECK(music_dl::domain::is_valid_service_id("req_", generated));
+    CHECK(music_service::domain::is_valid_service_id("req_", generated));
     CHECK_FALSE(is_valid_client_request_id(std::string(65, 'a')));
-    CHECK(music_dl::domain::is_valid_service_id(
+    CHECK(music_service::domain::is_valid_service_id(
         "req_", accept_or_generate_request_id(std::nullopt, generator)));
 
     IdGenerator a{7};

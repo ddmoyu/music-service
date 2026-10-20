@@ -3,7 +3,7 @@
 #include <chrono>
 #include <stop_token>
 
-namespace music_dl::application::ports {
+namespace music_service::application::ports {
 
 // Deadline and cancellation shared by every bounded operation. The deadline uses the
 // monotonic clock; persistent deadlines are stored separately in UTC.
@@ -16,4 +16,4 @@ struct OperationContext {
     }
 };
 
-} // namespace music_dl::application::ports
+} // namespace music_service::application::ports

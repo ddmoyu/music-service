@@ -8,7 +8,7 @@
 #include <string_view>
 #include <utility>
 
-namespace music_dl::domain {
+namespace music_service::domain {
 
 // Stable platform identifier such as "kuwo": [a-z][a-z0-9_]{0,63}. Open set, not an enum.
 class SourceId {
@@ -60,4 +60,4 @@ using ArtistRef = PlatformRef;
 
 [[nodiscard]] bool is_valid_utf8(std::string_view text) noexcept;
 
-} // namespace music_dl::domain
+} // namespace music_service::domain

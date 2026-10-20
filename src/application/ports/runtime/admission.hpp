@@ -12,7 +12,7 @@
 #include <utility>
 #include <variant>
 
-namespace music_dl::application::ports {
+namespace music_service::application::ports {
 
 enum class TrafficClass { short_request, download, media, auth };
 
@@ -95,4 +95,4 @@ public:
                           std::optional<std::chrono::steady_clock::time_point> retry_after) = 0;
 };
 
-} // namespace music_dl::application::ports
+} // namespace music_service::application::ports

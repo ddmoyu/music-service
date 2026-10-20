@@ -9,7 +9,7 @@
 #include <utility>
 #include <variant>
 
-namespace music_dl::domain {
+namespace music_service::domain {
 
 namespace {
 
@@ -223,4 +223,4 @@ DownloadFingerprint fingerprint(const NormalizedDownloadIntent& intent) {
     return result;
 }
 
-} // namespace music_dl::domain
+} // namespace music_service::domain

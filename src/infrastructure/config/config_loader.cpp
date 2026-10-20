@@ -16,7 +16,7 @@
 #include <sstream>
 #include <utility>
 
-namespace music_dl::infrastructure::config {
+namespace music_service::infrastructure::config {
 
 namespace cfg = application::config;
 using json = nlohmann::json;
@@ -547,26 +547,26 @@ void apply_listen_override(Reader& r, const EnvironmentLookup& env, std::string_
 
 void apply_environment(Reader& r, const LoadOptions& options, cfg::ServiceConfig& c) {
     const auto& env = options.environment;
-    if (const auto value = env("MUSIC_DL_DATA_DIR")) {
+    if (const auto value = env("MUSIC_SERVICE_DATA_DIR")) {
         if (value->empty()) {
-            r.fail("env:MUSIC_DL_DATA_DIR", "must not be empty");
+            r.fail("env:MUSIC_SERVICE_DATA_DIR", "must not be empty");
         } else {
             c.data_dir = resolve(options.working_directory, path_from_utf8(*value));
         }
     }
-    apply_listen_override(r, env, "MUSIC_DL_CONTROL_LISTEN", c.control);
-    apply_listen_override(r, env, "MUSIC_DL_MEDIA_LISTEN", c.media);
-    apply_listen_override(r, env, "MUSIC_DL_EVENTS_LISTEN", c.events);
-    if (const auto value = env("MUSIC_DL_PUBLIC_API_URL")) {
+    apply_listen_override(r, env, "MUSIC_SERVICE_CONTROL_LISTEN", c.control);
+    apply_listen_override(r, env, "MUSIC_SERVICE_MEDIA_LISTEN", c.media);
+    apply_listen_override(r, env, "MUSIC_SERVICE_EVENTS_LISTEN", c.events);
+    if (const auto value = env("MUSIC_SERVICE_PUBLIC_API_URL")) {
         c.public_urls.api_base = *value;
     }
-    if (const auto value = env("MUSIC_DL_PUBLIC_MEDIA_URL")) {
+    if (const auto value = env("MUSIC_SERVICE_PUBLIC_MEDIA_URL")) {
         c.public_urls.media_base = *value;
     }
-    if (const auto value = env("MUSIC_DL_PUBLIC_EVENTS_URL")) {
+    if (const auto value = env("MUSIC_SERVICE_PUBLIC_EVENTS_URL")) {
         c.public_urls.events_base = *value;
     }
-    if (const auto value = env("MUSIC_DL_DOWNLOAD_DIR")) {
+    if (const auto value = env("MUSIC_SERVICE_DOWNLOAD_DIR")) {
         bool applied = false;
         for (auto& destination : c.destinations) {
             if (destination.id == "dst_default") {
@@ -575,7 +575,7 @@ void apply_environment(Reader& r, const LoadOptions& options, cfg::ServiceConfig
             }
         }
         if (!applied) {
-            r.fail("env:MUSIC_DL_DOWNLOAD_DIR", "requires a configured destination dst_default");
+            r.fail("env:MUSIC_SERVICE_DOWNLOAD_DIR", "requires a configured destination dst_default");
         }
     }
 }
@@ -656,7 +656,7 @@ domain::Result<cfg::ServiceConfig> load_service_config_text(std::string_view jso
 domain::Result<cfg::ServiceConfig> load_service_config(const LoadOptions& options) {
     std::optional<std::filesystem::path> file = options.config_file;
     if (!file) {
-        if (const auto value = options.environment("MUSIC_DL_CONFIG")) {
+        if (const auto value = options.environment("MUSIC_SERVICE_CONFIG")) {
             file = path_from_utf8(*value);
         }
     }
@@ -674,4 +674,4 @@ domain::Result<cfg::ServiceConfig> load_service_config(const LoadOptions& option
     return load(buffer.str(), absolute_file, options);
 }
 
-} // namespace music_dl::infrastructure::config
+} // namespace music_service::infrastructure::config

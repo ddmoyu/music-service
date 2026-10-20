@@ -16,7 +16,7 @@
 #include <utility>
 #include <vector>
 
-namespace music_dl::application::ports {
+namespace music_service::application::ports {
 
 // Capability keys are an open set of strings; these are the ones the API defines.
 namespace capability {
@@ -87,4 +87,4 @@ public:
                   const domain::ResourceRequirement& requirement) = 0;
 };
 
-} // namespace music_dl::application::ports
+} // namespace music_service::application::ports

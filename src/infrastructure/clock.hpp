@@ -5,7 +5,7 @@
 #include <chrono>
 #include <mutex>
 
-namespace music_dl::infrastructure {
+namespace music_service::infrastructure {
 
 class SystemClock final : public application::ports::Clock {
 public:
@@ -52,4 +52,4 @@ private:
     std::chrono::steady_clock::time_point steady_{};
 };
 
-} // namespace music_dl::infrastructure
+} // namespace music_service::infrastructure

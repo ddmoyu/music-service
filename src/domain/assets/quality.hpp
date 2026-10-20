@@ -7,7 +7,7 @@
 #include <string_view>
 #include <vector>
 
-namespace music_dl::domain {
+namespace music_service::domain {
 
 // Ordered from lowest to highest.
 enum class Quality { standard, high, lossless, hires };
@@ -58,4 +58,4 @@ struct ResourceVerdict {
 Result<ResourceVerdict> evaluate_resource(const ResourceRequirement& requirement,
                                           const ResourceFacts& facts);
 
-} // namespace music_dl::domain
+} // namespace music_service::domain

@@ -4,7 +4,7 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_CURRENT_BINARY_DIR)
     message(FATAL_ERROR "Use an out-of-source build, for example a CMake preset.")
 endif()
 
-project(music_dl
+project(music_service
     VERSION 0.1.0
     DESCRIPTION "Cross-platform music backend libraries and service"
     LANGUAGES C CXX

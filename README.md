@@ -2,14 +2,14 @@
 
 跨平台的纯后端音乐服务，通过 HTTP API 提供音乐搜索、音源解析、下载与任务管理。本仓库只包含后端：GUI、网页、桌面等前端在各自独立的仓库中开发，通过版本化 API 接入。服务支持原生进程、系统服务和 Docker 部署，系统与架构范围见[配置与部署](docs/design/cpp20-refactor/backend-service/configuration-and-deployment.md)。
 
-命名约定：music-service 是产品名；仓库目录为 `music-dl`，CMake 项目与库目标前缀为 `music_dl`，C++ 命名空间为 `music_dl`，服务可执行程序为 `music-dl-server`，`/api/v1/info` 的 service 字段为 `music-dl`。
+命名约定：项目与仓库名为 `music-service`；CMake 项目与库目标前缀为 `music_service`，C++ 命名空间为 `music_service`，服务可执行程序为 `music-service`，环境变量前缀为 `MUSIC_SERVICE_`，`/api/v1/info` 的 service 字段为 `music-service`。
 
 当前进度：T01～T03 已完成（固定版本依赖、领域规则与应用端口、配置／时钟／日志基础），尚无平台实现、存储、运行时或服务入口。任务与证据见[开发任务](docs/design/cpp20-refactor/development-tasks.md)。
 
 ## 目录结构
 
 ```text
-music-dl/
+music-service/
   CMakeLists.txt               # 顶层 C++20 工程
   CMakePresets.json            # Windows MSVC／Linux GCC 预设与测试预设
   cmake/                       # 编译选项、依赖获取与校验、第三方适配、工具链
@@ -24,7 +24,7 @@ music-dl/
     api/                       # 控制 HTTP 入口
     media_server/              # 文件与媒体入口
     event_server/              # SSE 入口
-    server/                    # music-dl-server 可执行程序：main 与依赖组装
+    server/                    # music-service 可执行程序：main 与依赖组装
   tests/                       # 依赖、单元、集成与契约测试及去凭证样本
   config/                      # 配置键名说明与无秘密的示例配置
   packaging/                   # Windows、Linux 与 Docker 交付
@@ -60,7 +60,7 @@ ctest --preset linux-gcc-debug
 - Debug 预设默认开启测试；Release 预设（windows-msvc-release、linux-gcc-release）不构建测试。构建目录为 `out/build/<预设名>`，按系统、编译器与配置隔离。Linux 使用当前主机架构，ARM64 等发布组合须单独验证。
 - 开发机差异放在已忽略的 CMakeUserPresets.json，不提交绝对工具链路径。
 - Windows 上使用官方 CMake 或 Visual Studio 自带的 CMake。MSYS2／MinGW 发行的 cmake 内置 curl 不带 CA 证书，下载依赖会失败；MinGW 不是支持的工具链。
-- 测试通过只说明已实现部分正确，不代表服务、跨平台运行或发布验收；当前还没有 music-dl-server 可执行程序。
+- 测试通过只说明已实现部分正确，不代表服务、跨平台运行或发布验收；当前还没有 music-service 可执行程序。
 
 ## 文档入口
 

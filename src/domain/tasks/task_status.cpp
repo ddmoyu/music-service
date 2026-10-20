@@ -3,7 +3,7 @@
 #include <array>
 #include <string>
 
-namespace music_dl::domain {
+namespace music_service::domain {
 
 namespace {
 
@@ -136,4 +136,4 @@ Result<CancelAction> decide_cancel(TaskStatus status) {
     return Error{ErrorCode::internal, "unknown task status", false, {}};
 }
 
-} // namespace music_dl::domain
+} // namespace music_service::domain

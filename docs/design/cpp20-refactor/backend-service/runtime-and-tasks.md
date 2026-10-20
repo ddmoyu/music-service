@@ -135,7 +135,7 @@ admission 延后不保存短期签名 URL 或秘密；必要时按持久 ref 重
 1. 读取 normalized_intent，按固定 AccountBinding 租用最新有效授权版本，记录本次 AuthIdentityKey；不跟随默认账号变化。
 2. 根据原始 ref／持久手动目标获取必要上下文，执行品质及固定的换源策略，每次具体上游操作单独入场。
 3. 检查资源是否试听、品质是否满足、大小与空间是否允许；获得一致性证据。
-4. 分配目标目录内 `.music-dl-work/{task_id}/`，打开唯一临时文件。
+4. 分配目标目录内 `.music-service-work/{task_id}/`，打开唯一临时文件。
 5. 按 actual_track.source、实际 origin 和账号组取得下载租约，再协商 Range 和流式写盘，检查大小上限与短响应，周期性更新进度和检查点。
 6. 释放下载网络额度，再将必要解密、验证、标签处理投给 processing 池。
 7. 完成前最后检查取消；通过条件转换进入 finalizing，写发布意图。

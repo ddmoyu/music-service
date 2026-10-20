@@ -10,7 +10,7 @@
 #include <string>
 #include <string_view>
 
-namespace music_dl::infrastructure::config {
+namespace music_service::infrastructure::config {
 
 // What this binary was built with. Enabling something the build lacks fails startup.
 struct BuildCapabilities {
@@ -31,9 +31,9 @@ using EnvironmentLookup = std::function<std::optional<std::string>(std::string_v
 std::optional<std::string> process_environment(std::string_view name);
 
 struct LoadOptions {
-    // From --config; wins over MUSIC_DL_CONFIG.
+    // From --config; wins over MUSIC_SERVICE_CONFIG.
     std::optional<std::filesystem::path> config_file;
-    // From --data-dir; wins over MUSIC_DL_DATA_DIR and the file.
+    // From --data-dir; wins over MUSIC_SERVICE_DATA_DIR and the file.
     std::optional<std::filesystem::path> data_dir;
     // Base for relative paths given on the command line or in the environment.
     std::filesystem::path working_directory;
@@ -41,7 +41,7 @@ struct LoadOptions {
     BuildCapabilities build;
 };
 
-// Applies built-in defaults, the JSON file, the listed MUSIC_DL_* variables and the
+// Applies built-in defaults, the JSON file, the listed MUSIC_SERVICE_* variables and the
 // command-line overrides, in that order, then validates. Relative paths in the file
 // resolve against the file's directory; relative paths from the environment or the
 // command line resolve against working_directory. Unknown keys, wrong types and
@@ -59,4 +59,4 @@ load_service_config_text(std::string_view json_text, const std::filesystem::path
 domain::Result<void> validate_service_config(const application::config::ServiceConfig& config,
                                              const BuildCapabilities& build);
 
-} // namespace music_dl::infrastructure::config
+} // namespace music_service::infrastructure::config

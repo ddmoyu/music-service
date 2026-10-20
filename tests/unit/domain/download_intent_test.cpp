@@ -2,12 +2,12 @@
 
 #include "domain/tasks/download_intent.hpp"
 
-using namespace music_dl::domain;
-using music_dl::test::anonymous;
-using music_dl::test::source;
-using music_dl::test::track;
-using music_dl::test::unwrap;
-using music_dl::test::user;
+using namespace music_service::domain;
+using music_service::test::anonymous;
+using music_service::test::source;
+using music_service::test::track;
+using music_service::test::unwrap;
+using music_service::test::user;
 
 namespace {
 

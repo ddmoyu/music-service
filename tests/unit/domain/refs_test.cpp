@@ -4,7 +4,7 @@
 
 #include <string>
 
-using namespace music_dl::domain;
+using namespace music_service::domain;
 
 TEST_CASE("source ids follow the open lowercase format", "[domain][refs]") {
     CHECK(SourceId::parse("kuwo"));
@@ -36,11 +36,11 @@ TEST_CASE("platform ids are opaque UTF-8 strings", "[domain][refs]") {
     CHECK_FALSE(PlatformId::parse("\xC0\xAF"));     // overlong '/'
     CHECK_FALSE(PlatformId::parse("\xED\xA0\x80")); // UTF-16 surrogate
 
-    CHECK(music_dl::test::unwrap(PlatformId::parse("00123")).value() == "00123");
+    CHECK(music_service::test::unwrap(PlatformId::parse("00123")).value() == "00123");
 }
 
 TEST_CASE("track refs compare by source and id", "[domain][refs]") {
-    using music_dl::test::track;
+    using music_service::test::track;
     CHECK(track("kuwo", "1") == track("kuwo", "1"));
     CHECK(track("kuwo", "1") != track("kuwo", "01"));
     CHECK(track("kuwo", "1") != track("qq", "1"));

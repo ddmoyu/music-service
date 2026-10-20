@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-namespace music_dl::application::ports {
+namespace music_service::application::ports {
 
 enum class HttpMethod { get, head, post };
 
@@ -78,4 +78,4 @@ public:
                                                      const ChunkConsumer& on_chunk) = 0;
 };
 
-} // namespace music_dl::application::ports
+} // namespace music_service::application::ports

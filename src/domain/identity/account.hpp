@@ -7,7 +7,7 @@
 #include <optional>
 #include <string>
 
-namespace music_dl::domain {
+namespace music_service::domain {
 
 enum class AccountMode { anonymous, application, user };
 
@@ -87,4 +87,4 @@ private:
     Versions versions_;
 };
 
-} // namespace music_dl::domain
+} // namespace music_service::domain

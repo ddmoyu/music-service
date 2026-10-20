@@ -1,6 +1,6 @@
 # Adapters for configuration, observability and (later) transport, storage, files and secrets.
 # transport uses cpp-httplib with Mbed TLS, storage uses SQLite, config uses JSON.
-add_library(music_dl_infrastructure STATIC
+add_library(music_service_infrastructure STATIC
     config/address.cpp
     config/config_loader.cpp
     config/config_validate.cpp
@@ -8,13 +8,13 @@ add_library(music_dl_infrastructure STATIC
     observability/logger.cpp
     observability/redaction.cpp
 )
-add_library(music_dl::infrastructure ALIAS music_dl_infrastructure)
-target_link_libraries(music_dl_infrastructure
+add_library(music_service::infrastructure ALIAS music_service_infrastructure)
+target_link_libraries(music_service_infrastructure
     PUBLIC
-        music_dl::application
+        music_service::application
     PRIVATE
-        music_dl::project_warnings
-        music_dl::third_party_httplib
-        music_dl::third_party_sqlite
+        music_service::project_warnings
+        music_service::third_party_httplib
+        music_service::third_party_sqlite
         nlohmann_json::nlohmann_json
 )

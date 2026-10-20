@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <array>
 
-using namespace music_dl::domain;
+using namespace music_service::domain;
 
 namespace {
 
@@ -25,7 +25,7 @@ TEST_CASE("defaults are standard, strict and no preview", "[domain][quality]") {
 
 TEST_CASE("quality names parse and round-trip", "[domain][quality]") {
     for (const auto quality : {Quality::standard, Quality::high, Quality::lossless, Quality::hires}) {
-        CHECK(music_dl::test::unwrap(parse_quality(to_string(quality))) == quality);
+        CHECK(music_service::test::unwrap(parse_quality(to_string(quality))) == quality);
     }
     CHECK_FALSE(parse_quality("HIGH")); // enums are case sensitive
     CHECK_FALSE(parse_quality_policy("lower"));

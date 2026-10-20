@@ -2,7 +2,7 @@
 
 更新：2026-10-20。状态：工程骨架已初始化，开发任务已拆分，以下业务设计尚未实现。
 
-本项目是纯后端，不包含 GUI。独立常驻进程 `music-dl-server` 通过 HTTP 服务网页、Electron、Tauri、Qt、Win32 和 CLI 等外部客户端；必须支持跨平台与 Docker 部署，不依赖桌面会话或前端进程。principal 表示调用方身份，同一身份的多个客户端共享权限与任务。
+本项目是纯后端，不包含 GUI。独立常驻进程 `music-service` 通过 HTTP 服务网页、Electron、Tauri、Qt、Win32 和 CLI 等外部客户端；必须支持跨平台与 Docker 部署，不依赖桌面会话或前端进程。principal 表示调用方身份，同一身份的多个客户端共享权限与任务。
 
 ## 文档导航
 

@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-namespace music_dl::infrastructure::config {
+namespace music_service::infrastructure::config {
 
 namespace cfg = application::config;
 
@@ -266,4 +266,4 @@ domain::Result<void> validate_service_config(const cfg::ServiceConfig& config,
                          problems.take()};
 }
 
-} // namespace music_dl::infrastructure::config
+} // namespace music_service::infrastructure::config
