@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01 **已完成**，T02 **待验收**（等待 Linux CI），其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01 **已完成**，T02、T03 **待验收**（等待 Linux CI），其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,7 +262,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-T02 之后的下一项为 **T03**；端口已确定，T03～T09 可按各自前置展开，T07、T09 完成后即可并行开始 T12。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+T03 之后的下一项为 **T04** 与 **T06**（可并行）；T07、T09 完成后即可并行开始 T12。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
@@ -289,3 +289,14 @@ T02 之后的下一项为 **T03**；端口已确定，T03～T09 可按各自前�
 | Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条警告；`ctest --preset windows-msvc-debug` 45/45 通过（含 5 项依赖测试） |
 | GCC 证据（部分） | MinGW GCC 16.2 在严格警告下编译 domain 与单元测试 0 条警告，单元测试 40 项、503 个断言全部通过；Linux 证据待推送后由 CI 提供 |
 | 未覆盖 | 端口只有替身实现；真实入场账本（T06）、传输（T09）、仓储（T05）分别在对应任务实现和验收 |
+
+### T03 配置、时钟与可观测性基础：待验收（等待 Linux CI）
+
+| 项目 | 记录 |
+| --- | --- |
+| 交付 | `application/config/ServiceConfig`（配置基线全部配置组的缺省值）；`infrastructure/config`：缺省 → JSON 文件 → MUSIC_DL_* 环境变量 → 命令行的加载、路径解析与组合校验；`SystemClock`／`ManualClock`；结构化日志（JSON 行／文本／内存 sink、绑定上下文、级别过滤）与字段脱敏；客户端 request_id 校验与服务 ID 生成；计数与延迟指标接口。infrastructure 改为静态库 |
+| 覆盖的验收 | 未知键、类型错误、越界值、无效 JSON、文件不可读均在启动前失败并一次报告全部字段；端口冲突、端口 0 非 loopback、非 loopback 缺 public_urls、远程 http、构建缺失功能、未编入平台、default_sources 不合法、事件／媒体额度超过 workers−2、目标目录 ID 与 principals 均被拒绝；文件内相对路径按配置文件目录、环境变量与命令行按工作目录解析，含 BOM 与中文路径；日志中 Authorization／Cookie／token／ticket 字段、URL 查询串与票据路径段、Bearer 文本均被脱敏，`*_id`／`*_version` 保留；ManualClock 可推进且墙钟跳变不影响单调时钟 |
+| 规则补充 | 已写回配置文档与[配置键名](../../../cpp/resources/config/README.md)：JSON 键名与单位后缀、相对路径基准、端口 0 与 public_urls 规则、构建前 media／events／file_access 缺省关闭、app_profiles 在 T24 前只接受空对象 |
+| Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条警告；`ctest --preset windows-msvc-debug` 68/68 通过 |
+| GCC 证据（部分） | MinGW GCC 16.2 在严格警告下编译 domain、infrastructure 与单元测试共 21 个目标文件，0 条警告；未链接运行（该编译器构建 Mbed TLS 会崩溃）。Linux 运行证据待推送后由 CI 提供 |
+| 未覆盖 | `check-config` 等命令行入口归 T10；日志文件轮转与指标导出格式在有部署需求时补充 |
