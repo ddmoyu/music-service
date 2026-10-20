@@ -2,7 +2,7 @@
 
 服务框架暂定 cpp-httplib，Drogon 作为备选。上游客户端、TLS、平台加密和音频处理分别验证；其他网络库保留为选型参考，不与当前主方案并列推进。
 
-更新日期：2026-10-19。状态：主框架已暂定，配套选型待验证。
+更新日期：2026-10-20。状态：主框架已暂定；T01 已固定 cpp-httplib v0.62.0、Mbed TLS v3.6.7、nlohmann/json v3.12.0、SQLite 3.54.1 与 Catch2 v3.16.1，见[依赖清单](../../../cpp/cmake/dependencies/README.md)。其余配套选型待验证。
 
 主方案的模块、目录、API、控制／媒体／事件三类监听与有界任务执行细节见[后端服务详细设计](backend-service/README.md)。这里保留库能力与取舍证据；初始资源值与协议契约由详细设计维护。
 
@@ -21,9 +21,9 @@
 | 下载进度 | SSE 主动推送 + HTTP 查询 | 已确定；查询接口独立可用，支持初始状态、恢复与轮询兜底；SSE 不需要额外网络库 |
 | 普通 HTTP Client | 先验证 cpp-httplib Client | TLS 或功能必要时独立替换；仍需验证 Cookie、重定向、超时和取消 |
 | 下载传输 | 先验证 cpp-httplib 分块接收配合独立任务队列 | 验证 Range、进度、取消、资源一致性和稳定内存；必要时另配 curl |
-| TLS | 按网络库支持评估跨平台后端；Windows 可选 Schannel | 必须覆盖 Windows／Linux 与容器；Schannel 是 Windows 适配，不能作为共同实现 |
+| TLS | Mbed TLS v3.6.7（LTS），作为 cpp-httplib 后端 | 2026-10-20 在 T01 确定：纯 CMake，可在 Windows／Linux／容器以同一方式从源码构建；证书链与主机名校验行为由 T09 验证。Schannel 不再作为首轮方案 |
 | 平台加密 | 跨平台加密库；Windows CNG 可作目标适配 | 算法清单明确后再决定，各目标通过相同协议向量；不等同于 TLS 后端选择 |
-| JSON | 详细设计首轮拟用 nlohmann/json | 用于 HTTP／平台解析边界，尚未引入；业务公共模型不暴露该类型 |
+| JSON | nlohmann/json v3.12.0 | T01 已接入；用于 HTTP／平台解析边界，业务公共模型不暴露该类型 |
 | 压缩 | zlib 等按协议需求引入 | 用于压缩响应、歌词等；区分 HTTP 自动解压和业务层解压 |
 | 音频标签与属性 | TagLib；有限格式自行实现 | 候选，按 MP3、FLAC、M4A 等实际需求验证 |
 | 转码与通用媒体处理 | FFmpeg 可选扩展 | 不作为原始下载和基础标签功能的默认强制依赖 |

@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务；全部处于**未开始**状态。既有 CMake、目录和说明文件属于工程骨架，不代表任何业务任务已经完成。本轮只制定任务，不新增业务代码。
+更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01 为**待验收**（Windows 已通过，Linux 待 CI 结果），其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,4 +262,18 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-下一项可执行任务为 **T01**；T02 确定最小端口后再展开基础设施分支。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+T01 之后的下一项为 **T02**；T02 确定最小端口后再展开基础设施分支。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+
+## 实施记录
+
+### T01 构建、依赖与验证基础：待验收
+
+| 项目 | 记录 |
+| --- | --- |
+| 交付 | `cpp/cmake/dependencies`（版本、获取、提交校验）、`cpp/cmake/adapters`（cpp-httplib + Mbed TLS、SQLite）、项目编译与警告选项、测试预设、依赖测试 `tests/dependencies`、CI `.github/workflows/ci.yml`；适配模块（infrastructure、三个 HTTP 入口）已链接真实依赖目标 |
+| 选型 | cpp-httplib v0.62.0、Mbed TLS v3.6.7、nlohmann/json v3.12.0、SQLite 3.54.1、Catch2 v3.16.1；许可证、体积与选择理由见[依赖清单](../../../cpp/cmake/dependencies/README.md) |
+| Windows 证据（2026-10-20） | Windows 11 x64，MSVC 19.51.36257（VS 2026，工具集 14.51.36231），Windows SDK 10.0.28000.0，CMake 4.4.4，Ninja 1.13.2。从空目录 `cmake --preset windows-msvc-debug` 获取并校验全部依赖；构建 0 条项目警告；`ctest --preset windows-msvc-debug` 5/5 通过；windows-msvc-release 配置与构建通过 |
+| 校验失败验证 | 将 nlohmann/json 源码覆盖指向其他提交的检出，配置以 “HEAD is …, expected …” 失败 |
+| GCC 证据（部分） | MinGW GCC 16.2.0 在 `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion` 下编译项目测试文件无警告；该编译器构建 Mbed TLS 时发生内部编译器错误，MinGW 不是支持的工具链，不作为 Linux 证据 |
+| 未完成 | Linux x86_64／GCC 构建与测试：本机与 DDMOYU 均无 WSL／Docker，由 CI 的 ubuntu-24.04 任务提供证据后转为已完成。Docker 最小容器属于 T11 |
+| 已知限制 | 首次配置需要联网；MSYS2／MinGW 发行的 cmake 无法校验 HTTPS 证书，Windows 须使用官方或 VS 自带 CMake；Mbed TLS 上游 CMakeLists 有 cmake_minimum_required 弃用警告，不影响构建 |

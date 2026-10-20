@@ -7,17 +7,20 @@ endif()
 project(music_dl
     VERSION 0.1.0
     DESCRIPTION "Cross-platform music backend libraries and service"
-    LANGUAGES CXX
+    LANGUAGES C CXX
 )
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+# The project does not use C++20 modules; skip dependency scanning.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
-option(BUILD_TESTING "Enable project tests when test sources are added" OFF)
+option(BUILD_TESTING "Build project tests" OFF)
 
 include(cmake/ProjectOptions.cmake)
 include(CTest)
+include(cmake/dependencies/Dependencies.cmake)
 
 add_subdirectory(src)
 add_subdirectory(apps/server)
@@ -25,5 +28,3 @@ add_subdirectory(apps/server)
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
-
-message(STATUS "Scaffold only: no C++ sources, providers, or server binary have been implemented.")

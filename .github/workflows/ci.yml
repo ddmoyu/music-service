@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-msvc:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure, build and test
+        shell: cmd
+        working-directory: cpp
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSPATH=%%i"
+          call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          cmake --version || exit /b 1
+          where cl || exit /b 1
+          cmake --preset windows-msvc-debug || exit /b 1
+          cmake --build --preset windows-msvc-debug || exit /b 1
+          ctest --preset windows-msvc-debug || exit /b 1
+
+  linux-gcc:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build
+      - name: Configure, build and test
+        working-directory: cpp
+        run: |
+          cmake --version
+          g++ --version
+          ldd --version | head -n 1
+          cmake --preset linux-gcc-debug
+          cmake --build --preset linux-gcc-debug
+          ctest --preset linux-gcc-debug

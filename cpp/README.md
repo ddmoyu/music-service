@@ -1,6 +1,6 @@
 # C++ 后端工程
 
-当前只初始化工程结构和构建边界，没有 .cpp／.hpp、平台实现、服务入口或测试代码。第三方依赖尚未接入，配置过程不需要下载依赖。
+已完成 T01：固定版本的第三方依赖已接入（cpp-httplib + Mbed TLS、nlohmann/json、SQLite，测试用 Catch2），配置阶段联网获取并校验版本，见[依赖说明](cmake/dependencies/README.md)。尚无业务源码、平台实现或服务入口；现有测试只验证依赖本身。
 
 ## 目录与职责
 
@@ -39,27 +39,31 @@ application/tasks 归一下载意图，domain 定义指纹规则，downloads 执
 
 ## 配置与检查
 
-需要 CMake 3.30+、Ninja 和支持 C++20 的编译器。以下命令均在 cpp 目录执行：
+需要 CMake 3.30+、Ninja、Git、支持 C++20 的编译器，以及首次配置时的网络访问。以下命令均在 cpp 目录执行：
 
 ```powershell
 # Windows：先进入 x64 Native Tools / Developer PowerShell 环境，确保 cl 与 ninja 可用。
 cmake --preset windows-msvc-debug
 cmake --build --preset windows-msvc-debug
+ctest --preset windows-msvc-debug
 ```
 
 ```sh
-# Linux：需要 g++ 与 ninja。
+# Linux：需要 gcc、g++ 与 ninja。
 cmake --preset linux-gcc-debug
 cmake --build --preset linux-gcc-debug
+ctest --preset linux-gcc-debug
 ```
 
-对应 Release 预设为 windows-msvc-release 和 linux-gcc-release。预设按系统、编译器与配置隔离构建目录；Linux 使用当前主机架构，ARM64 等发布组合须单独验证。开发机差异可以通过 CMakeUserPresets.json 覆盖，不能提交绝对工具链路径。
+Debug 预设默认开启 BUILD_TESTING，Release 预设（windows-msvc-release、linux-gcc-release）不构建测试。预设按系统、编译器与配置隔离构建目录；Linux 使用当前主机架构，ARM64 等发布组合须单独验证。开发机差异可以通过 CMakeUserPresets.json 覆盖，不能提交绝对工具链路径。
 
-目前构建没有可编译的业务源文件，也不产生 music-dl-server 或安装包。CMake 配置成功只证明工程骨架和本机构建环境可用；没有运行时、跨平台功能或发布验收结论。BUILD_TESTING 可打开测试接线，但尚无真实测试。
+Windows 上应使用官方 CMake 或 Visual Studio 自带的 CMake。MSYS2／MinGW 发行的 cmake 内置 curl 不带 CA 证书，下载 SQLite 归档时会证书校验失败。MinGW 不是支持的工具链。
+
+目前不产生 music-dl-server 或安装包。依赖测试通过只证明依赖版本与工具链可用，不代表业务、跨平台运行或发布验收。CI 见仓库根目录 `.github/workflows/ci.yml`，在 Windows MSVC 与 Linux GCC 上执行同样的预设。
 
 ## 后续实现入口
 
-先完成酷我单平台闭环；外部工具、多平台和 Spotify 目录按开发计划逐步接入。工程初始化阶段不固定尚未验证的第三方库版本，不增加 GUI 或默认外部运行时。
+下一项为 T02（领域规则与最小应用端口）。先完成酷我单平台闭环；外部工具、多平台和 Spotify 目录按开发计划逐步接入，不增加 GUI 或默认外部运行时。
 
 - [模块与目录设计](../docs/design/cpp20-refactor/backend-service/modules-and-layout.md)
 - [构建与依赖规则](../docs/design/cpp20-refactor/backend-service/build-and-dependencies.md)

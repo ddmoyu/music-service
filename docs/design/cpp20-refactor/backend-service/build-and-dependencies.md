@@ -1,6 +1,6 @@
 # 构建与依赖
 
-当前已初始化 [cpp 构建骨架](../../../../cpp/README.md)，最低 CMake 设为 3.30，提供 Windows MSVC 与 Linux GCC 的 Debug／Release Ninja 预设。模块目标暂为 INTERFACE，没有业务源码、第三方下载、安装包或服务程序；后续依赖接入遵守本页规则。
+[cpp 工程](../../../../cpp/README.md)最低 CMake 为 3.30，提供 Windows MSVC 与 Linux GCC 的 Debug／Release Ninja 预设及测试预设。T01 已按本页规则接入首批依赖，具体版本与许可证见[依赖清单](../../../../cpp/cmake/dependencies/README.md)；模块目标仍为 INTERFACE，没有业务源码、安装包或服务程序。
 
 ## 基线
 
@@ -49,12 +49,12 @@
 
 | 依赖 | 接入要求 |
 | --- | --- |
-| cpp-httplib | 仅启用选定 TLS 与必要功能 |
-| nlohmann/json | 关闭自身测试、示例和非必要安装 |
-| SQLite | 验证源布局和生成工具；必要时维护 CMake adapter target |
-| TLS／协议加密 | 实现待定；第三方源码按统一规则获取 |
+| cpp-httplib | v0.62.0；不使用上游 CMakeLists（会搜索系统 OpenSSL／zlib／brotli），由 adapter 提供头文件目标并只启用 Mbed TLS；压缩暂不启用；Windows 固定 `_WIN32_WINNT=0x0A00` |
+| nlohmann/json | v3.12.0；关闭自身测试与安装 |
+| SQLite | 3.54.1 官方 amalgamation；无 Git 发布 tag，改用官方归档 + SHA3-256 校验，由 adapter 编译为静态库 |
+| TLS | Mbed TLS v3.6.7（LTS），只构建静态库；全部目标系统使用同一实现，Windows 读取系统证书库、Linux 读取系统 CA 路径。协议加密（MD5／AES 等）按平台需要另行接入 |
 | 压缩、标签 | 按功能开关获取 |
-| 测试框架 | 仅 BUILD_TESTING 时获取 |
+| 测试框架 | Catch2 v3.16.1，仅 BUILD_TESTING 时获取 |
 
 非标准上游构建入口由 cmake/adapters 处理，不散落到业务目录，不静默回退系统第三方库。首次接入在 Windows 与目标 Linux 工具链验证。
 
