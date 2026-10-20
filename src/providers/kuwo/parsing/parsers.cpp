@@ -236,14 +236,16 @@ domain::Result<SearchPage> parse_search(std::string_view body) {
         return protocol_error("search response is not a JSON object");
     }
     const auto list = document.find("abslist");
-    const auto total = document.contains("TOTAL") ? as_int(document["TOTAL"]) : std::nullopt;
-    const auto page = document.contains("PN") ? as_int(document["PN"]) : std::nullopt;
-    if (list == document.end() || !list->is_array() || !total || *total < 0 || !page || *page < 0) {
+    // Plain values with a sentinel: GCC -O2 reports reads of checked optionals here as
+    // maybe-uninitialized.
+    const std::int64_t total = document.contains("TOTAL") ? as_int(document["TOTAL"]).value_or(-1) : -1;
+    const std::int64_t page = document.contains("PN") ? as_int(document["PN"]).value_or(-1) : -1;
+    if (list == document.end() || !list->is_array() || total < 0 || page < 0) {
         return protocol_error("search response lacks abslist, TOTAL or PN");
     }
     SearchPage result;
-    result.total = static_cast<std::uint64_t>(*total);
-    result.page = static_cast<std::uint32_t>(*page);
+    result.total = static_cast<std::uint64_t>(total);
+    result.page = static_cast<std::uint32_t>(page);
     for (const auto& item : *list) {
         if (!item.is_object()) {
             return protocol_error("search item is not an object");
