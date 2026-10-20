@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T05 **已完成**，T06～T10 **待验收**（等待 Linux CI），其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T11 **已完成**，S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,7 +262,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-下一项为 **T11**（S0 集成与最小部署关口），可并行开始 **T12**（酷我标准品质协议包）。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+下一项为 **T12**（酷我标准品质协议包），T13 等 S1 任务随后按前置推进。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
@@ -332,17 +332,17 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 | Linux 证据（CI 运行 39363696302） | ubuntu-24.04，GCC 13.3.0，glibc 2.39：0 条项目警告，97/97 通过（含存储集成测试） |
 | 未覆盖 | begin_attempt、checkpoint、defer_admission 与批次在 T14／T17 实现；token 哈希算法与签发在 T08；目录绑定的启动校验在 T10；幂等记录的定期清理随运行时任务加入 |
 
-### T06 执行器、取消与统一上游入场：待验收（等待 Linux CI）
+### T06 执行器、取消与统一上游入场：已完成（2026-10-20，提交 57c8a68）
 
 | 项目 | 记录 |
 | --- | --- |
 | 交付 | `runtime` 静态库：BoundedExecutor（固定线程、有界队列，满或停止时立即 SERVICE_BUSY，任务获得 stop_token，支持停止接收／等待空闲／请求停止／join 与统计）；DeadlineTimer（单线程按单调时间触发回调，可取消，用于截止取消与冷却到期唤醒）；AdmissionLedger 实现 UpstreamAdmissionPort（全局连接、principal、source×流量类别、origin 四维一次性预留；不足时返回带受限维度与重试时刻的 Deferred；Retry-After 按来源或配额组冷却，上限 max_cooldown，只延长不缩短；租约持有账本状态，账本销毁后归还仍安全；helper 进程维度在 T26 前返回不支持）；ShutdownSequence（停止接收 → 共享软预算等待空闲 → 触发服务停止信号并丢弃未开始的排队工作 → join，报告未在预算内空闲的执行器）。入场端口新增 readiness 提示；新增配置 upstream.per_principal、upstream.per_origin 与错误码 SERVICE_BUSY |
 | 覆盖的验收 | A43 的运行时部分：来源满额时 Deferred 不阻塞，其他来源可推进；各维度独立限额；被拒请求不留部分预留；租约只归还一次（含析构与移动），多连接计量；冷却到期前延后、到期后恢复，共享配额组一起冷却（A45 的入场基础）；截止已过与未启用的 helper 明确报错；执行器满队列拒绝、停止信号传到运行中的工作、未开始的排队工作被丢弃；停机在软预算内排空并报告超时的执行器；定时器按序触发与取消 |
 | Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条警告；`ctest --preset windows-msvc-debug` 110/110 通过；涉及线程与计时的 runtime 测试连续运行 20 次无失败 |
-| GCC 证据（部分） | MinGW GCC 16.2 严格警告下编译 41 个项目目标文件 0 条警告；Linux 运行证据待推送后由 CI 提供 |
+| Linux 证据（CI 运行 39364672250） | ubuntu-24.04，GCC 13.3.0，glibc 2.39：0 条项目警告，110/110 通过；审查修正（提交 6aa2177，CI 运行 39384805494）后 120/120 通过 |
 | 未覆盖 | 入场额度与真实传输的结合（重定向逐跳入场、租约与 Transport 校验）在 T09；下载的持久延后与执行槽在 T17；共享应用配额组的配置与 helper 上界在 T24／T26 |
 
-### T07 ProviderBundle 注册与能力发现：待验收（等待 Linux CI）
+### T07 ProviderBundle 注册与能力发现：已完成（2026-10-20，提交 3ef2722）
 
 | 项目 | 记录 |
 | --- | --- |
@@ -350,10 +350,10 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 | 覆盖的验收 | 酷我占位与 4 个模拟来源（仅目录、仅音源带 Cookie 校验、仅链接解析、目录加音源）同时注册；未声明能力返回 CAPABILITY_UNSUPPORTED，未注册与禁用分别为 UNKNOWN_PROVIDER、PROVIDER_DISABLED；同一段搜索代码服务所有来源，新增来源不改调用方；构建、describe、list 不创建任何对象，首次 require 才创建且并发首用只创建一次，工厂失败可重试；重复 source、配置未编入的 source、契约版本不符、implementation 不符、options 被拒、声明无工厂、工厂未声明、端口类型错误、未知能力键、重复 profile、引用未注册 profile、校验器与 verify_credentials 不一致均在注册时失败（A41 的 T07 部分）；supports_verify 由绑定生成，刷新／应用 token 恒为 false；分页按 source 排序，游标跨调用方或筛选为 CURSOR_MISMATCH，新注册表（重启）为 CURSOR_EXPIRED；内置 source 清单可直接用于配置校验 |
 | 规则补充 | 已写回[平台模块说明](../../../src/providers/README.md)与[配置键名](../../../config/README.md)：注册失败条件、没有 options 校验器的平台只接受空对象、未在配置中出现的已编入平台按 ProviderConfig 缺省（启用）处理但不会进入 default_sources |
 | Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条警告；`ctest --preset windows-msvc-debug` 132/132 通过；providers 用例（12 项、203 个断言）连续运行 20 次无失败 |
-| GCC 证据（部分） | MinGW GCC 16.2 在严格警告下对新增源文件与测试做语法检查 0 条警告；Linux 运行证据待推送后由 CI 提供 |
+| Linux 证据（CI 运行 39390389343） | ubuntu-24.04，GCC 13.3.0，glibc 2.39：0 条项目警告，132/132 通过 |
 | 未覆盖 | availability 与当前调用方凭证摘要的投影在 T08／T10；`GET /api/v1/providers` 路由与 CLI 组装在 T10；酷我实际能力在 T12；刷新／应用 token 端口在 T24；100 个来源的规模验证在 T28 |
 
-### T08 服务身份与 Cookie 凭证基线：待验收（等待 Linux CI）
+### T08 服务身份与 Cookie 凭证基线：已完成（2026-10-20，提交 4f7c6fa，测试修正 8a0ffcb）
 
 | 项目 | 记录 |
 | --- | --- |
@@ -361,10 +361,10 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 | 覆盖的验收 | A34：撤销后引导文件仍在也不能认证，重启与再次 init 均不导入；A48 用例部分：交付文件已存在则不签发不覆盖，数据库失败后删除交付文件且无有效 token，撤销一个 token 不影响其他 token，禁用 principal 阻止认证、重新启用不复活已撤销 token，scope 必须显式、已定义且不重复；中断的 init 仅在 prn_local 无 token 时续做；A47：默认选择的设置／重复设置不增版本／A→B→A／清除／他人凭证 404／来源不符与已撤销 422／未知来源 UNKNOWN_PROVIDER／重启保留，撤销默认凭证同事务清空且不改选；A38：同 principal 同来源两个 version=1 凭证的身份键不同；A39：默认切换后已固定绑定仍租用原账号，更新后租用同一账号的新版本，校验期间凭证被更新时旧结果不写入新版本（VERSION_CONFLICT）；A06 用户凭证部分：他人凭证不可读取、伪造绑定不可租用；撤销后绑定返回 CREDENTIALS_REQUIRED 而不换账号；秘密先写新引用再条件提交，失败回收新秘密、成功后删除旧秘密，孤立秘密可回收 |
 | 规则补充 | 已写回[通用身份适配说明](../../../src/infrastructure/auth/README.md)：token 格式与哈希、交付文件规则。实现约定：Cookie 不得含控制字符（防止注入其他请求头），标签为至多 128 字节的 UTF-8；oauth2／api_key 在 T24 前返回 CAPABILITY_UNSUPPORTED；可选凭证能力在没有可用默认时退回 anonymous，并返回所读取的 selection_version；孤立秘密回收只在启动时、开始受理请求前运行 |
 | Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条警告；`ctest --preset windows-msvc-debug` 143/143 通过（新增账号集成测试 11 项） |
-| GCC 证据（部分） | MinGW GCC 16.2 在严格警告下对新增与改动的源文件及测试做语法检查 0 条警告；Linux 运行证据待推送后由 CI 提供 |
+| Linux 证据（CI 运行 39436724565） | ubuntu-24.04，GCC 13.3.0，glibc 2.39：0 条项目警告，全部用例通过。T08 推送后的 CI（运行 39391684081）在 Linux 上发现 A39 测试的缺陷：钩子在自身执行中重置 std::function，销毁正在运行的闭包后继续使用其捕获（MSVC 未暴露，GCC 段错误），已在提交 8a0ffcb 修正为一次性标志；同时消除一处 Catch2 宏嵌套引起的 -Wshadow |
 | 未覆盖 | 实例锁下的 CLI 命令、HTTP 凭证与默认选择路由、Bearer 中间件归 T10；缓存与游标的失效（含 selection_version 绑定）随 T13 的缓存实现；A06 中请求头、任务与 SSE 的隔离分别在 T09、T14、T18 复验；application 模式、应用 token 与刷新在 T24 |
 
-### T09 HTTP／TLS 上游传输：待验收（等待 Linux CI）
+### T09 HTTP／TLS 上游传输：已完成（2026-10-20，提交 25b0f08）
 
 | 项目 | 记录 |
 | --- | --- |
@@ -372,11 +372,11 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 | 覆盖的验收 | 本地 HTTPS 上游的 GET／POST 与错误状态；自签名证书链、证书主机名不符、未信任测试根时均失败且不发出请求；未登记明文端点拒绝且不联网，登记后可用，明文请求携带秘密被拒；同 origin 重定向保留 Cookie，跨 origin 重定向不带 Cookie、先归还旧租约再按新 origin 入场（A42 的传输部分），新 origin 无额度时立即交回且不等待；303 改 GET 去 body，跳数上限；HTTPS→HTTP 降级仅限登记的下载端点并剥离秘密；Retry-After 写入冷却，冷却内的请求延后；4 MiB 分块流式接收不整体缓冲，有界读取超限失败（分块与 Content-Length 两种）；消费者拒绝响应头时不读正文；响应被截断为可重试的 connection_lost；正文传输中取消、截止时间到达均结束并归还租约；租约缺失或不覆盖目标 origin 时不发请求 |
 | 规则补充 | 已写回[上游传输说明](../../../src/infrastructure/transport/README.md)与[测试 TLS 材料说明](../../../tests/fixtures/tls/README.md)。实现约定：Cookie／Authorization／Proxy-Authorization 只能放在 secret_headers；明文端点按主机＋端口＋路径前缀＋操作登记；Retry-After 只采信秒数形式 |
 | Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条项目警告（httplib.h 的 C4702 在包含处局部屏蔽）；`ctest --preset windows-msvc-debug` 158/158 通过；传输集成测试（10 项、185 个断言）连续运行 20 次无失败 |
-| GCC 证据（部分） | MinGW GCC 16.2 在严格警告下对新增与改动的源文件及测试做语法检查 0 条警告；Linux 运行证据待推送后由 CI 提供 |
-| 已知限制 | Windows 上等待响应头期间的取消不能立即中断（本地 shutdown 不唤醒阻塞等待，httplib 客户端无可中断读），要到上游应答、空闲超时（30 秒）或截止时间才返回，期间租约保持；Linux 上的即时中断待 CI 验证。暂不复用连接，每跳新建连接；CA bundle 尚无配置键，部署所需的信任根配置在 T11 确定；配置只能关闭明文端点的开关留待有平台登记时加入 |
+| Linux 证据（CI 运行 39436724565） | ubuntu-24.04，GCC 13.3.0，glibc 2.39：0 条项目警告，传输集成测试全部通过，含等待响应头期间的取消在 1.5 秒内返回（本地 shutdown 能唤醒阻塞等待）；`[online]` 用例经系统 CA 文件访问公开 HTTPS 站点通过（Windows 同一运行中经系统证书存储通过） |
+| 已知限制 | Windows 上等待响应头期间的取消不能立即中断（本地 shutdown 不唤醒阻塞等待，httplib 客户端无可中断读），要到上游应答、空闲超时（30 秒）或截止时间才返回，期间租约保持；Linux 上即时中断已由 CI 验证。暂不复用连接，每跳新建连接；CA bundle 尚无配置键，部署所需的信任根配置在 T11 确定；配置只能关闭明文端点的开关留待有平台登记时加入 |
 | 未覆盖 | 平台实际端点登记与在线协议探测在 T12；下载写盘、断点续传与传输重试策略在 T17／T29；媒体代理在 T34 |
 
-### T10 组装入口与基础 HTTP／管理 CLI：待验收（等待 Linux CI）
+### T10 组装入口与基础 HTTP／管理 CLI：已完成（2026-10-20，提交 54afdb1）
 
 | 项目 | 记录 |
 | --- | --- |
@@ -384,7 +384,19 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 | 覆盖的验收 | T08 用例经 API／CLI 可操作：init 只把明文写入引导文件、再次 init 冲突，principal 创建／列出／启停，token 签发不覆盖既有文件、明文不进控制台、列出／撤销（重复撤销成功）；A47 经 API：设置、重复不增版本、跨来源 422、他人凭证 404、撤销默认凭证同事务清空且不改选；A48：服务运行时管理命令返回 INSTANCE_LOCKED，停止后可执行；A49 基础：同 ID 改根启动与 check-config 均失败，新 ID＋旧项 accept_new_tasks=false 时两者都可用，仍被任务引用的 ID 从配置移除时启动失败、未被引用的可移除，新 ID 根不存在时失败且不创建目录；停止顺序为监听 → 服务 → 数据库 → 实例锁，日志不含 token 与 Cookie；认证、scope、CORS、413／415／400／404 与 no-store 行为 |
 | 规则补充 | 已写回[服务入口说明](../../../src/server/README.md)：命令与退出码、启动行格式、check-config 只读比对绑定、healthcheck 在端口 0 模式下的限制、已绑定但离线的目标根保留并标记不可用 |
 | Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 161/161 通过（服务集成测试 3 项、471 个断言，连续 5 次无失败）；`music-service.exe` 实机：version、init、serve（启动行、healthcheck 成功、运行中 token list 被拒、带引导 token 的 info 200）、进程结束后锁释放 |
-| GCC 证据（部分） | MinGW GCC 16.2 严格警告下对新增与改动文件语法检查 0 条警告（期间发现并修复一处 initializer_list 悬空）；Linux 运行证据待推送后由 CI 提供 |
-| 已知限制 | 媒体与 SSE 监听在相应功能实现前不启动，info 如实声明全部功能为 false；admin/download-policy 随 T17；可执行程序的信号停止只在进程内测试中验证了停机顺序，Windows 服务／systemd 集成与容器归 T11；CA bundle 仍无配置键 |
+| Linux 证据（CI 运行 39436724565） | ubuntu-24.04，GCC 13.3.0，glibc 2.39：0 条项目警告，服务集成测试全部通过；可执行程序的 SIGTERM 收尾见 T11 |
+| 已知限制 | 媒体与 SSE 监听在相应功能实现前不启动，info 如实声明全部功能为 false；admin/download-policy 随 T17；Windows 服务／systemd 集成未做（T37）；CA bundle 仍无配置键 |
 | 未覆盖 | 搜索、下载、文件等业务路由分别在 T13～T19；Linux／容器运行与部署证据在 T11 |
+
+### T11 S0 集成与最小部署关口：已完成（2026-10-20，提交 ce106f0、17c6c85）
+
+| 项目 | 记录 |
+| --- | --- |
+| 交付 | `packaging/docker`：多阶段 Dockerfile（ubuntu:24.04 按 digest `sha256:68ee2200…33ac` 固定；构建阶段 pip 安装 CMake 3.31.6／Ninja 1.13.0；运行镜像只含剥离符号的程序与 ca-certificates，uid 10001 非 root，`/data`、`/downloads` 卷，exec 形式 ENTRYPOINT，HEALTHCHECK 调用 `healthcheck` 子命令）与容器配置；`packaging/{windows,linux,docker}` 运行冒烟脚本；`[online]` 用例经系统信任根访问公开 HTTPS；CI 增加冒烟、在线 TLS 与容器任务；ProcessHost 支持 logging.format=text |
+| Windows x64／MSVC | 本机：Windows 11 Pro 10.0.26200 x64，MSVC 19.51.36257，`cmake --preset windows-msvc-release`（官方 CMake 4.4.4）构建 0 条警告，程序 3.2 MB，依赖 kernel32、ws2_32、crypt32、bcrypt、VC++ 2015-2022 运行库（MSVCP140／VCRUNTIME140）与 UCRT，无 user32 等界面依赖；release 与 debug 程序各运行 `smoke.ps1` 通过。CI（运行 39436724565，windows-2025，Windows NT 10.0.26100 x64）：测试全部通过，`[online]` 经系统证书存储通过，`smoke.ps1` 通过 |
+| Linux x86_64／GCC | CI（运行 39436724565，ubuntu-24.04，Linux 6.17 x86_64，GCC 13.3.0，glibc 2.39）：0 条项目警告，测试 162/162 通过；程序动态依赖 libstdc++、libgcc_s、libc、libm；`[online]` 经系统 CA 文件通过；`smoke.sh`：init、serve 就绪、healthcheck、带 token 200／无 token 401、运行中管理命令被拒，SIGTERM 后退出码 0，停机顺序监听 → 服务 → 数据库 → 实例锁，之后管理命令可执行 |
+| 容器 | CI（运行 39435328360 与 39436724565，linux/amd64）：镜像 85 MB，用户 music-service；数据卷上 init，健康检查 healthy，发布端口带 token 访问，容器内管理命令被拒；`docker stop` 退出码 0 且停机顺序完整；删除容器后用同一卷重建再次 healthy，原 token 仍有效 |
+| 覆盖的验收 | 无前端、桌面会话或音频设备时三种目标均可启动、健康、停止；入口与配置一致（控制入口；媒体与 SSE 在功能实现前不启动，info 如实声明）；证书来源、运行库、架构与命令已记录；运行验证均在目标环境实际执行，未以编译或交叉编译代替 |
+| 过程问题 | 首版 Linux 冒烟脚本把 shell 函数放到后台，SIGTERM 发给了子 shell；随后清理钩子以空 PID 执行 `kill 0`，信号打到整个进程组导致 CI 运行器被停（运行 39435328360），提交 17c6c85 修正 |
+| 已知限制 | Windows 上未验证可执行程序收到 Ctrl+C 后的收尾（PowerShell 无法向后台进程发送控制台事件；停机顺序由进程内测试覆盖，冒烟脚本验证强制结束后锁释放与重启）；Windows 服务、systemd、Compose 示例、arm64 镜像与 NAS 未做，归 T37～T39；CA bundle 配置键仍未加入，目前三种目标都使用系统信任根 |
 
