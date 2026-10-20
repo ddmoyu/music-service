@@ -49,7 +49,9 @@ FetchContent_Declare(music_service_json
 FetchContent_Declare(music_service_sqlite
     URL "${MUSIC_SERVICE_SQLITE_URL}"
     URL_HASH "SHA3_256=${MUSIC_SERVICE_SQLITE_SHA3_256}"
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    # Extraction time, not the archive time: an upgraded source must look newer than
+    # objects built from the previous version, or Ninja would keep the old objects.
+    DOWNLOAD_EXTRACT_TIMESTAMP FALSE
     SOURCE_SUBDIR "${MUSIC_SERVICE_NO_UPSTREAM_CMAKE}"
 )
 
@@ -58,7 +60,9 @@ FetchContent_MakeAvailable(music_service_mbedtls music_service_httplib music_ser
 music_service_verify_git_dependency(mbedtls "${music_service_mbedtls_SOURCE_DIR}" "${MUSIC_SERVICE_MBEDTLS_COMMIT}")
 music_service_verify_git_dependency(cpp-httplib "${music_service_httplib_SOURCE_DIR}" "${MUSIC_SERVICE_HTTPLIB_COMMIT}")
 music_service_verify_git_dependency(nlohmann-json "${music_service_json_SOURCE_DIR}" "${MUSIC_SERVICE_JSON_COMMIT}")
-message(STATUS "Dependency sqlite: ${MUSIC_SERVICE_SQLITE_VERSION}, archive hash verified by FetchContent")
+# The archive hash only covers downloads; the file hashes also cover source overrides.
+music_service_verify_file_hashes("sqlite ${MUSIC_SERVICE_SQLITE_VERSION}"
+    "${music_service_sqlite_SOURCE_DIR}" ${MUSIC_SERVICE_SQLITE_FILE_SHA3_256})
 
 include("${PROJECT_SOURCE_DIR}/cmake/adapters/httplib.cmake")
 include("${PROJECT_SOURCE_DIR}/cmake/adapters/sqlite.cmake")

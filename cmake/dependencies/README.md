@@ -12,8 +12,8 @@
 
 ## 规则
 
-- Git 依赖使用 `GIT_SHALLOW`、发布 tag，并在配置后比对实际 HEAD 与期望提交（tag 解引用后的 commit）；不一致即配置失败。`FETCHCONTENT_SOURCE_DIR_<NAME>` 离线覆盖同样要求是位于期望提交的 Git 检出。
-- SQLite 官方不提供 Git 发布 tag，使用官方 amalgamation 归档与站点公布的 SHA3-256，由 FetchContent 校验哈希。
+- Git 依赖使用 `GIT_SHALLOW`、发布 tag，并在每次配置时校验：实际 HEAD 等于期望提交（tag 解引用后的 commit），工作区没有修改、暂存或未跟踪文件，子模块均已初始化且位于记录的提交、内部无修改。任一不符即配置失败。`FETCHCONTENT_SOURCE_DIR_<NAME>` 离线覆盖与复用的构建目录同样适用。
+- SQLite 官方不提供 Git 发布 tag，使用官方 amalgamation 归档：下载时由 FetchContent 校验站点公布的归档 SHA3-256；此外每次配置都校验 `sqlite3.c`、`sqlite3.h` 的固定 SHA3-256（[Versions.cmake](Versions.cmake)），因此源码覆盖不能绕过版本校验。解压使用当前时间而非归档内时间，升级后的源码总比旧目标文件新，Ninja 会重新编译。
 - cpp-httplib 不使用其自带 CMakeLists（会搜索系统 OpenSSL、zlib、brotli），由 [adapters/httplib.cmake](../adapters/httplib.cmake) 提供头文件目标并显式启用 Mbed TLS；压缩暂不启用。SQLite 由 [adapters/sqlite.cmake](../adapters/sqlite.cmake) 编译为静态库。
 - 升级时同时修改 tag 与 commit，并在 Windows 与 Linux 重新运行依赖测试。
 

@@ -24,6 +24,13 @@ set(MUSIC_SERVICE_MBEDTLS_COMMIT "068ff080b369adfac81509f9b57b2afabaf82dc5")
 set(MUSIC_SERVICE_SQLITE_VERSION "3.54.1")
 set(MUSIC_SERVICE_SQLITE_URL "https://sqlite.org/2026/sqlite-amalgamation-3540100.zip")
 set(MUSIC_SERVICE_SQLITE_SHA3_256 "92281c86e2957f9b9305890f9ac04204caa7b677cc868dc326d942689df28e30")
+# Hashes of the compiled files inside that archive. They are checked on every configure,
+# including FETCHCONTENT_SOURCE_DIR_MUSIC_SERVICE_SQLITE overrides, which skip the
+# archive download and its hash.
+set(MUSIC_SERVICE_SQLITE_FILE_SHA3_256
+    "sqlite3.c=e2b869d3003b33c942b7dd7063604fbc53553e1b66609570df39b9b7b558ee81"
+    "sqlite3.h=15ef3f5dbc4a7a980f828fa0d1e473cee5a124e7bb77e9bc70fc0bfa3f9a2af8"
+)
 
 # Catch2 v3: test framework, fetched only when BUILD_TESTING is ON. BSL-1.0.
 set(MUSIC_SERVICE_CATCH2_REPOSITORY "https://github.com/catchorg/Catch2.git")

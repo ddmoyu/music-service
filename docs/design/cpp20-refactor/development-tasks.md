@@ -278,6 +278,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 | Linux 证据（CI 运行 39358091883） | GitHub Actions ubuntu-24.04 x86_64，GCC 13.3.0，glibc 2.39，CMake 3.31.6：全部依赖校验通过，构建 0 条项目警告，`ctest --preset linux-gcc-debug` 5/5 通过；同一运行的 windows-2025（MSVC 19.51.36260）5/5 通过 |
 | 后续 | Linux ARM64 与 Docker 最小容器属于 T11 |
 | 已知限制 | 首次配置需要联网；MSYS2／MinGW 发行的 cmake 无法校验 HTTPS 证书，Windows 须使用官方或 VS 自带 CMake；Mbed TLS 上游 CMakeLists 有 cmake_minimum_required 弃用警告，不影响构建 |
+| 审查修正（2026-10-20） | 外部审查发现 3 处构建可重复性问题并均已复现后修复：SQLite 解压保留归档时间导致升级后 Ninja 不重编（改为解压时间）；SQLite 源码覆盖绕过归档哈希却仍报告已校验（新增 sqlite3.c／sqlite3.h 固定文件哈希，每次配置校验）；Git 依赖只比对 HEAD、未发现工作区修改（新增工作区、暂存、未跟踪文件与子模块检查）。修复后被篡改的源码与覆盖目录均在配置阶段失败，干净构建 110/110 通过 |
 
 ### T02 领域规则与最小应用端口：已完成（2026-10-20，提交 32cde52）
 
