@@ -20,6 +20,11 @@ namespace music_service::providers {
 
 namespace ports = application::ports;
 
+// Shared services handed to every factory.
+struct ProviderServices {
+    std::shared_ptr<ports::UpstreamHttp> upstream;
+};
+
 // The listing types live with the ProviderDirectory port.
 using ports::AuthMethodView;
 using ports::CapabilityView;
@@ -40,7 +45,8 @@ public:
     // ProviderConfig defaults; configured sources without a bundle are rejected.
     static domain::Result<std::shared_ptr<const ProviderRegistry>>
     build(std::vector<ports::ProviderBundle> bundles,
-          const std::map<std::string, application::config::ProviderConfig>& config);
+          const std::map<std::string, application::config::ProviderConfig>& config,
+          ProviderServices services = {});
 
     ~ProviderRegistry() override;
     ProviderRegistry(const ProviderRegistry&) = delete;

@@ -3,6 +3,7 @@
 #include "application/ports/providers/auth.hpp"
 #include "application/ports/providers/provider.hpp"
 #include "application/ports/transport/http_transport.hpp"
+#include "application/ports/transport/upstream_http.hpp"
 #include "domain/assets/quality.hpp"
 #include "domain/catalog/refs.hpp"
 #include "domain/result.hpp"
@@ -95,6 +96,11 @@ struct AuthField {
 struct ProviderSetup {
     domain::SourceId source;
     std::string options_json; // already accepted by the bundle's options validator
+    // Every network call goes through it: shared admission, transport and TLS rules.
+    // Empty in setups that never touch the network (tests of offline capabilities).
+    std::shared_ptr<UpstreamHttp> upstream{};
+    // providers.<source>.rate_limit_group; empty means the source itself.
+    std::string rate_limit_group{};
 };
 
 template <class Interface>

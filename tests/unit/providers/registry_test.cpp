@@ -80,7 +80,7 @@ std::vector<std::string> sources_of(const providers::ProviderListPage& page) {
 
 } // namespace
 
-TEST_CASE("the built-in manifest registers the Kuwo placeholder", "[providers]") {
+TEST_CASE("the built-in manifest registers Kuwo", "[providers]") {
     const auto sources = providers::builtin_sources();
     CHECK(sources.count("kuwo") == 1);
 
@@ -88,9 +88,15 @@ TEST_CASE("the built-in manifest registers the Kuwo placeholder", "[providers]")
     const auto kuwo = unwrap(registry->describe("kuwo"));
     CHECK(kuwo.enabled);
     CHECK(kuwo.execution_mode == ports::ExecutionMode::native);
-    CHECK(kuwo.capabilities.empty()); // nothing is claimed before T12
-    CHECK(registry->require<ports::ITrackSearch>("kuwo").error().code ==
-          domain::ErrorCode::capability_unsupported);
+    CHECK(kuwo.supports("search_tracks"));
+    CHECK(kuwo.supports("track_detail"));
+    CHECK(kuwo.supports("parse_links"));
+    CHECK(kuwo.supports("resolve_audio"));
+    CHECK_FALSE(kuwo.supports("lyrics"));
+    CHECK(kuwo.auth_methods.empty()); // standard quality needs no account
+    // Networked capabilities need the upstream client; link parsing does not.
+    CHECK(registry->require<ports::ITrackSearch>("kuwo").error().code == domain::ErrorCode::internal);
+    CHECK(registry->require<ports::ILinkParser>("kuwo").has_value());
 
     // The same source list drives configuration validation.
     infrastructure::config::BuildCapabilities build_caps;
@@ -160,7 +166,7 @@ TEST_CASE("catalog, audio and link sources register side by side", "[providers]"
     CHECK(audio->actual_track.source.value() == "both");
 
     // The same search code serves every source; sources without the capability fail alone.
-    CHECK(search_titles(*registry, {"cat", "both", "aud", "kuwo"}) ==
+    CHECK(search_titles(*registry, {"cat", "both", "aud", "lnk"}) ==
           std::vector<std::string>{"cat:hello", "both:hello", "CAPABILITY_UNSUPPORTED",
                                    "CAPABILITY_UNSUPPORTED"});
 }

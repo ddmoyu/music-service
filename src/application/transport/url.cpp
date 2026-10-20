@@ -208,4 +208,21 @@ domain::Result<Url> Url::resolve(std::string_view reference) const {
     return parse(origin() + normalized);
 }
 
+std::string encode_query_component(std::string_view text) {
+    static constexpr char digits[] = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(text.size() * 3);
+    for (const char c : text) {
+        const auto u = static_cast<unsigned char>(c);
+        if (is_alpha(c) || is_digit(c) || c == '-' || c == '.' || c == '_' || c == '~') {
+            out.push_back(c);
+        } else {
+            out.push_back('%');
+            out.push_back(digits[u >> 4]);
+            out.push_back(digits[u & 0x0F]);
+        }
+    }
+    return out;
+}
+
 } // namespace music_service::application::transport

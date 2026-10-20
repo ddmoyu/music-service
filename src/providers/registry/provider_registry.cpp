@@ -355,7 +355,8 @@ ProviderRegistry::~ProviderRegistry() = default;
 
 domain::Result<std::shared_ptr<const ProviderRegistry>>
 ProviderRegistry::build(std::vector<ports::ProviderBundle> bundles,
-                        const std::map<std::string, application::config::ProviderConfig>& config) {
+                        const std::map<std::string, application::config::ProviderConfig>& config,
+                        ProviderServices services) {
     Problems problems;
     std::set<std::string_view> seen;
     for (const auto& bundle : bundles) {
@@ -406,7 +407,9 @@ ProviderRegistry::build(std::vector<ports::ProviderBundle> bundles,
                   [](const auto& a, const auto& b) { return a.auth_profile < b.auth_profile; });
 
         auto entry = std::unique_ptr<Entry>(
-            new Entry{std::move(view), ports::ProviderSetup{bundle.source, settings.options_json},
+            new Entry{std::move(view),
+                      ports::ProviderSetup{bundle.source, settings.options_json, services.upstream,
+                                           settings.rate_limit_group.value_or("")},
                       std::move(bundle.plaintext_endpoints), {}, {}});
         for (auto& binding : bundle.bindings) {
             auto key = binding.key();

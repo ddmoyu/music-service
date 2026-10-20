@@ -44,4 +44,8 @@ private:
     std::string target_;
 };
 
+// Percent-encodes a query component as UTF-8 bytes; only RFC 3986 unreserved
+// characters (A-Z a-z 0-9 - . _ ~) stay literal.
+[[nodiscard]] std::string encode_query_component(std::string_view text);
+
 } // namespace music_service::application::transport

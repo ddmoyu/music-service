@@ -3,6 +3,7 @@
 #include "api/httplib/control_api.hpp"
 #include "application/accounts/credential_service.hpp"
 #include "application/accounts/identity_admin.hpp"
+#include "application/transport/upstream_client.hpp"
 #include "infrastructure/auth/access_tokens.hpp"
 #include "infrastructure/filesystem/paths.hpp"
 #include "infrastructure/secrets/file_secret_store.hpp"
@@ -66,6 +67,7 @@ struct ProcessHost::State {
     std::shared_ptr<const providers::ProviderRegistry> registry;
     std::shared_ptr<runtime::AdmissionLedger> admission;
     std::shared_ptr<infrastructure::transport::HttplibTransport> transport;
+    std::shared_ptr<application::transport::UpstreamClient> upstream;
     std::unique_ptr<api::ControlApi> control;
 
     StartupReport report;
@@ -119,9 +121,10 @@ struct ProcessHost::State {
                 control.reset();
             }
             log.info("shutdown.listeners_stopped");
+            registry.reset(); // capability objects hold the upstream client
+            upstream.reset();
             transport.reset();
             admission.reset();
-            registry.reset();
             credentials.reset();
             authenticator.reset();
             codec.reset();
@@ -217,8 +220,21 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
         }
     }
 
+    state->admission = std::make_shared<runtime::AdmissionLedger>(admission_limits(config), clock);
+    infrastructure::transport::HttplibTransportOptions transport_options;
+    transport_options.connect_timeout = config.upstream.connect_timeout;
+    transport_options.max_response_bytes = static_cast<std::size_t>(config.upstream.max_response_bytes);
+    transport_options.redirect_max = config.upstream.redirect_max;
+    auto transport = infrastructure::transport::HttplibTransport::create(transport_options);
+    if (!transport) {
+        return fail(std::move(transport).error(), "transport");
+    }
+    state->transport = std::move(transport).value();
+    state->upstream = std::make_shared<application::transport::UpstreamClient>(state->admission, state->transport, clock);
+
     auto registry = providers::ProviderRegistry::build(
-        options.bundles ? std::move(*options.bundles) : providers::builtin_bundles(), config.providers);
+        options.bundles ? std::move(*options.bundles) : providers::builtin_bundles(), config.providers,
+        providers::ProviderServices{state->upstream});
     if (!registry) {
         return fail(std::move(registry).error(), "providers");
     }
@@ -233,17 +249,6 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
     if (reclaimed.value() > 0) {
         state->log.info("startup.orphan_secrets_removed", {{"count", static_cast<std::uint64_t>(reclaimed.value())}});
     }
-
-    state->admission = std::make_shared<runtime::AdmissionLedger>(admission_limits(config), clock);
-    infrastructure::transport::HttplibTransportOptions transport_options;
-    transport_options.connect_timeout = config.upstream.connect_timeout;
-    transport_options.max_response_bytes = static_cast<std::size_t>(config.upstream.max_response_bytes);
-    transport_options.redirect_max = config.upstream.redirect_max;
-    auto transport = infrastructure::transport::HttplibTransport::create(transport_options);
-    if (!transport) {
-        return fail(std::move(transport).error(), "transport");
-    }
-    state->transport = std::move(transport).value();
 
     api::ControlApiOptions api_options{config.control, config.http, config.cors, config.catalog,
                                        config.download_limits, config.media_limits, {}};

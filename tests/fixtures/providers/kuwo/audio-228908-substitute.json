@@ -1,0 +1,17 @@
+{
+ "code": 200,
+ "data": {
+  "bitrate": 1,
+  "duration": 11,
+  "format": "mp3",
+  "p2p_audiosourceid": "47304245730106trackmediaM5000004Gmy54cGDqKmp3",
+  "rid": 260839262,
+  "sig": "0",
+  "source": "kwplayercar_ar_6.0.0.9_B_jiakong_vh.apk",
+  "type": 1,
+  "url": "http://kw-er.kuwo.cn/0123456789abcdef0123456789abcdef/00000000/resource/30106/trackmedia/M5000004Gmy54cGDqK.mp3?sanitized=1",
+  "user": "C_APK_guanwang_0"
+ },
+ "locationid": "1",
+ "msg": "ok"
+}

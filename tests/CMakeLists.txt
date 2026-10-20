@@ -22,8 +22,9 @@ target_compile_definitions(music_service_dependency_tests PRIVATE
 )
 catch_discover_tests(music_service_dependency_tests DISCOVERY_MODE PRE_TEST)
 
-# Domain rules, application ports, the provider registry and infrastructure basics.
-# Uses temporary directories but no network or databases.
+# Domain rules, application ports, the provider registry, platform protocol packages
+# against recorded fixtures and infrastructure basics. Uses temporary directories but
+# no network or databases (opt-in [online-*] cases aside).
 add_executable(music_service_unit_tests
     unit/domain/account_test.cpp
     unit/domain/download_intent_test.cpp
@@ -37,6 +38,7 @@ add_executable(music_service_unit_tests
     unit/infrastructure/filesystem_test.cpp
     unit/infrastructure/observability_test.cpp
     unit/infrastructure/secret_store_test.cpp
+    unit/providers/kuwo_test.cpp
     unit/providers/registry_test.cpp
     unit/runtime/admission_ledger_test.cpp
     unit/runtime/executor_test.cpp
@@ -49,6 +51,9 @@ target_link_libraries(music_service_unit_tests PRIVATE
     nlohmann_json::nlohmann_json
     music_service::project_warnings
     Catch2::Catch2WithMain
+)
+target_compile_definitions(music_service_unit_tests PRIVATE
+    MUSIC_SERVICE_TEST_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
 )
 catch_discover_tests(music_service_unit_tests DISCOVERY_MODE PRE_TEST)
 
