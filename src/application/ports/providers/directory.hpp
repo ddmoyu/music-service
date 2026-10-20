@@ -2,10 +2,13 @@
 
 #include "application/ports/providers/auth.hpp"
 #include "application/ports/providers/bundle.hpp"
+#include "domain/assets/quality.hpp"
+#include "domain/catalog/refs.hpp"
 #include "domain/result.hpp"
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -21,11 +24,68 @@ struct AuthProfileInfo {
     bool supports_verify{false};
 };
 
+// Secret-free description of one registered capability.
+struct CapabilityView {
+    CapabilitySpec spec;
+    bool enabled{false}; // the source is enabled; supported is implied by being listed
+};
+
+// One implemented auth profile. supports_* come from actual bindings, never from kind.
+struct AuthMethodView {
+    std::string auth_profile;
+    CredentialKind kind{CredentialKind::cookie};
+    std::uint32_t version{1};
+    std::vector<AuthField> input_fields;
+    std::vector<std::string> scopes;
+    bool supports_verify{false};
+    bool supports_refresh{false};           // refresh ports arrive with T24
+    bool supports_application_token{false}; // application tokens arrive with T24
+};
+
+struct ProviderView {
+    domain::SourceId source;
+    std::string name;
+    bool enabled{false};
+    std::string implementation_id;
+    std::string implementation_version;
+    ExecutionMode execution_mode{ExecutionMode::native};
+    std::vector<CapabilityView> capabilities; // sorted by key
+    std::vector<AuthMethodView> auth_methods; // sorted by auth_profile
+    std::vector<domain::Quality> quality_hints;
+
+    [[nodiscard]] bool supports(std::string_view key) const {
+        for (const auto& capability : capabilities) {
+            if (capability.spec.key == key) {
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
+struct ProviderListQuery {
+    std::string principal_id;              // the cursor is bound to it
+    std::optional<std::string> capability; // only sources that support this key
+    std::optional<bool> enabled;
+    std::uint32_t limit{50}; // 1..100
+    std::optional<std::string> cursor;
+};
+
+struct ProviderListPage {
+    std::vector<ProviderView> items;
+    std::optional<std::string> next_cursor;
+};
+
 // Read-only view of the registered platforms that application services need for
-// account handling, without depending on the registry implementation.
+// account handling and the HTTP entry, without depending on the registry implementation.
 class ProviderDirectory {
 public:
     virtual ~ProviderDirectory() = default;
+
+    // Secret-free description; UNKNOWN_PROVIDER for sources that are not registered.
+    virtual domain::Result<ProviderView> describe(std::string_view source) const = 0;
+    // Registered sources in source order, paged; never touches the network.
+    virtual domain::Result<ProviderListPage> list(const ProviderListQuery& query) const = 0;
 
     // UNKNOWN_PROVIDER when the source is not registered. Disabled sources exist.
     virtual domain::Result<void> check_source(std::string_view source) const = 0;

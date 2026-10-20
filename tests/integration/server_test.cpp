@@ -1,0 +1,481 @@
+// The music-service process in-process: command line, offline identity management,
+// ProcessHost startup and shutdown order, destination bindings and the control HTTP
+// API end to end over loopback.
+
+#include "../unit/providers/mock_providers.hpp"
+
+#include "infrastructure/clock.hpp"
+#include "infrastructure/filesystem/files.hpp"
+#include "infrastructure/filesystem/paths.hpp"
+#include "infrastructure/observability/correlation.hpp"
+#include "infrastructure/observability/logger.hpp"
+#include "infrastructure/storage/sqlite/migrations.hpp"
+#include "infrastructure/storage/sqlite/task_repositories.hpp"
+#include "server/commands.hpp"
+#include "server/process_host.hpp"
+
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4702)
+#endif
+#include <httplib.h>
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+#include <nlohmann/json.hpp>
+
+#include <catch2/catch_test_macros.hpp>
+
+#include <atomic>
+#include <filesystem>
+#include <fstream>
+#include <future>
+#include <sstream>
+#include <thread>
+
+using namespace music_service;
+using namespace music_service::test;
+using namespace std::chrono_literals;
+using json = nlohmann::json;
+namespace fs = std::filesystem;
+using infrastructure::filesystem::path_from_utf8;
+using infrastructure::filesystem::path_to_utf8;
+
+namespace {
+
+struct Output {
+    int code{-1};
+    std::string out;
+    std::string err;
+};
+
+std::vector<ports::ProviderBundle> test_bundles() { return {mock_audio("aud"), mock_catalog("cat")}; }
+
+// A temporary deployment: config file, data_dir and destination roots.
+struct Deployment {
+    explicit Deployment(std::string_view name)
+        : dir(fs::temp_directory_path() / path_from_utf8("music-service-服务-" + std::string{name})) {
+        fs::remove_all(dir);
+        fs::create_directories(dir / "下载");
+        fs::create_directories(dir / "second");
+        fs::create_directories(dir / "out");
+        config = {{"config_version", 1},
+                  {"data_dir", path_to_utf8(dir / "data")},
+                  {"control", {{"port", 0}}},
+                  {"cors", {{"allowed_origins", {"http://127.0.0.1:5173"}}}},
+                  {"destinations",
+                   {{{"id", "dst_main"}, {"name", "主目录"}, {"root", path_to_utf8(dir / "下载")}, {"principals", {"prn_local"}}}}}};
+        write_config();
+    }
+    ~Deployment() {
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+    }
+
+    void write_config() {
+        std::ofstream file(dir / "config.json", std::ios::binary | std::ios::trunc);
+        file << config.dump();
+    }
+
+    Output run(std::vector<std::string> args, server::CommandHooks hooks = {}) {
+        args.insert(args.begin(), {"--config", path_to_utf8(dir / "config.json")});
+        if (!hooks.host.bundles) {
+            hooks.host.bundles = test_bundles();
+        }
+        std::ostringstream out;
+        std::ostringstream err;
+        Output result;
+        result.code = server::run_command(args, {out, err}, std::move(hooks));
+        result.out = out.str();
+        result.err = err.str();
+        return result;
+    }
+
+    std::string read(const fs::path& path) {
+        auto text = test::unwrap(infrastructure::filesystem::read_file(path, 4096));
+        while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) {
+            text.pop_back();
+        }
+        return text;
+    }
+
+    [[nodiscard]] fs::path bootstrap() const { return dir / "data" / "secrets" / "bootstrap-token.txt"; }
+
+    fs::path dir;
+    json config;
+};
+
+// Runs "serve" on a thread until stop().
+struct RunningService {
+    RunningService(Deployment& deployment, std::shared_ptr<infrastructure::observability::MemorySink> sink)
+        : deployment_(deployment) {
+        std::promise<server::StartupReport> ready;
+        auto started = ready.get_future();
+        server::CommandHooks hooks;
+        hooks.should_stop = [this] { return stop_flag_.load(); };
+        hooks.on_ready = [&ready](const server::StartupReport& started_report) { ready.set_value(started_report); };
+        hooks.host.log_sink = std::move(sink);
+        thread_ = std::thread([this, hooks = std::move(hooks)]() mutable {
+            result_ = deployment_.run({"serve"}, std::move(hooks));
+        });
+        REQUIRE(started.wait_for(20s) == std::future_status::ready);
+        report = started.get();
+        const auto colon = report.api_base_url.rfind(':');
+        port = std::stoi(report.api_base_url.substr(colon + 1));
+    }
+    ~RunningService() { stop(); }
+
+    Output stop() {
+        stop_flag_.store(true);
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+        return result_;
+    }
+
+    httplib::Client client(const std::string& token = {}) const {
+        httplib::Client c("127.0.0.1", port);
+        c.set_connection_timeout(3s);
+        c.set_read_timeout(10s);
+        if (!token.empty()) {
+            c.set_bearer_token_auth(token);
+        }
+        return c;
+    }
+
+    server::StartupReport report;
+    int port{0};
+
+private:
+    Deployment& deployment_;
+    std::atomic<bool> stop_flag_{false};
+    std::thread thread_;
+    Output result_;
+};
+
+json body(const httplib::Result& result) {
+    REQUIRE(result);
+    return json::parse(result->body);
+}
+
+std::string error_code(const httplib::Result& result) { return body(result)["error"]["code"].get<std::string>(); }
+
+std::vector<std::string> events(const infrastructure::observability::MemorySink& sink) {
+    std::vector<std::string> names;
+    for (const auto& record : sink.records()) {
+        names.push_back(record.event);
+    }
+    return names;
+}
+
+std::ptrdiff_t index_of(const std::vector<std::string>& names, const std::string& name) {
+    const auto it = std::find(names.begin(), names.end(), name);
+    return it == names.end() ? -1 : it - names.begin();
+}
+
+} // namespace
+
+TEST_CASE("offline commands initialize the instance and manage identities", "[server]") {
+    Deployment d{"offline"};
+
+    const auto version = d.run({"version"});
+    CHECK(version.code == server::exit_ok);
+    CHECK(version.out.find("music-service ") == 0);
+
+    CHECK(d.run({"check-config"}).code == server::exit_ok);
+
+    const auto init = d.run({"init"});
+    REQUIRE(init.code == server::exit_ok);
+    const auto bootstrap = d.read(d.bootstrap());
+    CHECK(bootstrap.rfind("mst_", 0) == 0);
+    CHECK(init.out.find("tok_") != std::string::npos);
+    CHECK(init.out.find(bootstrap) == std::string::npos); // plaintext only in the file
+    CHECK(init.err.find(bootstrap) == std::string::npos);
+
+    const auto again = d.run({"init"});
+    CHECK(again.code == server::exit_failed);
+    CHECK(again.err.find("CONFLICT") != std::string::npos);
+
+    const auto created = d.run({"principal", "create", "--name", "客户端"});
+    REQUIRE(created.code == server::exit_ok);
+    const auto principal = created.out.substr(0, created.out.find('\t'));
+    CHECK(principal.rfind("prn_", 0) == 0);
+    CHECK(d.run({"principal", "list"}).out.find(principal) != std::string::npos);
+
+    const auto output = d.dir / "out" / "client-token.txt";
+    const auto issued = d.run({"token", "issue", "--principal", principal, "--scopes", "catalog:read,downloads:read",
+                               "--output", path_to_utf8(output)});
+    REQUIRE(issued.code == server::exit_ok);
+    const auto token = d.read(output);
+    CHECK(issued.out.find(token) == std::string::npos);
+    const auto token_id = issued.out.substr(6, issued.out.find(' ', 6) - 6);
+    CHECK(token_id.rfind("tok_", 0) == 0);
+
+    // Never overwrites an existing file.
+    const auto clash = d.run({"token", "issue", "--principal", principal, "--scopes", "catalog:read", "--output",
+                              path_to_utf8(output)});
+    CHECK(clash.code == server::exit_failed);
+    CHECK(d.read(output) == token);
+
+    const auto listed = d.run({"token", "list", "--principal", principal});
+    CHECK(listed.out.find(token_id) != std::string::npos);
+    CHECK(listed.out.find(token) == std::string::npos);
+    CHECK(d.run({"token", "revoke", "--id", token_id}).code == server::exit_ok);
+    CHECK(d.run({"token", "revoke", "--id", token_id}).code == server::exit_ok);
+    CHECK(d.run({"token", "revoke", "--id", "tok_unknown"}).code == server::exit_failed);
+    CHECK(d.run({"principal", "disable", "--id", principal}).out.find("disabled") != std::string::npos);
+    CHECK(d.run({"principal", "enable", "--id", "prn_missing"}).code == server::exit_failed);
+
+    CHECK(d.run({"principal", "create"}).code == server::exit_usage);
+    CHECK(d.run({"token", "issue", "--principal", principal}).code == server::exit_usage);
+    CHECK(d.run({"frobnicate"}).code == server::exit_usage);
+    CHECK(d.run({"principal", "list", "--bogus", "1"}).code == server::exit_usage);
+}
+
+TEST_CASE("the service serves the control API and stops in order", "[server]") {
+    Deployment d{"serve"};
+    REQUIRE(d.run({"init"}).code == server::exit_ok);
+    const auto admin_token = d.read(d.bootstrap());
+    const auto created = d.run({"principal", "create", "--name", "reader"});
+    const auto reader = created.out.substr(0, created.out.find('\t'));
+    REQUIRE(d.run({"token", "issue", "--principal", reader, "--scopes", "catalog:read,downloads:read", "--output",
+                   path_to_utf8(d.dir / "out" / "reader.txt")})
+                .code == server::exit_ok);
+    const auto reader_token = d.read(d.dir / "out" / "reader.txt");
+
+    auto sink = std::make_shared<infrastructure::observability::MemorySink>();
+    {
+        RunningService service{d, sink};
+        CHECK(service.report.instance_id.rfind("inst_", 0) == 0);
+
+        // Management is offline only while the service holds the instance.
+        const auto locked = d.run({"token", "list", "--principal", "prn_local"});
+        CHECK(locked.code == server::exit_failed);
+        CHECK(locked.err.find("INSTANCE_LOCKED") != std::string::npos);
+        CHECK(d.run({"healthcheck"}).code == server::exit_failed); // config says port 0; nothing listens there
+
+        auto anonymous = service.client();
+        CHECK(anonymous.Get("/health/live")->status == 200);
+        CHECK(anonymous.Get("/health/ready")->status == 200);
+
+        const auto unauthenticated = anonymous.Get("/api/v1/info");
+        REQUIRE(unauthenticated);
+        CHECK(unauthenticated->status == 401);
+        CHECK(unauthenticated->get_header_value("WWW-Authenticate") == "Bearer");
+        CHECK(error_code(unauthenticated) == "UNAUTHENTICATED");
+        CHECK_FALSE(unauthenticated->get_header_value("X-Request-Id").empty());
+
+        auto admin = service.client(admin_token);
+        const auto info = admin.Get("/api/v1/info", httplib::Headers{{"X-Request-Id", "client.req-1"}});
+        REQUIRE(info);
+        CHECK(info->status == 200);
+        CHECK(info->get_header_value("X-Request-Id") == "client.req-1");
+        CHECK(info->get_header_value("Cache-Control") == "no-store");
+        const auto info_body = body(info);
+        CHECK(info_body["meta"]["request_id"] == "client.req-1");
+        CHECK(info_body["data"]["service"] == "music-service");
+        CHECK(info_body["data"]["instance_id"] == service.report.instance_id);
+        CHECK(info_body["data"]["features"]["downloads"] == false); // nothing undelivered is declared
+        CHECK(admin.Get("/api/v1/info", httplib::Headers{{"X-Request-Id", "bad id!"}})->get_header_value("X-Request-Id").rfind("req_", 0) == 0);
+
+        // Scopes.
+        auto reader_client = service.client(reader_token);
+        CHECK(reader_client.Get("/api/v1/info")->status == 200);
+        const auto forbidden = reader_client.Get("/api/v1/credentials");
+        CHECK(forbidden->status == 403);
+        CHECK(error_code(forbidden) == "FORBIDDEN");
+        CHECK(reader_client.Get("/api/v1/admin/status")->status == 403);
+        CHECK(service.client("mst_not-a-token").Get("/api/v1/info")->status == 401);
+
+        // Providers: paged, with the caller's credential summary and no probing.
+        const auto providers = body(admin.Get("/api/v1/providers?limit=1"));
+        REQUIRE(providers["data"]["items"].size() == 1);
+        CHECK(providers["data"]["items"][0]["source"] == "aud");
+        CHECK(providers["data"]["items"][0]["capabilities"]["resolve_audio"]["availability"]["state"] == "unknown");
+        CHECK(providers["data"]["items"][0]["auth_methods"][0]["supports_verify"] == true);
+        const auto cursor = providers["data"]["page"]["next_cursor"].get<std::string>();
+        const auto second = body(admin.Get("/api/v1/providers?limit=1&cursor=" + cursor));
+        CHECK(second["data"]["items"][0]["source"] == "cat");
+        CHECK(error_code(reader_client.Get("/api/v1/providers?limit=1&cursor=" + cursor)) == "CURSOR_MISMATCH");
+        CHECK(admin.Get("/api/v1/providers?colour=blue")->status == 400);
+        CHECK(admin.Get("/api/v1/providers?limit=0")->status == 400);
+        CHECK(body(admin.Get("/api/v1/limits"))["data"]["catalog"]["max_sources_per_request"] == 8);
+
+        // Destinations follow the configured ACL and never show the directory.
+        const auto mine = body(admin.Get("/api/v1/destinations"))["data"]["items"];
+        REQUIRE(mine.size() == 1);
+        CHECK(mine[0]["destination_id"] == "dst_main");
+        CHECK(mine[0]["available"] == true);
+        CHECK_FALSE(mine[0].contains("root"));
+        CHECK(body(reader_client.Get("/api/v1/destinations"))["data"]["items"].empty());
+
+        // Credentials and defaults (A47 through the API).
+        const auto made = admin.Post("/api/v1/credentials", R"({"source":"aud","label":"主账号","cookie":"good"})",
+                                     "application/json");
+        REQUIRE(made);
+        CHECK(made->status == 201);
+        CHECK(made->body.find("good") == std::string::npos);
+        const auto credential = body(made)["data"];
+        const auto id = credential["credential_id"].get<std::string>();
+        CHECK(credential["auth_profile"] == "web_cookie");
+        CHECK(credential["version"] == 1);
+
+        const auto full = admin.Post(
+            "/api/v1/credentials",
+            R"({"source":"aud","kind":"cookie","auth_profile":"web_cookie","secret":{"cookie":"other=1"}})",
+            "application/json");
+        CHECK(full->status == 201);
+        CHECK(error_code(admin.Post("/api/v1/credentials", R"({"source":"aud","kind":"oauth2","auth_profile":"x","secret":{}})",
+                                    "application/json")) == "CAPABILITY_UNSUPPORTED");
+        CHECK(error_code(admin.Post("/api/v1/credentials", R"({"source":"ghost","cookie":"a"})", "application/json")) ==
+              "UNKNOWN_PROVIDER");
+        CHECK(error_code(admin.Post("/api/v1/credentials", R"({"source":"aud","cookie":"a","extra":1})",
+                                    "application/json")) == "VALIDATION_FAILED");
+        const auto wrong_type = admin.Post("/api/v1/credentials", "source=aud", "text/plain");
+        CHECK(wrong_type->status == 415);
+        CHECK(error_code(wrong_type) == "UNSUPPORTED_CONTENT_TYPE");
+        const auto huge = admin.Post("/api/v1/credentials", std::string(300 * 1024, 'x'), "application/json");
+        REQUIRE(huge);
+        CHECK(huge->status == 413);
+
+        CHECK(body(admin.Get("/api/v1/credentials?source=aud"))["data"]["items"].size() == 2);
+        const auto verified = body(admin.Post("/api/v1/credentials/" + id + "/verify", "", "application/json"));
+        CHECK(verified["data"]["result"] == "valid");
+        CHECK(verified["data"]["credential"]["last_verify_result"] == "valid");
+        const auto renamed = body(admin.Put("/api/v1/credentials/" + id, R"({"label":"改名"})", "application/json"));
+        CHECK(renamed["data"]["version"] == 2);
+
+        const auto set = body(admin.Put("/api/v1/credential-defaults/aud", json{{"credential_id", id}}.dump(),
+                                        "application/json"));
+        CHECK(set["data"]["credential_id"] == id);
+        CHECK(set["data"]["selection_version"] == 1);
+        CHECK(body(admin.Get("/api/v1/credential-defaults/aud"))["data"]["selection_version"] == 1);
+        CHECK(body(admin.Get("/api/v1/providers?capability=resolve_audio"))["data"]["items"][0]["credentials"]
+                  ["default_credential_id"] == id);
+        CHECK(error_code(admin.Put("/api/v1/credential-defaults/cat", json{{"credential_id", id}}.dump(),
+                                   "application/json")) == "VALIDATION_FAILED");
+        CHECK(admin.Put("/api/v1/credential-defaults/aud", R"({"credential_id":"cre_nobody"})", "application/json")
+                  ->status == 404);
+        const auto revoked = body(admin.Delete("/api/v1/credentials/" + id));
+        CHECK(revoked["data"]["status"] == "revoked");
+        const auto cleared = body(admin.Get("/api/v1/credential-defaults/aud"))["data"];
+        CHECK(cleared["credential_id"].is_null());
+        CHECK(cleared["selection_version"] == 2);
+        CHECK(body(admin.Delete("/api/v1/credential-defaults/aud"))["data"]["selection_version"] == 2);
+
+        // Undelivered routes are absent, not empty successes; errors keep the envelope.
+        const auto missing = admin.Get("/api/v1/search/tracks?q=x");
+        CHECK(missing->status == 404);
+        CHECK(error_code(missing) == "NOT_FOUND");
+
+        // CORS preflight.
+        const auto preflight =
+            anonymous.Options("/api/v1/info", httplib::Headers{{"Origin", "http://127.0.0.1:5173"},
+                                                                  {"Access-Control-Request-Method", "GET"}});
+        REQUIRE(preflight);
+        CHECK(preflight->status == 204);
+        CHECK(preflight->get_header_value("Access-Control-Allow-Origin") == "http://127.0.0.1:5173");
+        CHECK(preflight->get_header_value("Access-Control-Allow-Headers").find("Authorization") != std::string::npos);
+        CHECK(anonymous.Options("/api/v1/info", httplib::Headers{{"Origin", "http://evil.example"}})->status == 403);
+
+        const auto status = body(admin.Get("/api/v1/admin/status"))["data"];
+        CHECK(status["state"] == "ready");
+        CHECK(status["providers"]["registered"] == 2);
+        CHECK(status["storage"]["available"] == true);
+
+        CHECK(service.stop().code == server::exit_ok);
+    }
+
+    // Shutdown order: listeners, services, database, then the lock.
+    const auto names = events(*sink);
+    const auto listeners = index_of(names, "shutdown.listeners_stopped");
+    const auto database = index_of(names, "shutdown.database_closed");
+    const auto lock = index_of(names, "shutdown.lock_released");
+    CHECK(listeners >= 0);
+    CHECK(listeners < database);
+    CHECK(database < lock);
+    for (const auto& record : sink->records()) {
+        for (const auto& field : record.fields) {
+            if (const auto* text = std::get_if<std::string>(&field.value)) {
+                CHECK(text->find(admin_token) == std::string::npos);
+                CHECK(text->find("good") == std::string::npos);
+            }
+        }
+    }
+    // The lock is free again.
+    CHECK(d.run({"token", "list", "--principal", "prn_local"}).code == server::exit_ok);
+}
+
+TEST_CASE("destination bindings cannot move or disappear while in use", "[server]") {
+    Deployment d{"destinations"};
+    REQUIRE(d.run({"init"}).code == server::exit_ok);
+    auto& destinations = d.config["destinations"];
+    const auto original_root = destinations[0]["root"];
+
+    // Same id, another root: refused before anything is served (A49).
+    destinations[0]["root"] = path_to_utf8(d.dir / "second");
+    d.write_config();
+    const auto moved = d.run({"serve"});
+    CHECK(moved.code == server::exit_failed);
+    CHECK(moved.err.find("DESTINATION_ROOT_CHANGED") != std::string::npos);
+    CHECK(d.run({"check-config"}).code == server::exit_failed);
+
+    // New id for the new place, the old one closed for new tasks: both stay usable.
+    destinations[0]["root"] = original_root;
+    destinations[0]["accept_new_tasks"] = false;
+    destinations.push_back({{"id", "dst_new"}, {"name", "新目录"}, {"root", path_to_utf8(d.dir / "second")},
+                            {"principals", {"prn_local"}}});
+    d.write_config();
+    {
+        auto sink = std::make_shared<infrastructure::observability::MemorySink>();
+        RunningService service{d, sink};
+        const auto items = body(service.client(d.read(d.bootstrap())).Get("/api/v1/destinations"))["data"]["items"];
+        REQUIRE(items.size() == 2);
+        CHECK(items[0]["destination_id"] == "dst_main");
+        CHECK(items[0]["accept_new_tasks"] == false);
+        CHECK(items[1]["destination_id"] == "dst_new");
+    }
+
+    // A task now refers to dst_main.
+    {
+        namespace sqlite = infrastructure::storage::sqlite;
+        auto database = sqlite::Database::open(d.dir / "data" / "service.sqlite3", {}).value();
+        auto clock = std::make_shared<infrastructure::SystemClock>();
+        const sqlite::RepositoryContext ctx{database.get(), clock,
+                                           std::make_shared<infrastructure::observability::IdGenerator>(9)};
+        sqlite::SqliteTaskRepository tasks{ctx, {}};
+        domain::DownloadIntentDraft draft{"prn_local",
+                                          test::track("cat", "1"),
+                                          domain::SameSource{},
+                                          {test::anonymous("prn_local", "cat")},
+                                          {domain::Quality::standard, domain::QualityPolicy::strict, false},
+                                          domain::MetadataPolicy::best_effort,
+                                          {"dst_main", "d1", "n1", "m1"}};
+        auto intent = domain::NormalizedDownloadIntent::normalize(std::move(draft)).value();
+        REQUIRE(tasks.create({std::move(intent), "key-dst-main-0001", "h1", false}));
+    }
+
+    // Removing a destination in use is refused; removing an unused one is fine.
+    destinations.erase(destinations.begin());
+    d.write_config();
+    const auto removed = d.run({"serve"});
+    CHECK(removed.code == server::exit_failed);
+    CHECK(removed.err.find("DESTINATION_IN_USE") != std::string::npos);
+
+    destinations = json::array({{{"id", "dst_main"}, {"name", "主目录"}, {"root", original_root},
+                                 {"principals", {"prn_local"}}}});
+    d.write_config();
+    {
+        RunningService service{d, std::make_shared<infrastructure::observability::MemorySink>()};
+        CHECK(service.stop().code == server::exit_ok);
+    }
+
+    // A new id whose root does not exist cannot be registered; nothing is created.
+    destinations.push_back({{"id", "dst_gone"}, {"name", "x"}, {"root", path_to_utf8(d.dir / "missing")},
+                            {"principals", {"prn_local"}}});
+    d.write_config();
+    const auto gone = d.run({"serve"});
+    CHECK(gone.code == server::exit_failed);
+    CHECK(gone.err.find("DESTINATION_UNAVAILABLE") != std::string::npos);
+    CHECK_FALSE(fs::exists(d.dir / "missing"));
+}

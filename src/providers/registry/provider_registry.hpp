@@ -20,50 +20,12 @@ namespace music_service::providers {
 
 namespace ports = application::ports;
 
-// Secret-free description of one registered capability.
-struct CapabilityView {
-    ports::CapabilitySpec spec;
-    bool enabled{false}; // the source is enabled; supported is implied by being listed
-};
-
-// One implemented auth profile. supports_* come from actual bindings, never from kind.
-struct AuthMethodView {
-    std::string auth_profile;
-    ports::CredentialKind kind{ports::CredentialKind::cookie};
-    std::uint32_t version{1};
-    std::vector<ports::AuthField> input_fields;
-    std::vector<std::string> scopes;
-    bool supports_verify{false};
-    bool supports_refresh{false};           // refresh ports arrive with T24
-    bool supports_application_token{false}; // application tokens arrive with T24
-};
-
-struct ProviderView {
-    domain::SourceId source;
-    std::string name;
-    bool enabled{false};
-    std::string implementation_id;
-    std::string implementation_version;
-    ports::ExecutionMode execution_mode{ports::ExecutionMode::native};
-    std::vector<CapabilityView> capabilities; // sorted by key
-    std::vector<AuthMethodView> auth_methods; // sorted by auth_profile
-    std::vector<domain::Quality> quality_hints;
-
-    [[nodiscard]] bool supports(std::string_view key) const;
-};
-
-struct ProviderListQuery {
-    std::string principal_id;              // the cursor is bound to it
-    std::optional<std::string> capability; // only sources that support this key
-    std::optional<bool> enabled;
-    std::uint32_t limit{50}; // 1..100
-    std::optional<std::string> cursor;
-};
-
-struct ProviderListPage {
-    std::vector<ProviderView> items;
-    std::optional<std::string> next_cursor;
-};
+// The listing types live with the ProviderDirectory port.
+using ports::AuthMethodView;
+using ports::CapabilityView;
+using ports::ProviderListPage;
+using ports::ProviderListQuery;
+using ports::ProviderView;
 
 // Immutable after build(); safe to share across threads. Capability objects are created
 // on first require() and then reused; listing or describing never creates them, starts
@@ -85,12 +47,12 @@ public:
     ProviderRegistry& operator=(const ProviderRegistry&) = delete;
 
     // UNKNOWN_PROVIDER for sources that are not registered.
-    [[nodiscard]] domain::Result<ProviderView> describe(std::string_view source) const;
+    [[nodiscard]] domain::Result<ProviderView> describe(std::string_view source) const override;
 
     // Pages through registered sources in source order. A cursor from another principal
     // or filter is CURSOR_MISMATCH; one from an earlier registry (a restart) is
     // CURSOR_EXPIRED.
-    [[nodiscard]] domain::Result<ProviderListPage> list(const ProviderListQuery& query) const;
+    [[nodiscard]] domain::Result<ProviderListPage> list(const ProviderListQuery& query) const override;
 
     [[nodiscard]] std::vector<domain::SourceId> sources() const;
     [[nodiscard]] std::size_t size() const noexcept;

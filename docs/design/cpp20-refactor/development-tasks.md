@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T05 **已完成**，T06～T09 **待验收**（等待 Linux CI），其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T05 **已完成**，T06～T10 **待验收**（等待 Linux CI），其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,7 +262,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-下一项为 **T10**（组装入口与基础 HTTP／管理 CLI），可并行开始 **T12**（酷我标准品质协议包）。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+下一项为 **T11**（S0 集成与最小部署关口），可并行开始 **T12**（酷我标准品质协议包）。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
@@ -375,4 +375,16 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 | GCC 证据（部分） | MinGW GCC 16.2 在严格警告下对新增与改动的源文件及测试做语法检查 0 条警告；Linux 运行证据待推送后由 CI 提供 |
 | 已知限制 | Windows 上等待响应头期间的取消不能立即中断（本地 shutdown 不唤醒阻塞等待，httplib 客户端无可中断读），要到上游应答、空闲超时（30 秒）或截止时间才返回，期间租约保持；Linux 上的即时中断待 CI 验证。暂不复用连接，每跳新建连接；CA bundle 尚无配置键，部署所需的信任根配置在 T11 确定；配置只能关闭明文端点的开关留待有平台登记时加入 |
 | 未覆盖 | 平台实际端点登记与在线协议探测在 T12；下载写盘、断点续传与传输重试策略在 T17／T29；媒体代理在 T34 |
+
+### T10 组装入口与基础 HTTP／管理 CLI：待验收（等待 Linux CI）
+
+| 项目 | 记录 |
+| --- | --- |
+| 交付 | `api` 静态库 ControlApi（cpp-httplib）：Bearer 认证与 scope、统一 JSON 信封与错误码→HTTP 状态映射（500 只返回去敏信息）、X-Request-Id 校验或生成、CORS 预检、请求体上限 413、非 JSON 415、未知字段／参数 400、身份相关响应 no-store；路由 health/live、health/ready、info、providers（分页与调用方凭证摘要，可用状态 unknown、不探测）、limits、destinations（按配置 ACL，不返回目录）、credentials（列出／创建含 cookie 简写／更新／校验／撤销）、credential-defaults、admin/status；尚未交付的路由不挂载、返回 404。`server`：命令行（serve、version、check-config、init、healthcheck、principal、token）、离线管理持实例锁、ProcessHost 按文档顺序启动并反序停止、目标目录不可变绑定校验、启动行输出到 stdout。ProviderDirectory 端口增加 describe／list 及列表类型 |
+| 覆盖的验收 | T08 用例经 API／CLI 可操作：init 只把明文写入引导文件、再次 init 冲突，principal 创建／列出／启停，token 签发不覆盖既有文件、明文不进控制台、列出／撤销（重复撤销成功）；A47 经 API：设置、重复不增版本、跨来源 422、他人凭证 404、撤销默认凭证同事务清空且不改选；A48：服务运行时管理命令返回 INSTANCE_LOCKED，停止后可执行；A49 基础：同 ID 改根启动与 check-config 均失败，新 ID＋旧项 accept_new_tasks=false 时两者都可用，仍被任务引用的 ID 从配置移除时启动失败、未被引用的可移除，新 ID 根不存在时失败且不创建目录；停止顺序为监听 → 服务 → 数据库 → 实例锁，日志不含 token 与 Cookie；认证、scope、CORS、413／415／400／404 与 no-store 行为 |
+| 规则补充 | 已写回[服务入口说明](../../../src/server/README.md)：命令与退出码、启动行格式、check-config 只读比对绑定、healthcheck 在端口 0 模式下的限制、已绑定但离线的目标根保留并标记不可用 |
+| Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 161/161 通过（服务集成测试 3 项、471 个断言，连续 5 次无失败）；`music-service.exe` 实机：version、init、serve（启动行、healthcheck 成功、运行中 token list 被拒、带引导 token 的 info 200）、进程结束后锁释放 |
+| GCC 证据（部分） | MinGW GCC 16.2 严格警告下对新增与改动文件语法检查 0 条警告（期间发现并修复一处 initializer_list 悬空）；Linux 运行证据待推送后由 CI 提供 |
+| 已知限制 | 媒体与 SSE 监听在相应功能实现前不启动，info 如实声明全部功能为 false；admin/download-policy 随 T17；可执行程序的信号停止只在进程内测试中验证了停机顺序，Windows 服务／systemd 集成与容器归 T11；CA bundle 仍无配置键 |
+| 未覆盖 | 搜索、下载、文件等业务路由分别在 T13～T19；Linux／容器运行与部署证据在 T11 |
 

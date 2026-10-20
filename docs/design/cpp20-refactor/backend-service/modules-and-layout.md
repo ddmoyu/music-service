@@ -2,7 +2,7 @@
 
 业务职责见[功能模块](feature-modules.md)，操作和所有权见[内部契约](internal-contracts.md)。
 
-工程按本页结构建立在仓库根目录，当前进度见[根目录说明](../../../../README.md)：domain、application 端口与配置、infrastructure 的配置和可观测性已实现，其余模块暂用 INTERFACE 目标记录依赖，首次引入真实源码时转为普通库。下方的具体文件名表示后续实现位置；服务入口随 T10 加入，不创建空 main。
+工程按本页结构建立在仓库根目录，当前进度见[源码说明](../../../../src/README.md)：domain、application（端口、配置与账号／传输用例）、infrastructure、runtime、providers 注册表、控制入口 api 与 server 可执行程序已实现；downloads、audio_processing、media_server、event_server 仍用 INTERFACE 目标记录依赖，首次引入真实源码时转为普通库。下方的具体文件名表示后续实现位置。
 
 ## 依赖方向
 
@@ -157,7 +157,7 @@ auth_profiles 工厂与平台能力一起注册；UpstreamAdmissionPort 实例�
 | `music_service_event_server` | application、SSE HTTP 适配 |
 | `music-service`（待实现） | 组装上述目标与运行时，当前没有可执行目标 |
 
-目标可按编译收益合并，第三方头不经公共类型传播。music_service_domain 与 music_service_infrastructure 已是静态库，music_service_application 目前是只含端口头文件的 INTERFACE 目标；尚未创建具体平台 target。Drogon 替换 HTTP／传输适配，业务用例共用。
+目标可按编译收益合并，第三方头不经公共类型传播。music_service_domain、application、infrastructure、runtime、providers、http_api 与 server_core 已是静态库，可执行目标为 music-service；具体平台 target 目前只有酷我占位 music_service_provider_kuwo。Drogon 替换 HTTP／传输适配，业务用例共用。
 
 依赖获取与版本规则见[构建与依赖](build-and-dependencies.md)。
 

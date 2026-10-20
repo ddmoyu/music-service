@@ -330,11 +330,6 @@ std::uint64_t random_generation() {
 
 } // namespace
 
-bool ProviderView::supports(std::string_view key) const {
-    return std::any_of(capabilities.begin(), capabilities.end(),
-                       [&](const CapabilityView& capability) { return capability.spec.key == key; });
-}
-
 // Lazily created object, guarded by its own mutex so one slow factory does not block
 // other capabilities.
 struct Slot {

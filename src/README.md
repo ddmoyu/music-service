@@ -15,8 +15,9 @@
 | `downloads` | 持久任务调度、Runner、重试／续传、发布与恢复 | 待实现 |
 | `audio_processing` | 格式验证、解密、标签 | 待实现 |
 | `runtime` | 有界执行器、统一上游入场账本（AdmissionLedger）、截止定时器、停机序列 | 静态库，T06 |
-| `api`、`media_server`、`event_server` | 控制、媒体、SSE 三个 HTTP 入口的协议适配 | 待实现 |
-| `server` | music-service 可执行程序：参数、生命周期、依赖组装 | 待实现（T10） |
+| `api` | 控制入口（cpp-httplib）：Bearer 认证与 scope、JSON 信封与错误映射、请求 ID、CORS、请求体与类型限制；health、info、providers、limits、destinations、credentials、credential-defaults、admin/status 路由 | 静态库，T10 |
+| `media_server`、`event_server` | 媒体与 SSE 两个 HTTP 入口的协议适配 | 待实现（T19／T18） |
+| `server` | music-service 可执行程序：命令行、离线身份管理命令、ProcessHost 启停顺序与依赖组装、目标目录绑定校验 | 静态库 server_core + 可执行程序，T10 |
 
 依赖方向：application 依赖 domain；providers、downloads、audio_processing、infrastructure、runtime 和三个 HTTP 入口依赖 application 的端口与领域类型；只有 `server` 把具体实现组装在一起，业务层不反向依赖 HTTP、数据库或某个平台。
 

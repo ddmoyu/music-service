@@ -67,6 +67,7 @@ catch_discover_tests(music_service_fault_tests DISCOVERY_MODE PRE_TEST)
 # and HTTP(S) servers on 127.0.0.1 with the test certificates. No outside network.
 add_executable(music_service_integration_tests
     integration/accounts_test.cpp
+    integration/server_test.cpp
     integration/storage_test.cpp
     integration/transport_test.cpp
 )
@@ -75,7 +76,9 @@ target_link_libraries(music_service_integration_tests PRIVATE
     music_service::infrastructure
     music_service::providers
     music_service::runtime
+    music_service::server_core
     music_service::third_party_httplib
+    nlohmann_json::nlohmann_json
     music_service::project_warnings
     Catch2::Catch2WithMain
 )
