@@ -107,7 +107,8 @@ struct Deployment {
 
 // Runs "serve" on a thread until stop().
 struct RunningService {
-    RunningService(Deployment& deployment, std::shared_ptr<infrastructure::observability::MemorySink> sink)
+    RunningService(Deployment& deployment, std::shared_ptr<infrastructure::observability::MemorySink> sink,
+                   std::optional<std::vector<ports::ProviderBundle>> bundles = std::nullopt)
         : deployment_(deployment) {
         std::promise<server::StartupReport> ready;
         auto started = ready.get_future();
@@ -115,6 +116,7 @@ struct RunningService {
         hooks.should_stop = [this] { return stop_flag_.load(); };
         hooks.on_ready = [&ready](const server::StartupReport& started_report) { ready.set_value(started_report); };
         hooks.host.log_sink = std::move(sink);
+        hooks.host.bundles = std::move(bundles);
         thread_ = std::thread([this, hooks = std::move(hooks)]() mutable {
             result_ = deployment_.run({"serve"}, std::move(hooks));
         });
@@ -395,7 +397,7 @@ TEST_CASE("the service serves the control API and stops in order", "[server]") {
               404);
 
         // Undelivered routes are absent, not empty successes; errors keep the envelope.
-        const auto missing = admin.Get("/api/v1/downloads");
+        const auto missing = admin.Get("/api/v1/files");
         CHECK(missing->status == 404);
         CHECK(error_code(missing) == "NOT_FOUND");
 
@@ -510,3 +512,84 @@ TEST_CASE("destination bindings cannot move or disappear while in use", "[server
     CHECK(gone.err.find("DESTINATION_UNAVAILABLE") != std::string::npos);
     CHECK_FALSE(fs::exists(d.dir / "missing"));
 }
+
+TEST_CASE("downloads are accepted, queried, canceled and retried over HTTP", "[server]") {
+    Deployment d{"downloads"};
+    REQUIRE(d.run({"init"}).code == server::exit_ok);
+    const auto token = d.read(d.bootstrap());
+    RunningService service{d, std::make_shared<infrastructure::observability::MemorySink>(),
+                           std::vector<ports::ProviderBundle>{mock_combo("both")}};
+    auto client = service.client(token);
+    const auto key = [](std::string value) { return httplib::Headers{{"Idempotency-Key", std::move(value)}}; };
+    const std::string request_body = R"({"track":{"source":"both","id":"1"},"quality":"standard","metadata_policy":"skip"})";
+    const std::string reordered = R"({"metadata_policy":"skip","quality":"standard","track":{"id":"1","source":"both"}})";
+
+    CHECK(error_code(client.Post("/api/v1/downloads", request_body, "application/json")) == "VALIDATION_FAILED");
+    const auto created = client.Post("/api/v1/downloads", key("first-download-key"), request_body, "application/json");
+    REQUIRE(created);
+    CHECK(created->status == 202);
+    const auto task_id = body(created)["data"]["task_id"].get<std::string>();
+    CHECK(created->get_header_value("Location") == "/api/v1/downloads/" + task_id);
+    CHECK(body(created)["data"]["status"] == "queued");
+
+    // Same key, same request (key order does not matter): the first response again.
+    const auto replayed = client.Post("/api/v1/downloads", key("first-download-key"), reordered, "application/json");
+    CHECK(replayed->status == 202);
+    CHECK(replayed->get_header_value("Idempotency-Replayed") == "true");
+    CHECK(body(replayed)["data"]["task_id"] == task_id);
+    CHECK(error_code(client.Post("/api/v1/downloads", key("first-download-key"),
+                                 R"({"track":{"source":"both","id":"2"}})", "application/json")) ==
+          "IDEMPOTENCY_CONFLICT");
+    const auto shared = client.Post("/api/v1/downloads", key("second-download-key"), request_body, "application/json");
+    CHECK(shared->status == 200);
+    CHECK(body(shared)["data"]["reused"] == true);
+    CHECK(error_code(client.Post("/api/v1/downloads", key("third-download-key"),
+                                 R"({"track":{"source":"both","id":"1"},"surprise":1})", "application/json")) ==
+          "VALIDATION_FAILED");
+    CHECK(error_code(client.Post("/api/v1/downloads", key("fourth-download-key"),
+                                 R"({"track":{"source":"both","id":"9"},"destination_id":"dst_nowhere"})",
+                                 "application/json")) == "NOT_FOUND");
+
+    // Task snapshot with a weak ETag.
+    const auto snapshot = client.Get("/api/v1/downloads/" + task_id);
+    REQUIRE(snapshot);
+    const auto task = body(snapshot)["data"];
+    CHECK(task["original_track"]["source"] == "both");
+    CHECK(task["metadata_policy"] == "skip");
+    CHECK(task["attempt"] == 0);
+    CHECK(task["progress"].is_null());
+    const auto etag = snapshot->get_header_value("ETag");
+    CHECK(etag == "W/\"task-" + task_id + "-v1\"");
+    CHECK(client.Get("/api/v1/downloads/" + task_id, httplib::Headers{{"If-None-Match", etag}})->status == 304);
+    CHECK(client.Get("/api/v1/downloads/tsk_missing")->status == 404);
+    CHECK(body(client.Get("/api/v1/downloads?limit=10"))["data"]["items"].size() == 1);
+
+    // Cancel, then retry under a new key.
+    const auto canceled = client.Post("/api/v1/downloads/" + task_id + "/cancel", "", "application/json");
+    CHECK(canceled->status == 200);
+    CHECK(body(canceled)["data"]["status"] == "canceled");
+    const auto retried = client.Post("/api/v1/downloads/" + task_id + "/retry", key("retry-download-key"), "",
+                                     "application/json");
+    REQUIRE(retried);
+    CHECK(retried->status == 202);
+    CHECK(body(retried)["data"]["retry_of"] == task_id);
+
+    // A batch with a repeated item.
+    const auto batch = client.Post("/api/v1/download-batches", key("first-batch-key-0"),
+                                   R"({"items":[{"track":{"source":"both","id":"5"}},{"track":{"source":"both","id":"5"}}]})",
+                                   "application/json");
+    REQUIRE(batch);
+    CHECK(batch->status == 202);
+    const auto batch_body = body(batch)["data"];
+    CHECK(batch_body["created_count"] == 1);
+    CHECK(batch_body["reused_count"] == 1);
+    const auto batch_view = body(client.Get("/api/v1/download-batches/" + batch_body["batch_id"].get<std::string>()));
+    CHECK(batch_view["data"]["items"].size() == 2);
+    CHECK(batch_view["data"]["stats"]["queued"] == 2);
+    const auto bad_batch = client.Post("/api/v1/download-batches", key("second-batch-key-0"),
+                                       R"({"items":[{"track":{"source":"both","id":"6"}},{"track":{"source":"ghost","id":"7"}}]})",
+                                       "application/json");
+    CHECK(bad_batch->status == 400);
+    CHECK(body(bad_batch)["error"]["details"][0]["field"] == "items[1]");
+}
+

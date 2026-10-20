@@ -333,6 +333,161 @@ json warnings_json(const std::vector<domain::ResourceWarning>& warnings) {
 
 json optional_int(const std::optional<std::int64_t>& value) { return value ? json(*value) : json(nullptr); }
 
+// Request bodies are hashed as canonical JSON (sorted keys, no spaces), so reordered
+// fields are the same request; different values, even equal to defaults, are not.
+std::string body_hash(const json& body) {
+    const auto text = body.dump();
+    std::uint64_t hash = 14695981039346656037ULL;
+    for (const char c : text) {
+        hash ^= static_cast<unsigned char>(c);
+        hash *= 1099511628211ULL;
+    }
+    return "fnv1a64:" + std::to_string(text.size()) + ":" + std::to_string(hash);
+}
+
+json parsed_or_null(const std::optional<std::string>& text) {
+    if (!text) {
+        return nullptr;
+    }
+    auto parsed = json::parse(*text, nullptr, false);
+    return parsed.is_discarded() ? json(nullptr) : parsed;
+}
+
+json task_json(const application::tasks::TaskView& view) {
+    const auto& t = view.task;
+    const auto& intent = view.intent;
+    const auto& requirement = intent.requirement();
+    return json{{"task_id", t.task_id},
+                {"version", t.version},
+                {"status", domain::to_string(t.status)},
+                {"stage", nullptr},
+                {"original_track", ref_json(intent.original_track())},
+                {"actual_track", nullptr},
+                {"requested_quality", domain::to_string(requirement.requested)},
+                {"quality_policy", domain::to_string(requirement.policy)},
+                {"allow_preview", requirement.allow_preview},
+                {"actual_quality", nullptr},
+                {"fallback", {{"mode", "disabled"}, {"sources", json::array()}}},
+                {"metadata_policy", domain::to_string(intent.metadata_policy())},
+                {"attempt", t.attempt},
+                {"destination_id", t.destination_id},
+                {"progress", parsed_or_null(t.progress_json)},
+                {"created_at", utc(t.created_at)},
+                {"updated_at", utc(t.updated_at)},
+                {"started_at", optional_time(t.started_at)},
+                {"finished_at", optional_time(t.finished_at)},
+                {"next_retry_at", optional_time(t.next_retry_at)},
+                {"wait_reason", t.wait_reason ? json(domain::to_string(*t.wait_reason)) : json(nullptr)},
+                {"retry_of", optional_string(t.retry_of)},
+                {"result", parsed_or_null(t.result_json)},
+                {"error", parsed_or_null(t.error_json)},
+                {"warnings", json::array()},
+                {"links", {{"self", "/api/v1/downloads/" + t.task_id}}}};
+}
+
+std::string task_etag(const ports::TaskRecord& task) {
+    return "W/\"task-" + task.task_id + "-v" + std::to_string(task.version) + "\"";
+}
+
+// A single download from its JSON object; field names in errors carry prefix.
+domain::Result<application::tasks::DownloadRequest> parse_download(const json& body, const std::string& prefix) {
+    static const std::set<std::string> allowed{"track",           "context_ref",     "quality",       "quality_policy",
+                                               "allow_preview",   "fallback",        "destination_id", "metadata_policy",
+                                               "duplicate_policy", "credential_id",  "match_selection"};
+    const auto bad = [&](const std::string& field, std::string reason) {
+        return domain::Error::validation(prefix + field, std::move(reason));
+    };
+    if (!body.is_object()) {
+        return domain::Error::validation(prefix.empty() ? "body" : prefix.substr(0, prefix.size() - 1),
+                                         "must be an object");
+    }
+    for (const auto& [key, value] : body.items()) {
+        if (allowed.count(key) == 0) {
+            return bad(key, "unknown field");
+        }
+    }
+    const auto track = body.find("track");
+    if (track == body.end() || !track->is_object() || track->size() != 2 || !track->contains("source") ||
+        !track->contains("id") || !(*track)["source"].is_string() || !(*track)["id"].is_string()) {
+        return bad("track", "must be {source, id}");
+    }
+    auto source = domain::SourceId::parse((*track)["source"].get<std::string>());
+    auto id = domain::PlatformId::parse((*track)["id"].get<std::string>());
+    if (!source || !id) {
+        return bad("track", "has an invalid source or id");
+    }
+    application::tasks::DownloadRequest request{{std::move(source).value(), std::move(id).value()}, {}, false, false,
+                                                std::nullopt, std::nullopt, domain::MetadataPolicy::best_effort, false};
+    const auto text = [&](const char* key, std::optional<std::string>& out) -> domain::Result<void> {
+        const auto it = body.find(key);
+        if (it == body.end() || it->is_null()) {
+            return domain::ok();
+        }
+        if (!it->is_string()) {
+            return bad(key, "must be a string");
+        }
+        out = it->get<std::string>();
+        return domain::ok();
+    };
+    std::optional<std::string> quality, policy, metadata, duplicate;
+    for (auto [key, out] : {std::pair{"quality", &quality}, std::pair{"quality_policy", &policy},
+                            std::pair{"metadata_policy", &metadata}, std::pair{"duplicate_policy", &duplicate},
+                            std::pair{"destination_id", &request.destination_id},
+                            std::pair{"credential_id", &request.credential_id}}) {
+        if (auto read = text(key, *out); !read) {
+            return read.error();
+        }
+    }
+    if (quality) {
+        auto parsed = domain::parse_quality(*quality);
+        if (!parsed) {
+            return bad("quality", "must be standard, high, lossless or hires");
+        }
+        request.requirement.requested = parsed.value();
+    }
+    if (policy) {
+        auto parsed = domain::parse_quality_policy(*policy);
+        if (!parsed) {
+            return bad("quality_policy", "must be strict or allow_lower");
+        }
+        request.requirement.policy = parsed.value();
+    }
+    if (metadata) {
+        auto parsed = domain::parse_metadata_policy(*metadata);
+        if (!parsed) {
+            return bad("metadata_policy", "must be best_effort, required or skip");
+        }
+        request.metadata_policy = parsed.value();
+    }
+    if (duplicate && *duplicate != "reuse" && *duplicate != "force") {
+        return bad("duplicate_policy", "must be reuse or force");
+    }
+    request.force = duplicate == "force";
+    if (const auto preview = body.find("allow_preview"); preview != body.end()) {
+        if (!preview->is_boolean()) {
+            return bad("allow_preview", "must be a boolean");
+        }
+        request.requirement.allow_preview = preview->get<bool>();
+    }
+    if (const auto fallback = body.find("fallback"); fallback != body.end()) {
+        if (!fallback->is_object() || !fallback->contains("mode") || !(*fallback)["mode"].is_string()) {
+            return bad("fallback", "must be {mode, sources}");
+        }
+        for (const auto& [key, value] : fallback->items()) {
+            if (key != "mode" && key != "sources") {
+                return bad("fallback." + key, "unknown field");
+            }
+        }
+        const auto mode = (*fallback)["mode"].get<std::string>();
+        if (mode != "disabled" && mode != "auto") {
+            return bad("fallback.mode", "must be disabled or auto");
+        }
+        request.automatic_fallback = mode == "auto";
+    }
+    request.match_selection = body.contains("match_selection") && !body["match_selection"].is_null();
+    return request;
+}
+
 json string_array(const std::vector<std::string>& values) {
     json out = json::array();
     for (const auto& value : values) {
@@ -667,6 +822,22 @@ struct ControlApi::Impl {
         server.Post("/api/v1/links/parse", guard(Access::scoped, catalog, [this](Call& call) { parse_link(call); }));
         server.Post("/api/v1/assets/resolve", guard(Access::scoped, catalog, [this](Call& call) { resolve_asset(call); }));
         server.Post("/api/v1/assets/probe", guard(Access::scoped, catalog, [this](Call& call) { probe_asset(call); }));
+
+        const auto read = accounts::scope::downloads_read;
+        const auto write = accounts::scope::downloads_write;
+        server.Post("/api/v1/downloads", guard(Access::scoped, write, [this](Call& call) { create_download(call); }));
+        server.Get("/api/v1/downloads", guard(Access::scoped, read, [this](Call& call) { list_downloads(call); }));
+        server.Get(R"(/api/v1/downloads/(tsk_[A-Za-z0-9]+))",
+                   guard(Access::scoped, read, [this](Call& call) { get_download(call); }));
+        server.Post(R"(/api/v1/downloads/(tsk_[A-Za-z0-9]+)/cancel)",
+                    guard(Access::scoped, write, [this](Call& call) { cancel_download(call); }));
+        server.Post(R"(/api/v1/downloads/(tsk_[A-Za-z0-9]+)/retry)",
+                    guard(Access::scoped, write, [this](Call& call) { retry_download(call); }));
+        server.Post("/api/v1/download-batches", guard(Access::scoped, write, [this](Call& call) { create_batch(call); }));
+        server.Get(R"(/api/v1/download-batches/(bat_[A-Za-z0-9]+))",
+                   guard(Access::scoped, read, [this](Call& call) { get_batch(call); }));
+        server.Post(R"(/api/v1/download-batches/(bat_[A-Za-z0-9]+)/cancel)",
+                    guard(Access::scoped, write, [this](Call& call) { cancel_batch(call); }));
 
         server.Get("/api/v1/admin/status",
                    guard(Access::scoped, accounts::scope::admin, [this](Call& call) { admin_status(call); }));
@@ -1066,6 +1237,251 @@ struct ControlApi::Impl {
                  {"estimated_duration_ms", optional_int(r.estimated_duration_ms)},
                  {"completeness", domain::to_string(r.completeness)},
                  {"warnings", warnings_json(r.warnings)}});
+    }
+
+    // --------------------------------------------------------- downloads
+
+    // The Idempotency-Key header, or a 400 already sent.
+    static std::optional<std::string> idempotency_key(const Call& call) {
+        if (!call.req.has_header("Idempotency-Key")) {
+            call.fail(bad_request("Idempotency-Key", "is required"));
+            return std::nullopt;
+        }
+        auto key = call.req.get_header_value("Idempotency-Key");
+        if (auto valid = application::tasks::DownloadService::check_idempotency_key(key); !valid) {
+            call.fail(valid.error());
+            return std::nullopt;
+        }
+        return key;
+    }
+
+    static void mark_replay(const Call& call, bool replayed) {
+        if (replayed) {
+            call.res.set_header("Idempotency-Replayed", "true");
+        }
+    }
+
+    void create_download(Call& call) {
+        if (!only_params(call, {})) {
+            return;
+        }
+        auto key = idempotency_key(call);
+        if (!key) {
+            return;
+        }
+        auto body = json::parse(call.req.body, nullptr, false);
+        if (body.is_discarded() || !body.is_object()) {
+            call.fail(bad_request("body", "must be a JSON object"));
+            return;
+        }
+        auto request = parse_download(body, "");
+        if (!request) {
+            call.fail(request.error());
+            return;
+        }
+        auto created = services.downloads->create(call.principal(), request.value(), *key, body_hash(body));
+        if (!created) {
+            call.fail(created.error());
+            return;
+        }
+        const auto& task = created->view.task;
+        mark_replay(call, created->replayed);
+        if (created->status_code == 202) {
+            call.res.set_header("Location", "/api/v1/downloads/" + task.task_id);
+        }
+        call.ok({{"task_id", task.task_id},
+                 {"status", domain::to_string(task.status)},
+                 {"reused", created->reused},
+                 {"links", {{"self", "/api/v1/downloads/" + task.task_id}}}},
+                created->status_code);
+    }
+
+    void list_downloads(Call& call) {
+        if (!only_params(call, {"status", "source", "batch_id", "limit", "cursor"})) {
+            return;
+        }
+        application::tasks::TaskFilter filter;
+        if (call.req.has_param("status")) {
+            auto status = domain::parse_task_status(call.req.get_param_value("status"));
+            if (!status) {
+                call.fail(bad_request("status", "is not a task status"));
+                return;
+            }
+            filter.status = status.value();
+        }
+        if (call.req.has_param("source")) {
+            filter.source = call.req.get_param_value("source");
+        }
+        if (call.req.has_param("batch_id")) {
+            filter.batch_id = call.req.get_param_value("batch_id");
+        }
+        if (call.req.has_param("cursor")) {
+            filter.cursor = call.req.get_param_value("cursor");
+        }
+        if (!read_uint_param(call, "limit", filter.limit)) {
+            return;
+        }
+        auto page = services.downloads->list(call.principal(), filter);
+        if (!page) {
+            call.fail(page.error());
+            return;
+        }
+        json items = json::array();
+        for (const auto& view : page->items) {
+            items.push_back(task_json(view));
+        }
+        call.ok({{"items", std::move(items)},
+                 {"page", {{"limit", filter.limit}, {"next_cursor", optional_string(page->next_cursor)}}}});
+    }
+
+    void get_download(Call& call) {
+        if (!only_params(call, {})) {
+            return;
+        }
+        auto view = services.downloads->get(call.principal(), call.req.matches[1]);
+        if (!view) {
+            call.fail(view.error());
+            return;
+        }
+        const auto etag = task_etag(view->task);
+        call.res.set_header("ETag", etag);
+        if (call.req.get_header_value("If-None-Match") == etag) {
+            call.res.status = 304;
+            return;
+        }
+        call.ok(task_json(view.value()));
+    }
+
+    void cancel_download(Call& call) {
+        if (!only_params(call, {}) || !body_object(call, {}, true)) {
+            return;
+        }
+        auto canceled = services.downloads->cancel(call.principal(), call.req.matches[1]);
+        if (!canceled) {
+            call.fail(canceled.error());
+            return;
+        }
+        call.ok(task_json(canceled->view), canceled->asynchronous ? 202 : 200);
+    }
+
+    void retry_download(Call& call) {
+        if (!only_params(call, {})) {
+            return;
+        }
+        auto key = idempotency_key(call);
+        if (!key) {
+            return;
+        }
+        auto body = body_object(call, {}, true);
+        if (!body) {
+            return;
+        }
+        auto retried = services.downloads->retry(call.principal(), call.req.matches[1], *key, body_hash(*body));
+        if (!retried) {
+            call.fail(retried.error());
+            return;
+        }
+        const auto& task = retried->view.task;
+        mark_replay(call, retried->replayed);
+        call.res.set_header("Location", "/api/v1/downloads/" + task.task_id);
+        call.ok({{"task_id", task.task_id},
+                 {"status", domain::to_string(task.status)},
+                 {"retry_of", optional_string(task.retry_of)},
+                 {"links", {{"self", "/api/v1/downloads/" + task.task_id}}}},
+                retried->status_code);
+    }
+
+    void create_batch(Call& call) {
+        if (!only_params(call, {})) {
+            return;
+        }
+        auto key = idempotency_key(call);
+        if (!key) {
+            return;
+        }
+        auto body = body_object(call, {"items"});
+        if (!body) {
+            return;
+        }
+        const auto items = body->find("items");
+        if (items == body->end() || !items->is_array()) {
+            call.fail(bad_request("items", "must be an array of downloads"));
+            return;
+        }
+        std::vector<application::tasks::DownloadRequest> requests;
+        for (std::size_t i = 0; i < items->size(); ++i) {
+            auto request = parse_download((*items)[i], "items[" + std::to_string(i) + "].");
+            if (!request) {
+                call.fail(request.error());
+                return;
+            }
+            requests.push_back(std::move(request).value());
+        }
+        auto created = services.downloads->create_batch(call.principal(), requests, *key, body_hash(*body));
+        if (!created) {
+            call.fail(created.error());
+            return;
+        }
+        mark_replay(call, created->replayed);
+        json entries = json::array();
+        for (std::size_t i = 0; i < created->items.size(); ++i) {
+            entries.push_back({{"index", i},
+                               {"task_id", created->items[i].task.task_id},
+                               {"status", domain::to_string(created->items[i].task.status)},
+                               {"reused", i < created->reused.size() && created->reused[i]}});
+        }
+        call.ok({{"batch_id", created->batch_id},
+                 {"created_count", created->created_count},
+                 {"reused_count", created->reused_count},
+                 {"items", std::move(entries)}},
+                created->status_code);
+    }
+
+    void get_batch(Call& call) {
+        if (!only_params(call, {})) {
+            return;
+        }
+        auto batch = services.downloads->get_batch(call.principal(), call.req.matches[1]);
+        if (!batch) {
+            call.fail(batch.error());
+            return;
+        }
+        json items = json::array();
+        json stats = json::object();
+        for (std::size_t i = 0; i < batch->items.size(); ++i) {
+            const auto& task = batch->items[i].task;
+            const auto status = std::string{domain::to_string(task.status)};
+            items.push_back({{"index", i}, {"task_id", task.task_id}, {"status", status}, {"version", task.version}});
+            stats[status] = stats.value(status, 0) + 1; // per entry, duplicates included
+        }
+        call.ok({{"batch_id", batch->batch.batch_id},
+                 {"created_at", utc(batch->batch.created_at)},
+                 {"created_count", batch->batch.created_count},
+                 {"reused_count", batch->batch.reused_count},
+                 {"items", std::move(items)},
+                 {"stats", std::move(stats)}});
+    }
+
+    void cancel_batch(Call& call) {
+        if (!only_params(call, {}) || !body_object(call, {}, true)) {
+            return;
+        }
+        auto canceled = services.downloads->cancel_batch(call.principal(), call.req.matches[1]);
+        if (!canceled) {
+            call.fail(canceled.error());
+            return;
+        }
+        json accepted = json::array();
+        for (const auto& view : canceled->accepted) {
+            accepted.push_back({{"task_id", view.task.task_id}, {"status", domain::to_string(view.task.status)}});
+        }
+        json refused = json::array();
+        for (const auto& item : canceled->refused) {
+            refused.push_back({{"task_id", item.view.task.task_id},
+                               {"status", domain::to_string(item.view.task.status)},
+                               {"code", domain::to_string(item.reason.code)}});
+        }
+        call.ok({{"accepted", std::move(accepted)}, {"refused", std::move(refused)}}, canceled->asynchronous ? 202 : 200);
     }
 
     // ------------------------------------------------------- credentials

@@ -5,6 +5,7 @@
 #include "application/accounts/identity_admin.hpp"
 #include "application/catalog/asset_service.hpp"
 #include "application/catalog/catalog_service.hpp"
+#include "application/tasks/download_service.hpp"
 #include "application/transport/upstream_client.hpp"
 #include "infrastructure/auth/access_tokens.hpp"
 #include "infrastructure/filesystem/paths.hpp"
@@ -74,6 +75,7 @@ struct ProcessHost::State {
     std::shared_ptr<runtime::BoundedExecutor> catalog_executor;
     std::shared_ptr<application::catalog::CatalogService> catalog;
     std::shared_ptr<application::catalog::AssetService> assets;
+    std::shared_ptr<application::tasks::DownloadService> downloads;
     std::unique_ptr<api::ControlApi> control;
 
     StartupReport report;
@@ -134,6 +136,7 @@ struct ProcessHost::State {
                 catalog_executor->request_stop();
                 catalog_executor->join();
             }
+            downloads.reset();
             assets.reset();
             catalog.reset();
             catalog_executor.reset();
@@ -150,6 +153,7 @@ struct ProcessHost::State {
                 instance->identities.reset();
                 instance->credentials.reset();
                 instance->destinations.reset();
+                instance->tasks.reset();
                 instance->database.reset();
                 log.info("shutdown.database_closed");
                 instance->lock.release();
@@ -276,6 +280,30 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
         config.lifetimes, config.handles, 4, state->registry, state->credentials, state->upstream, clock,
         [ids = inst.ids] { return ids->next("ast_"); }, config.catalog.total_budget);
 
+    std::vector<application::tasks::DestinationRule> rules;
+    for (const auto& d : state->destinations) {
+        rules.push_back({d.config.id, infrastructure::filesystem::path_to_utf8(d.root), d.config.principals,
+                         d.config.accept_new_tasks});
+    }
+    state->downloads = std::make_shared<application::tasks::DownloadService>(
+        inst.tasks, state->registry, state->credentials, std::move(rules),
+        [](const application::tasks::DestinationRule& rule) {
+            std::error_code ec;
+            return std::filesystem::is_directory(infrastructure::filesystem::path_from_utf8(rule.canonical_root), ec);
+        },
+        [raw = state.get()](const std::string& destination_id, const std::string& relative_path) {
+            for (const auto& d : raw->destinations) {
+                if (d.config.id == destination_id) {
+                    // Inside the bound root only; a link out of it is not the file.
+                    auto path = infrastructure::filesystem::resolve_within(d.root, relative_path);
+                    std::error_code ec;
+                    return path && std::filesystem::is_regular_file(*path, ec);
+                }
+            }
+            return false;
+        },
+        config.download_limits.max_batch_items);
+
     api::ControlApiOptions api_options{config.control, config.http, config.cors, config.catalog,
                                        config.download_limits, config.media_limits, {}};
     api_options.info.version = std::string{service_version};
@@ -289,6 +317,7 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
         state->registry,
         state->catalog,
         state->assets,
+        state->downloads,
         [raw](const std::string& principal) { return raw->destinations_for(principal); },
         [raw] { return raw->ready.load(); },
         [raw] { return raw->status(); },

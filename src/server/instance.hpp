@@ -8,6 +8,7 @@
 #include "infrastructure/observability/correlation.hpp"
 #include "infrastructure/storage/sqlite/account_repositories.hpp"
 #include "infrastructure/storage/sqlite/database.hpp"
+#include "infrastructure/storage/sqlite/task_repositories.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -28,6 +29,7 @@ struct Instance {
     std::shared_ptr<infrastructure::storage::sqlite::SqliteIdentityRepository> identities;
     std::shared_ptr<infrastructure::storage::sqlite::SqliteCredentialRepository> credentials;
     std::shared_ptr<infrastructure::storage::sqlite::SqliteDestinationRepository> destinations;
+    std::shared_ptr<infrastructure::storage::sqlite::SqliteTaskRepository> tasks;
 
     // Closes the repositories and the database, then releases the lock.
     void close() noexcept;

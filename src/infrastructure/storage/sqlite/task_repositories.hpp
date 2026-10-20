@@ -20,8 +20,19 @@ public:
     SqliteTaskRepository(RepositoryContext context, TaskRepositoryOptions options)
         : ctx_(std::move(context)), options_(options) {}
 
+    domain::Result<std::optional<application::ports::StoredResponse>>
+    find_idempotent(const std::string& owner_id, const std::string& route,
+                    const std::string& idempotency_key) override;
+    domain::Result<std::vector<application::ports::CompletedResult>>
+    completed_results(const std::string& owner_id, const domain::DownloadFingerprint& fingerprint) override;
     domain::Result<application::ports::CreateTaskOutcome>
     create(const application::ports::CreateTaskCommand& command) override;
+    domain::Result<application::ports::BatchOutcome>
+    create_batch(const application::ports::CreateBatchCommand& command) override;
+    domain::Result<application::ports::BatchRecord> get_batch(const std::string& owner_id,
+                                                              const std::string& batch_id) override;
+    domain::Result<std::vector<application::ports::TaskRecord>>
+    list(const application::ports::TaskQuery& query) override;
     domain::Result<application::ports::TaskRecord> get(const std::string& owner_id,
                                                        const std::string& task_id) override;
     domain::Result<domain::NormalizedDownloadIntent> get_intent(const std::string& task_id) override;

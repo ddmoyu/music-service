@@ -23,7 +23,7 @@ constexpr std::string_view create_route = "/api/v1/downloads";
 constexpr std::string_view task_columns =
     "id, owner_id, status, version, execution_id, attempt, wait_reason, next_retry_at, "
     "resume_stage, destination_id, fingerprint_schema, fingerprint_digest, fingerprint, "
-    "created_at, updated_at";
+    "created_at, updated_at, retry_of, started_at, finished_at, cancel_requested_at, progress, result, error";
 
 constexpr std::string_view terminal_list = "('completed', 'failed', 'canceled')";
 
@@ -59,6 +59,13 @@ ports::TaskRecord read_task(const Statement& s) {
     record.fingerprint.canonical = s.text(12);
     record.created_at = from_millis(s.integer(13));
     record.updated_at = from_millis(s.integer(14));
+    record.retry_of = s.optional_text(15);
+    record.started_at = from_millis(s.optional_integer(16));
+    record.finished_at = from_millis(s.optional_integer(17));
+    record.cancel_requested_at = from_millis(s.optional_integer(18));
+    record.progress_json = s.optional_text(19);
+    record.result_json = s.optional_text(20);
+    record.error_json = s.optional_text(21);
     return record;
 }
 
@@ -213,6 +220,252 @@ load_asset(Connection& db, const std::string& id, const std::optional<std::strin
 
 // ===================================================================== tasks
 
+namespace {
+
+constexpr std::string_view batch_route = "/api/v1/download-batches";
+
+domain::Result<std::optional<ports::StoredResponse>>
+lookup_idempotency(Connection& db, const std::string& owner, std::string_view route, const std::string& key,
+                   std::int64_t now) {
+    auto s = db.prepare("SELECT request_hash, status_code, response FROM idempotency_records"
+                        " WHERE owner_id = ? AND method = ? AND route = ? AND idempotency_key = ?"
+                        " AND expires_at > ?");
+    if (!s) {
+        return std::move(s).error();
+    }
+    s->bind(1, owner).bind(2, create_method).bind(3, route).bind(4, key).bind(5, now);
+    return first<ports::StoredResponse>(*s, [](const Statement& st) {
+        return ports::StoredResponse{st.text(0), static_cast<int>(st.integer(1)), st.text(2)};
+    });
+}
+
+domain::Result<void> remember_response(Connection& db, const std::string& owner, std::string_view route,
+                                       const std::string& key, const std::string& hash, int status,
+                                       const nlohmann::json& response, std::int64_t now, std::int64_t expires) {
+    // An expired record with the same key is replaced.
+    auto purge = db.prepare("DELETE FROM idempotency_records WHERE owner_id = ? AND method = ? AND route = ?"
+                            " AND idempotency_key = ? AND expires_at <= ?");
+    if (!purge) {
+        return std::move(purge).error();
+    }
+    purge->bind(1, owner).bind(2, create_method).bind(3, route).bind(4, key).bind(5, now);
+    if (auto done = purge->run(); !done) {
+        return done;
+    }
+    auto insert = db.prepare("INSERT INTO idempotency_records (owner_id, method, route, idempotency_key,"
+                             " request_hash, status_code, response, created_at, expires_at)"
+                             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    if (!insert) {
+        return std::move(insert).error();
+    }
+    insert->bind(1, owner).bind(2, create_method).bind(3, route).bind(4, key).bind(5, hash).bind(
+        6, std::int64_t{status}).bind(7, response.dump()).bind(8, now).bind(9, expires);
+    return insert->run();
+}
+
+// The completed task and its file are exactly what the outside check saw.
+domain::Result<bool> completed_still_valid(Connection& db, const std::string& owner,
+                                           const domain::DownloadFingerprint& fingerprint,
+                                           const ports::ReuseCandidate& candidate) {
+    auto s = db.prepare("SELECT 1 FROM download_tasks t JOIN task_files tf ON tf.task_id = t.id"
+                        " JOIN file_assets f ON f.id = tf.file_id"
+                        " WHERE t.id = ? AND t.owner_id = ? AND t.status = 'completed' AND t.version = ?"
+                        " AND t.fingerprint_digest = ? AND t.fingerprint = ?"
+                        " AND f.id = ? AND f.version = ? AND f.status = 'available' AND f.owner_id = ?");
+    if (!s) {
+        return std::move(s).error();
+    }
+    s->bind(1, candidate.task_id)
+        .bind(2, owner)
+        .bind(3, static_cast<std::int64_t>(candidate.task_version))
+        .bind(4, fingerprint.digest)
+        .bind(5, fingerprint.canonical)
+        .bind(6, candidate.file_id)
+        .bind(7, static_cast<std::int64_t>(candidate.file_version))
+        .bind(8, owner);
+    auto row = s->step();
+    if (!row) {
+        return std::move(row).error();
+    }
+    return row.value();
+}
+
+struct CoreInput {
+    const domain::NormalizedDownloadIntent* intent{nullptr};
+    bool force{false};
+    std::optional<std::string> retry_of;
+    std::optional<ports::ReuseCandidate> completed;
+};
+
+// Steps 2-4 of a create inside an open transaction: active reuse, completed reuse,
+// limits, insert.
+domain::Result<ports::CreateTaskOutcome> create_core(Connection& db, const CoreInput& in, const std::string& new_id,
+                                                     std::int64_t now, const TaskRepositoryOptions& options) {
+    const auto& intent = *in.intent;
+    const auto& owner = intent.owner_id();
+    const auto fingerprint = domain::fingerprint(intent);
+
+    if (in.retry_of) {
+        auto original = load_task(db, *in.retry_of, owner);
+        if (!original) {
+            return std::move(original).error();
+        }
+        if (!original.value()) {
+            return not_found("task");
+        }
+        const auto status = original.value()->status;
+        if (status != TaskStatus::failed && status != TaskStatus::canceled) {
+            return domain::Error{domain::ErrorCode::conflict, "only failed or canceled tasks can be retried", false, {}};
+        }
+    }
+
+    auto active = db.prepare("SELECT id FROM download_tasks WHERE owner_id = ?"
+                             " AND fingerprint_digest = ? AND fingerprint = ?"
+                             " AND status NOT IN " +
+                             std::string{terminal_list});
+    if (!active) {
+        return std::move(active).error();
+    }
+    active->bind(1, owner).bind(2, fingerprint.digest).bind(3, fingerprint.canonical);
+    auto existing = first<std::string>(*active, [](const Statement& st) { return st.text(0); });
+    if (!existing) {
+        return std::move(existing).error();
+    }
+    if (existing.value()) {
+        if (in.force || in.retry_of) {
+            return domain::Error{domain::ErrorCode::active_duplicate, "an equal download is already active", false, {}};
+        }
+        auto task = require_task(db, *existing.value());
+        if (!task) {
+            return std::move(task).error();
+        }
+        return ports::CreateTaskOutcome{std::move(task).value(), true, false};
+    }
+
+    if (in.completed && !in.force && !in.retry_of) {
+        auto valid = completed_still_valid(db, owner, fingerprint, *in.completed);
+        if (!valid) {
+            return std::move(valid).error();
+        }
+        if (valid.value()) {
+            auto task = require_task(db, in.completed->task_id);
+            if (!task) {
+                return std::move(task).error();
+            }
+            return ports::CreateTaskOutcome{std::move(task).value(), true, false};
+        }
+        // Changed since the check: never reuse on stale evidence; create a new task.
+    }
+
+    const auto active_filter = " status NOT IN " + std::string{terminal_list};
+    auto mine = count(db, "SELECT COUNT(*) FROM download_tasks WHERE owner_id = ? AND" + active_filter, owner);
+    auto all = count(db, "SELECT COUNT(*) FROM download_tasks WHERE" + active_filter, std::nullopt);
+    if (!mine || !all) {
+        return !mine ? std::move(mine).error() : std::move(all).error();
+    }
+    if (*mine >= static_cast<std::int64_t>(options.per_principal_active) ||
+        *all >= static_cast<std::int64_t>(options.global_active)) {
+        return domain::Error{domain::ErrorCode::queue_limit_exceeded, "too many unfinished downloads", true, {}};
+    }
+
+    auto insert = db.prepare(
+        "INSERT INTO download_tasks (id, owner_id, status, version, fingerprint_schema,"
+        " fingerprint_digest, fingerprint, normalized_intent, destination_id, original_source,"
+        " retry_of, created_at, updated_at) VALUES (?, ?, 'queued', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    if (!insert) {
+        return std::move(insert).error();
+    }
+    insert->bind(1, new_id)
+        .bind(2, owner)
+        .bind(3, static_cast<std::int64_t>(fingerprint.schema_version))
+        .bind(4, fingerprint.digest)
+        .bind(5, fingerprint.canonical)
+        .bind(6, encode_intent(intent))
+        .bind(7, intent.product().destination_id)
+        .bind(8, intent.original_track().source.value())
+        .bind(9, in.retry_of)
+        .bind(10, now)
+        .bind(11, now);
+    if (auto done = insert->run(); !done) {
+        return done.error();
+    }
+    auto task = require_task(db, new_id);
+    if (!task) {
+        return std::move(task).error();
+    }
+    return ports::CreateTaskOutcome{std::move(task).value(), false, false};
+}
+
+domain::Result<ports::BatchRecord> load_batch(Connection& db, const std::string& owner, const std::string& batch_id) {
+    auto head = db.prepare("SELECT id, owner_id, created_count, reused_count, created_at FROM download_batches"
+                           " WHERE id = ? AND owner_id = ?");
+    if (!head) {
+        return std::move(head).error();
+    }
+    head->bind(1, batch_id).bind(2, owner);
+    auto found = first<ports::BatchRecord>(*head, [](const Statement& st) {
+        return ports::BatchRecord{st.text(0), st.text(1), static_cast<std::uint32_t>(st.integer(2)),
+                                  static_cast<std::uint32_t>(st.integer(3)), from_millis(st.integer(4)), {}};
+    });
+    if (!found) {
+        return std::move(found).error();
+    }
+    if (!found.value()) {
+        return not_found("batch");
+    }
+    auto batch = std::move(*found.value());
+    auto items = db.prepare("SELECT task_id FROM batch_items WHERE batch_id = ? ORDER BY ordinal");
+    if (!items) {
+        return std::move(items).error();
+    }
+    items->bind(1, batch_id);
+    auto ids = collect<std::string>(*items, [](const Statement& st) { return st.text(0); });
+    if (!ids) {
+        return std::move(ids).error();
+    }
+    for (const auto& id : ids.value()) {
+        auto task = require_task(db, id, owner);
+        if (!task) {
+            return std::move(task).error();
+        }
+        batch.items.push_back(std::move(task).value());
+    }
+    return batch;
+}
+
+} // namespace
+
+domain::Result<std::optional<ports::StoredResponse>>
+SqliteTaskRepository::find_idempotent(const std::string& owner_id, const std::string& route,
+                                      const std::string& idempotency_key) {
+    const auto now = to_millis(ctx_.clock->now());
+    return ctx_.database->read([&](Connection& db) {
+        return lookup_idempotency(db, owner_id, route, idempotency_key, now);
+    });
+}
+
+domain::Result<std::vector<ports::CompletedResult>>
+SqliteTaskRepository::completed_results(const std::string& owner_id, const domain::DownloadFingerprint& fingerprint) {
+    return ctx_.database->read([&](Connection& db) -> domain::Result<std::vector<ports::CompletedResult>> {
+        auto s = db.prepare("SELECT t.id, t.version, f.id, f.version, f.destination_id, f.relative_path, f.status"
+                            " FROM download_tasks t JOIN task_files tf ON tf.task_id = t.id"
+                            " JOIN file_assets f ON f.id = tf.file_id"
+                            " WHERE t.owner_id = ? AND t.status = 'completed' AND t.fingerprint_digest = ?"
+                            " AND t.fingerprint = ? AND f.owner_id = ? ORDER BY t.finished_at DESC, t.id DESC LIMIT 8");
+        if (!s) {
+            return std::move(s).error();
+        }
+        s->bind(1, owner_id).bind(2, fingerprint.digest).bind(3, fingerprint.canonical).bind(4, owner_id);
+        return collect<ports::CompletedResult>(*s, [](const Statement& st) {
+            return ports::CompletedResult{{st.text(0), static_cast<std::uint64_t>(st.integer(1)), st.text(2),
+                                           static_cast<std::uint64_t>(st.integer(3))},
+                                          st.text(4),
+                                          st.text(5),
+                                          st.text(6) == "available"};
+        });
+    });
+}
+
 domain::Result<ports::CreateTaskOutcome>
 SqliteTaskRepository::create(const ports::CreateTaskCommand& command) {
     const auto& intent = command.intent;
@@ -220,144 +473,190 @@ SqliteTaskRepository::create(const ports::CreateTaskCommand& command) {
     if (command.idempotency_key.empty() || command.request_hash.empty()) {
         return domain::Error::validation("Idempotency-Key", "is required");
     }
-    const auto fingerprint = domain::fingerprint(intent);
-    const auto encoded = encode_intent(intent);
     const auto new_id = ctx_.ids->next("tsk_");
     const auto now = to_millis(ctx_.clock->now());
     const auto expires =
-        now + std::chrono::duration_cast<std::chrono::milliseconds>(options_.idempotency_retention)
-                  .count();
+        now + std::chrono::duration_cast<std::chrono::milliseconds>(options_.idempotency_retention).count();
 
     return ctx_.database->write([&](Connection& db) -> domain::Result<ports::CreateTaskOutcome> {
         // 1. Idempotency: a committed key replays its first outcome.
-        auto purge = db.prepare("DELETE FROM idempotency_records WHERE owner_id = ? AND method = ?"
-                                " AND route = ? AND idempotency_key = ? AND expires_at <= ?");
-        if (!purge) {
-            return std::move(purge).error();
-        }
-        purge->bind(1, owner).bind(2, create_method).bind(3, create_route).bind(
-            4, command.idempotency_key).bind(5, now);
-        if (auto done = purge->run(); !done) {
-            return done.error();
-        }
-        auto lookup = db.prepare("SELECT request_hash, response FROM idempotency_records"
-                                 " WHERE owner_id = ? AND method = ? AND route = ?"
-                                 " AND idempotency_key = ?");
-        if (!lookup) {
-            return std::move(lookup).error();
-        }
-        lookup->bind(1, owner).bind(2, create_method).bind(3, create_route).bind(
-            4, command.idempotency_key);
-        auto record = first<std::pair<std::string, std::string>>(*lookup, [](const Statement& st) {
-            return std::pair{st.text(0), st.text(1)};
-        });
+        auto record = lookup_idempotency(db, owner, command.route, command.idempotency_key, now);
         if (!record) {
             return std::move(record).error();
         }
         if (record.value()) {
-            if (record.value()->first != command.request_hash) {
+            if (record.value()->request_hash != command.request_hash) {
                 return domain::Error{domain::ErrorCode::idempotency_conflict,
                                      "Idempotency-Key was used for a different request", false, {}};
             }
-            const auto response = nlohmann::json::parse(record.value()->second, nullptr, false);
+            const auto response = nlohmann::json::parse(record.value()->response_json, nullptr, false);
             if (response.is_discarded() || !response.contains("task_id")) {
-                return domain::Error{domain::ErrorCode::internal, "stored response is invalid",
-                                     false, {}};
+                return domain::Error{domain::ErrorCode::internal, "stored response is invalid", false, {}};
             }
             auto task = require_task(db, response["task_id"].get<std::string>(), owner);
             if (!task) {
                 return std::move(task).error();
             }
-            return ports::CreateTaskOutcome{std::move(task).value(),
-                                            response.value("reused", false), true};
+            return ports::CreateTaskOutcome{std::move(task).value(), response.value("reused", false), true};
         }
 
-        const auto remember = [&](const std::string& task_id, bool reused) -> domain::Result<void> {
-            auto insert = db.prepare(
-                "INSERT INTO idempotency_records (owner_id, method, route, idempotency_key,"
-                " request_hash, status_code, response, created_at, expires_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
-            if (!insert) {
-                return std::move(insert).error();
-            }
-            const nlohmann::json response{{"task_id", task_id}, {"reused", reused}};
-            insert->bind(1, owner).bind(2, create_method).bind(3, create_route).bind(
-                4, command.idempotency_key).bind(5, command.request_hash).bind(
-                6, std::int64_t{reused ? 200 : 202}).bind(7, response.dump()).bind(8, now).bind(
-                9, expires);
-            return insert->run();
-        };
+        auto outcome = create_core(db, {&intent, command.force, command.retry_of, command.completed}, new_id, now, options_);
+        if (!outcome) {
+            return outcome;
+        }
+        const nlohmann::json response{{"task_id", outcome->task.task_id}, {"reused", outcome->reused}};
+        if (auto remembered = remember_response(db, owner, command.route, command.idempotency_key, command.request_hash,
+                                                outcome->reused ? 200 : 202, response, now, expires);
+            !remembered) {
+            return remembered.error();
+        }
+        return outcome;
+    });
+}
 
-        // 2. An equal active intent is reused (or rejected under force).
-        auto active = db.prepare("SELECT id FROM download_tasks WHERE owner_id = ?"
-                                 " AND fingerprint_digest = ? AND fingerprint = ?"
-                                 " AND status NOT IN " +
-                                 std::string{terminal_list});
-        if (!active) {
-            return std::move(active).error();
+domain::Result<ports::BatchOutcome> SqliteTaskRepository::create_batch(const ports::CreateBatchCommand& command) {
+    if (command.idempotency_key.empty() || command.request_hash.empty()) {
+        return domain::Error::validation("Idempotency-Key", "is required");
+    }
+    if (command.items.empty()) {
+        return domain::Error::validation("items", "must not be empty");
+    }
+    const auto& owner = command.owner_id;
+    for (const auto& item : command.items) {
+        if (item.intent.owner_id() != owner) {
+            return domain::Error::validation("items", "belong to another principal");
         }
-        active->bind(1, owner).bind(2, fingerprint.digest).bind(3, fingerprint.canonical);
-        auto existing = first<std::string>(*active, [](const Statement& st) { return st.text(0); });
-        if (!existing) {
-            return std::move(existing).error();
+    }
+    const auto batch_id = ctx_.ids->next("bat_");
+    std::vector<std::string> new_ids;
+    for (std::size_t i = 0; i < command.items.size(); ++i) {
+        new_ids.push_back(ctx_.ids->next("tsk_"));
+    }
+    const auto now = to_millis(ctx_.clock->now());
+    const auto expires =
+        now + std::chrono::duration_cast<std::chrono::milliseconds>(options_.idempotency_retention).count();
+
+    return ctx_.database->write([&](Connection& db) -> domain::Result<ports::BatchOutcome> {
+        auto record = lookup_idempotency(db, owner, batch_route, command.idempotency_key, now);
+        if (!record) {
+            return std::move(record).error();
         }
-        if (existing.value()) {
-            if (command.force) {
-                return domain::Error{domain::ErrorCode::active_duplicate,
-                                     "an equal download is already active", false, {}};
+        if (record.value()) {
+            if (record.value()->request_hash != command.request_hash) {
+                return domain::Error{domain::ErrorCode::idempotency_conflict,
+                                     "Idempotency-Key was used for a different request", false, {}};
             }
-            if (auto remembered = remember(*existing.value(), true); !remembered) {
-                return remembered.error();
+            const auto response = nlohmann::json::parse(record.value()->response_json, nullptr, false);
+            if (response.is_discarded() || !response.contains("batch_id") || !response.contains("reused")) {
+                return domain::Error{domain::ErrorCode::internal, "stored response is invalid", false, {}};
             }
-            auto task = require_task(db, *existing.value());
-            if (!task) {
-                return std::move(task).error();
+            auto batch = load_batch(db, owner, response["batch_id"].get<std::string>());
+            if (!batch) {
+                return std::move(batch).error();
             }
-            return ports::CreateTaskOutcome{std::move(task).value(), true, false};
+            return ports::BatchOutcome{std::move(batch).value(), response["reused"].get<std::vector<bool>>(), true};
         }
 
-        // 3. Active task limits.
-        const auto active_filter = " status NOT IN " + std::string{terminal_list};
-        auto mine = count(db, "SELECT COUNT(*) FROM download_tasks WHERE owner_id = ? AND" + active_filter, owner);
-        auto all = count(db, "SELECT COUNT(*) FROM download_tasks WHERE" + active_filter, std::nullopt);
-        if (!mine || !all) {
-            return !mine ? std::move(mine).error() : std::move(all).error();
+        std::vector<std::string> task_ids;
+        std::vector<bool> reused;
+        std::uint32_t created = 0;
+        for (std::size_t i = 0; i < command.items.size(); ++i) {
+            const auto& item = command.items[i];
+            auto outcome = create_core(db, {&item.intent, item.force, std::nullopt, item.completed}, new_ids[i], now,
+                                       options_);
+            if (!outcome) {
+                auto error = std::move(outcome).error();
+                error.details.insert(error.details.begin(),
+                                     {"items[" + std::to_string(i) + "]", error.message});
+                return error;
+            }
+            task_ids.push_back(outcome->task.task_id);
+            reused.push_back(outcome->reused);
+            created += outcome->reused ? 0U : 1U;
         }
-        if (*mine >= static_cast<std::int64_t>(options_.per_principal_active) ||
-            *all >= static_cast<std::int64_t>(options_.global_active)) {
-            return domain::Error{domain::ErrorCode::queue_limit_exceeded,
-                                 "too many unfinished downloads", true, {}};
-        }
-
-        // 4. Insert.
-        auto insert = db.prepare(
-            "INSERT INTO download_tasks (id, owner_id, status, version, fingerprint_schema,"
-            " fingerprint_digest, fingerprint, normalized_intent, destination_id, original_source,"
-            " created_at, updated_at) VALUES (?, ?, 'queued', 1, ?, ?, ?, ?, ?, ?, ?, ?)");
+        const auto reused_count = static_cast<std::uint32_t>(task_ids.size()) - created;
+        auto insert = db.prepare("INSERT INTO download_batches (id, owner_id, created_count, reused_count, created_at)"
+                                 " VALUES (?, ?, ?, ?, ?)");
         if (!insert) {
             return std::move(insert).error();
         }
-        insert->bind(1, new_id)
-            .bind(2, owner)
-            .bind(3, static_cast<std::int64_t>(fingerprint.schema_version))
-            .bind(4, fingerprint.digest)
-            .bind(5, fingerprint.canonical)
-            .bind(6, encoded)
-            .bind(7, intent.product().destination_id)
-            .bind(8, intent.original_track().source.value())
-            .bind(9, now)
-            .bind(10, now);
+        insert->bind(1, batch_id).bind(2, owner).bind(3, std::int64_t{created}).bind(4, std::int64_t{reused_count}).bind(
+            5, now);
         if (auto done = insert->run(); !done) {
             return done.error();
         }
-        if (auto remembered = remember(new_id, false); !remembered) {
+        for (std::size_t i = 0; i < task_ids.size(); ++i) {
+            auto link = db.prepare("INSERT INTO batch_items (batch_id, ordinal, task_id) VALUES (?, ?, ?)");
+            if (!link) {
+                return std::move(link).error();
+            }
+            link->bind(1, batch_id).bind(2, static_cast<std::int64_t>(i)).bind(3, task_ids[i]);
+            if (auto done = link->run(); !done) {
+                return done.error();
+            }
+        }
+        const nlohmann::json response{{"batch_id", batch_id}, {"reused", reused}};
+        if (auto remembered = remember_response(db, owner, batch_route, command.idempotency_key, command.request_hash,
+                                                created > 0 ? 202 : 200, response, now, expires);
+            !remembered) {
             return remembered.error();
         }
-        auto task = require_task(db, new_id);
-        if (!task) {
-            return std::move(task).error();
+        auto batch = load_batch(db, owner, batch_id);
+        if (!batch) {
+            return std::move(batch).error();
         }
-        return ports::CreateTaskOutcome{std::move(task).value(), false, false};
+        return ports::BatchOutcome{std::move(batch).value(), std::move(reused), false};
+    });
+}
+
+domain::Result<ports::BatchRecord> SqliteTaskRepository::get_batch(const std::string& owner_id,
+                                                                  const std::string& batch_id) {
+    return ctx_.database->read([&](Connection& db) { return load_batch(db, owner_id, batch_id); });
+}
+
+domain::Result<std::vector<ports::TaskRecord>> SqliteTaskRepository::list(const ports::TaskQuery& query) {
+    if (query.limit == 0 || query.limit > 1000) {
+        return domain::Error::validation("limit", "is out of range");
+    }
+    return ctx_.database->read([&](Connection& db) -> domain::Result<std::vector<ports::TaskRecord>> {
+        std::string sql = "SELECT " + std::string{task_columns} + " FROM download_tasks WHERE owner_id = ?";
+        if (query.status) {
+            sql += " AND status = ?";
+        }
+        if (query.source) {
+            sql += " AND original_source = ?";
+        }
+        if (query.batch_id) {
+            sql += " AND EXISTS (SELECT 1 FROM batch_items b JOIN download_batches d ON d.id = b.batch_id"
+                   " WHERE b.batch_id = ? AND d.owner_id = download_tasks.owner_id AND b.task_id = download_tasks.id)";
+        }
+        if (query.after) {
+            sql += " AND (created_at < ? OR (created_at = ? AND id < ?))";
+        }
+        sql += " ORDER BY created_at DESC, id DESC LIMIT ?";
+        auto s = db.prepare(sql);
+        if (!s) {
+            return std::move(s).error();
+        }
+        int i = 1;
+        s->bind(i++, query.owner_id);
+        if (query.status) {
+            s->bind(i++, domain::to_string(*query.status));
+        }
+        if (query.source) {
+            s->bind(i++, *query.source);
+        }
+        if (query.batch_id) {
+            s->bind(i++, *query.batch_id);
+        }
+        if (query.after) {
+            const auto at = to_millis(query.after->first);
+            s->bind(i++, at);
+            s->bind(i++, at);
+            s->bind(i++, query.after->second);
+        }
+        s->bind(i, static_cast<std::int64_t>(query.limit));
+        return collect<ports::TaskRecord>(*s, read_task);
     });
 }
 
