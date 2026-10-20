@@ -14,7 +14,7 @@
 
 | 顺序 | 平台／source | 难度 | 首次接入重点与排序依据 |
 | --- | --- | --- | --- |
-| 1 | 酷我 `kuwo` | 低 | 先做标准品质：查询参数、JSON、rid 与平台直连接口即可形成主要链路，已检查基础路径无本地 AES／RSA 请求加密，但歌词端点使用 XOR + Base64 参数编码。参考实现的搜索、详情、歌单、歌词和备用取流大多使用明文 HTTP 端点（search.kuwo.cn、m.kuwo.cn、wapi.kuwo.cn、newlyric.kuwo.cn 等），只有 mobi.kuwo.cn 取流为 HTTPS；T12 须逐端点确认 HTTPS 可用性，仍需明文的端点按[传输规则](backend-service/runtime-and-tasks.md#httplib-适配规则)登记且不带秘密。核对实际品质与试听状态，高品质、复杂歌词后补。依据：[Go 搜索][kuwo-song]、[Go 取流][kuwo-core]。 |
+| 1 | 酷我 `kuwo` | 低 | 先做标准品质：查询参数、JSON、rid 与平台直连接口即可形成主要链路，已检查基础路径无本地 AES／RSA 请求加密，但歌词端点使用 XOR + Base64 参数编码。参考实现的搜索、详情、歌单、歌词和备用取流大多使用明文 HTTP 端点（search.kuwo.cn、m.kuwo.cn、wapi.kuwo.cn、newlyric.kuwo.cn 等），只有 mobi.kuwo.cn 取流为 HTTPS；T12（2026-10-20）已确认所用搜索、歌曲页、音源与 CDN 端点均可走 HTTPS，未登记明文端点；参考实现的 songinfoandlrc 详情端点已失效，改读歌曲页面，详见[实施记录](development-tasks.md#t12-酷我标准品质协议包已完成2026-10-20提交-c4c0e62)。核对实际品质与试听状态，高品质、复杂歌词后补。依据：[Go 搜索][kuwo-song]、[Go 取流][kuwo-core]。 |
 | 2 | 5sing `fivesing` | 低 | 搜索及取流请求较直接；新增作品编号与类型的复合身份、主备地址处理。元数据缺失和时长估算必须保留未知语义，不能把翻唱等作品当作同一录音。依据：[搜索][fivesing-song]、[详情与取流][fivesing-core]。 |
 | 3 | Jamendo `jamendo` | 较低 | 参考适配器使用网站 API、SHA-1 构造的 x-jam-call 头和直链字段；需补齐详情元数据、区分 download／stream 字段及实际品质。首次引入小范围摘要协议，不能把该实现描述成无签名的官方开放 API。依据：[协议与模型][jamendo-core]、[取流][jamendo-download]。 |
 | 4 | 千千 `qianqian` | 较低 | 排序参数、时间戳与 MD5 签名后请求详情和 tracklink；比前三者多一套确定的签名向量。核对权限、返回结构和音质，歌单搜索不作为首次闭环的前置条件。依据：[协议与取流][qianqian-core]。 |

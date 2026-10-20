@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T11 **已完成**，S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T12 **已完成**，S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,7 +262,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-下一项为 **T12**（酷我标准品质协议包），T13 等 S1 任务随后按前置推进。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+下一项为 **T13**（搜索、详情、解析与缓存用例）；T14～T19 随后按前置推进。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
@@ -399,4 +399,16 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 | 覆盖的验收 | 无前端、桌面会话或音频设备时三种目标均可启动、健康、停止；入口与配置一致（控制入口；媒体与 SSE 在功能实现前不启动，info 如实声明）；证书来源、运行库、架构与命令已记录；运行验证均在目标环境实际执行，未以编译或交叉编译代替 |
 | 过程问题 | 首版 Linux 冒烟脚本把 shell 函数放到后台，SIGTERM 发给了子 shell；随后清理钩子以空 PID 执行 `kill 0`，信号打到整个进程组导致 CI 运行器被停（运行 39435328360），提交 17c6c85 修正 |
 | 已知限制 | Windows 上未验证可执行程序收到 Ctrl+C 后的收尾（PowerShell 无法向后台进程发送控制台事件；停机顺序由进程内测试覆盖，冒烟脚本验证强制结束后锁释放与重启）；Windows 服务、systemd、Compose 示例、arm64 镜像与 NAS 未做，归 T37～T39；CA bundle 配置键仍未加入，目前三种目标都使用系统信任根 |
+
+### T12 酷我标准品质协议包：已完成（2026-10-20，提交 c4c0e62）
+
+| 项目 | 记录 |
+| --- | --- |
+| 交付 | `providers/kuwo`：protocol（请求构造）、parsing（搜索 JSON、歌曲页面、音源响应、分享链接，纯函数）、capabilities（经上游客户端）与 bundle（kuwo-native 0.1.0，匿名 search_tracks／track_detail／parse_links／resolve_audio，品质提示仅 standard，无凭证 profile）。新增 `UpstreamHttp` 端口（UpstreamClient 实现），经 ProviderSetup 注入工厂并带配置的 rate_limit_group；无法入场映射为可重试 SERVICE_BUSY。脱敏样本见[样本说明](../../../tests/fixtures/providers/kuwo/README.md)，平台说明见[酷我适配器](../../../src/providers/kuwo/README.md) |
+| 端点核实（2026-10-20，本机 Windows，中国大陆网络） | 搜索 `https://www.kuwo.cn/search/searchMusicBykeyWord` 可用（http 访问 301 到 HTTPS）；音源 `https://mobi.kuwo.cn/mobi.s` 可用；音源 CDN（`kw-*.kuwo.cn`）上游下发 http 地址，同一路径 HTTPS 证书有效且返回 206；歌曲页 `https://www.kuwo.cn/play_detail/{rid}` 可用，不存在的 rid 返回 HTTP 430。参考实现的 `m.kuwo.cn/newh5/singles/songinfoandlrc` 对所测歌曲均返回“音乐查询失败”，`www.kuwo.cn/api/www/music/musicInfo` 拒绝请求。结论：T12 所用端点全部为 HTTPS，未登记任何明文端点；标准品质无需凭证，未注册凭证校验 |
+| 格式／品质／试听证据 | 免费歌曲 78932517：mobi.s 返回同 rid、type 0、mp3、bitrate 128、duration 176，CDN 文件 2,829,338 字节（约 128.6 kbit/s），与搜索时长一致 → 标准品质、上游声明整曲。付费歌曲 228908 在固定 user 值下返回另一 rid（260839262）、type 1、bitrate 1、11 秒短片 → 报告为 preview、无品质声明，默认被 evaluate_resource 拒绝；同一歌曲在随机 user 值的请求下返回完整标准品质，替代与否取决于请求条件，因此逐次按响应证据判定。字节层面的格式与时长核验归 T15 |
+| 覆盖的验收 | 平台契约：搜索映射（rid、标题、歌手及 id、专辑及 id、时长，不按标题猜版本，缺专辑留空）、分页游标与总数、实体解码、HTML 或缺字段的响应为协议错误而非空结果；歌曲页只接受同 rid 页面，缺失为 NOT_FOUND；音源地址限 `*.kuwo.cn` 默认端口并改为 HTTPS，相似域名被拒；链接解析只接受已知形式；请求均为 HTTPS、匿名、经上游客户端并带正确入场字段，非法输入不发请求，503 为可重试上游错误，入场延后为 SERVICE_BUSY；strict 高品质在发请求前返回 QUALITY_UNAVAILABLE，allow_lower 回落标准品质。受限在线探测（`MUSIC_SERVICE_KUWO_ONLINE=1`，本机）：搜索“晴天”10 条（共 3552），7 条解析为整曲标准品质，详情标题与搜索一致，入场额度全部归还 |
+| Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 171/171 通过（2 项在线用例按设计跳过） |
+| Linux 证据（CI 运行 39439859236） | ubuntu-24.04，GCC 13.3.0，glibc 2.39：0 条项目警告，171/171 通过（离线契约测试；酷我在线探测不在 CI 运行，因海外运行器可能受地区限制）；Windows 与容器任务同时通过 |
+| 已知限制 | 高品质、歌词（XOR+Base64 参数）、歌单／专辑／榜单与凭证均未实现、未声明；详情依赖歌曲页面结构，页面改版会以协议错误暴露；替代短片的 rid 未作为 actual_track 记录（无该 rid 的元信息） |
 
