@@ -160,11 +160,14 @@ TEST_CASE("failed writes roll back", "[storage][database]") {
 
 TEST_CASE("a throwing write rolls back and frees the writer", "[storage][database]") {
     Store s{"throw"};
-    CHECK_THROWS_AS(s.database->write([](Connection& db) -> domain::Result<void> {
-        REQUIRE(db.exec("INSERT INTO destinations VALUES ('dst_x', '/x', 0)"));
+    // No assertion inside: nesting Catch2 macros shadows their internal handler.
+    const auto insert_then_throw = [](Connection& db) -> domain::Result<void> {
+        if (auto inserted = db.exec("INSERT INTO destinations VALUES ('dst_x', '/x', 0)"); !inserted) {
+            return inserted; // the CHECK below then fails: nothing was thrown
+        }
         throw std::runtime_error{"boom"};
-    }),
-                    std::runtime_error);
+    };
+    CHECK_THROWS_AS(s.database->write(insert_then_throw), std::runtime_error);
     CHECK(s.destinations->get("dst_x").error().code == ErrorCode::not_found);
     REQUIRE(s.destinations->bind("dst_y", "/y"));
     CHECK(s.destinations->get("dst_y"));

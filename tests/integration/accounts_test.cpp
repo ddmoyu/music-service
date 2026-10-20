@@ -21,6 +21,7 @@
 #include <functional>
 #include <set>
 #include <string>
+#include <utility>
 
 using namespace music_service;
 using namespace music_service::test;
@@ -412,8 +413,13 @@ TEST_CASE("verification results belong to the version that was checked", "[accou
     // A39: the credential changes while a verification is in flight; the late result
     // is not attached to the new version.
     const auto racing = a.cookie(prn, "hooked", "v=1");
+    // Fires once. The hook must not reset a.verify_hook itself: that would destroy the
+    // closure while it runs.
+    bool fired = false;
     a.verify_hook = [&] {
-        a.verify_hook = nullptr;
+        if (std::exchange(fired, true)) {
+            return;
+        }
         (void)unwrap(a.credentials->update(prn, racing.id, {ports::SecretBytes{"v=2"}, {}, {}}));
     };
     CHECK(a.credentials->verify(prn, racing.id, context()).error().code == ErrorCode::version_conflict);
