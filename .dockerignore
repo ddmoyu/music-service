@@ -1,0 +1,9 @@
+# Only CMakeLists.txt, CMakePresets.json, cmake/, src/ and packaging/docker are used.
+out/
+build/
+third_party/
+docs/
+tests/
+.git/
+.github/
+.vs/

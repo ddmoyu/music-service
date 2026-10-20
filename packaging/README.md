@@ -1,5 +1,30 @@
 # 发布与部署
 
-windows、linux、docker 分别预留原生服务集成和容器交付文件。当前没有服务可执行文件，因此不添加占位 Dockerfile、启动脚本或无法工作的安装包规则。
+三个运行目标共用同一程序 `music-service` 与同一 HTTP 契约。每个目录提供该目标的运行验证脚本，CI（`.github/workflows/ci.yml`）在每次推送时执行。
 
-正式接入时逐项验证目标架构、运行库、证书、持久目录、权限、停止信号和恢复行为。
+| 目录 | 内容 | 验证内容 |
+| --- | --- | --- |
+| `windows/` | `smoke.ps1` | version、check-config、init、serve 就绪、healthcheck、带 token 的 info、无 token 401、运行中管理命令被拒；强制结束后实例锁释放，重启后 token 仍有效 |
+| `linux/` | `smoke.sh` | 同上，另以 SIGTERM 停止：退出码 0，停机顺序为监听 → 数据库 → 实例锁，之后管理命令可执行；输出 glibc 与动态库依赖 |
+| `docker/` | `Dockerfile`、`config.json`、`smoke.sh` | 多阶段构建；运行镜像只含程序、Ubuntu 24.04 基础库与 CA 证书，非 root（uid 10001）；数据卷上 init、健康检查、发布端口访问、`docker stop` 正常收尾，删除容器后用同一卷重建仍可用 |
+
+## 证书
+
+上游 HTTPS 一律校验证书链与主机名（Mbed TLS）。信任根：Windows 读取系统证书存储；Linux 读取发行版 CA 文件（如 `/etc/ssl/certs/ca-certificates.crt`）；容器镜像安装 `ca-certificates`。CI 中的 `[online]` 用例在 Windows 与 Linux 上用系统信任根访问公开 HTTPS 站点，验证这一路径；本地开发默认不联网，设置 `MUSIC_SERVICE_ONLINE_TESTS=1` 才运行。
+
+## 容器
+
+```bash
+docker build -f packaging/docker/Dockerfile -t music-service .
+docker volume create music-data
+docker volume create music-downloads
+docker run --rm -v music-data:/data -v music-downloads:/downloads music-service init
+docker run -d --name music-service -p 127.0.0.1:17632:17632 \
+  -v music-data:/data -v music-downloads:/downloads music-service
+```
+
+- 基础镜像按 digest 固定（`ubuntu:24.04`，见 Dockerfile）；构建阶段用 pip 安装固定版本的 CMake 3.31.6 与 Ninja，因为发行版 CMake 低于工程要求的 3.30。
+- 容器内监听 `0.0.0.0:17632`；`public_urls.api_base` 缺省为 `http://127.0.0.1:17632`，适用于只映射到宿主 loopback 的用法。对外提供服务时必须改为客户端可达的 HTTPS 地址或反向代理地址，配置校验会拒绝远程明文地址。
+- `init` 生成的 `bootstrap-token.txt` 位于数据卷 `secrets/`，取走后删除；之后的身份管理须先停止容器，再用同一卷运行 `principal`／`token` 命令。
+- ENTRYPOINT 为 exec 形式，服务即 PID 1，直接收到 `docker stop` 的 SIGTERM；停机远短于缺省 10 秒宽限期，Compose 中可显式设置 `stop_grace_period` 大于 `shutdown.soft_seconds`。
+- 尚未验证：arm64 镜像、Compose 示例、NAS。

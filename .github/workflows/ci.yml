@@ -23,6 +23,14 @@ jobs:
           cmake --preset windows-msvc-debug || exit /b 1
           cmake --build --preset windows-msvc-debug || exit /b 1
           ctest --preset windows-msvc-debug || exit /b 1
+      - name: Upstream HTTPS through the system trust store
+        shell: pwsh
+        env:
+          MUSIC_SERVICE_ONLINE_TESTS: "1"
+        run: out/build/windows-msvc-debug/tests/music_service_integration_tests.exe "[online]"
+      - name: Runtime smoke test
+        shell: pwsh
+        run: packaging/windows/smoke.ps1 -Binary out/build/windows-msvc-debug/src/server/music-service.exe
 
   linux-gcc:
     runs-on: ubuntu-24.04
@@ -38,3 +46,18 @@ jobs:
           cmake --preset linux-gcc-debug
           cmake --build --preset linux-gcc-debug
           ctest --preset linux-gcc-debug
+      - name: Upstream HTTPS through the system CA files
+        env:
+          MUSIC_SERVICE_ONLINE_TESTS: "1"
+        run: out/build/linux-gcc-debug/tests/music_service_integration_tests "[online]"
+      - name: Runtime smoke test
+        run: packaging/linux/smoke.sh out/build/linux-gcc-debug/src/server/music-service
+
+  docker:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build -f packaging/docker/Dockerfile -t music-service:ci .
+      - name: Container smoke test
+        run: packaging/docker/smoke.sh music-service:ci

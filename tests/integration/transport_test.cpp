@@ -6,6 +6,7 @@
 
 #include "application/transport/upstream_client.hpp"
 #include "infrastructure/clock.hpp"
+#include "infrastructure/config/config_loader.hpp"
 #include "infrastructure/transport/httplib_transport.hpp"
 #include "runtime/admission/admission_ledger.hpp"
 
@@ -584,4 +585,26 @@ TEST_CASE("the transport refuses to run without a lease for the target origin", 
     lease.release();
     CHECK(h.transport->request(get(server.url("/x")), lease, ctx).error().code == domain::ErrorCode::validation_failed);
     CHECK(server.seen.requests == 0);
+}
+
+// Opt-in (MUSIC_SERVICE_ONLINE_TESTS=1): a real public HTTPS endpoint through the
+// operating system's trust roots, i.e. the Windows certificate store or the Linux CA
+// files, as deployed. Skipped otherwise so the suite needs no outside network.
+TEST_CASE("public HTTPS verifies against the system trust roots", "[transport][online]") {
+    const auto enabled = infrastructure::config::process_environment("MUSIC_SERVICE_ONLINE_TESTS");
+    if (enabled != "1") {
+        SKIP("set MUSIC_SERVICE_ONLINE_TESTS=1 to run");
+    }
+    Harness h{{}, false};
+    auto request = get("https://www.example.com/");
+    request.operation = "search";
+    const auto result = h.fetch(request, Harness::context(15s));
+    INFO((result ? std::string{"ok"} : category(result.error()) + ": " + result.error().message));
+    REQUIRE(result.has_value());
+    REQUIRE(std::holds_alternative<ports::HttpResponse>(result.value()));
+    const auto& response = std::get<ports::HttpResponse>(result.value());
+    CHECK(response.head.status == 200);
+    CHECK(response.body.find("Example Domain") != std::string::npos);
+
+    CHECK(h.ledger->usage().total == 0);
 }

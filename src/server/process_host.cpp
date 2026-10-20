@@ -163,7 +163,14 @@ void ProcessHost::run_until(const std::function<bool()>& should_stop) {
 domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::ServiceConfig& config,
                                                                 HostOptions options) {
     auto clock = std::make_shared<infrastructure::SystemClock>();
-    auto sink = options.log_sink ? options.log_sink : std::make_shared<observability::JsonLineSink>(std::cerr);
+    std::shared_ptr<observability::LogSink> sink = options.log_sink;
+    if (!sink) {
+        if (config.logging.format == "text") {
+            sink = std::make_shared<observability::TextSink>(std::cerr);
+        } else {
+            sink = std::make_shared<observability::JsonLineSink>(std::cerr);
+        }
+    }
     auto level = observability::parse_log_level(config.logging.level);
     auto state = std::make_unique<State>(
         observability::Logger{sink, level ? level.value() : observability::LogLevel::info, clock});
