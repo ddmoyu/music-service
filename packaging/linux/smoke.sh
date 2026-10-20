@@ -8,7 +8,13 @@ set -euo pipefail
 bin="$(realpath "$1")"
 port="${2:-17642}"
 work="$(mktemp -d)"
-trap 'kill "${pid:-0}" 2>/dev/null || true; rm -rf "$work"' EXIT
+pid=""
+# Only ever signal the service itself: "kill 0" would hit the whole process group.
+cleanup() {
+  if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; fi
+  rm -rf "$work"
+}
+trap cleanup EXIT
 mkdir -p "$work/downloads"
 cat > "$work/config.json" <<JSON
 {
@@ -32,7 +38,9 @@ run init
 token="$(head -n 1 "$work/data/secrets/bootstrap-token.txt")"
 
 echo "== serve"
-run serve > "$work/stdout.txt" 2> "$work/stderr.txt" &
+# The binary itself in the background (not the run function, which would be a
+# subshell), so $! is the service and receives the SIGTERM below.
+"$bin" --config "$work/config.json" serve > "$work/stdout.txt" 2> "$work/stderr.txt" &
 pid=$!
 for _ in $(seq 1 100); do
   grep -q '"event":"ready"' "$work/stdout.txt" 2>/dev/null && break
@@ -52,7 +60,7 @@ fi
 echo "== SIGTERM"
 kill -TERM "$pid"
 code=0; wait "$pid" || code=$?
-unset pid
+pid=""
 [ "$code" = 0 ] || { echo "service exited with $code"; cat "$work/stderr.txt"; exit 1; }
 order="$(grep -o '"event":"shutdown\.[a-z_]*"' "$work/stderr.txt" | tr '\n' ' ')"
 echo "shutdown order: $order"
