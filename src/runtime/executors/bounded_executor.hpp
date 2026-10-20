@@ -1,5 +1,6 @@
 #pragma once
 
+#include "application/ports/runtime/executor.hpp"
 #include "domain/result.hpp"
 
 #include <chrono>
@@ -24,9 +25,9 @@ namespace music_service::runtime {
 // An exception escaping work is caught at the executor boundary: it counts as failed,
 // is reported to the optional handler (internal diagnostics only) and the worker
 // keeps running.
-class BoundedExecutor {
+class BoundedExecutor final : public application::ports::WorkExecutor {
 public:
-    using Work = std::function<void(std::stop_token)>;
+    using Work = application::ports::WorkExecutor::Work;
     // Receives the executor name and the exception's what(); must not throw.
     using FailureHandler = std::function<void(std::string_view executor, std::string_view what)>;
 
@@ -43,9 +44,9 @@ public:
     BoundedExecutor(const BoundedExecutor&) = delete;
     BoundedExecutor& operator=(const BoundedExecutor&) = delete;
     // Requests stop and joins.
-    ~BoundedExecutor();
+    ~BoundedExecutor() override;
 
-    domain::Result<void> submit(Work work);
+    domain::Result<void> submit(Work work) override;
 
     // Shutdown steps, usually driven by ShutdownSequence:
     // 1. refuse new work (queued work still runs);

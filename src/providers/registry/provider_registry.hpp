@@ -82,6 +82,22 @@ public:
     describe_auth_profile(std::string_view source, std::string_view auth_profile) const override;
     [[nodiscard]] domain::Result<ports::CapabilitySpec>
     describe_capability(std::string_view source, std::string_view key) const override;
+    [[nodiscard]] domain::Result<std::shared_ptr<ports::ITrackSearch>>
+    track_search(std::string_view source) const override {
+        return require<ports::ITrackSearch>(source);
+    }
+    [[nodiscard]] domain::Result<std::shared_ptr<ports::ITrackDetail>>
+    track_detail(std::string_view source) const override {
+        return require<ports::ITrackDetail>(source);
+    }
+    [[nodiscard]] domain::Result<std::shared_ptr<ports::ILinkParser>>
+    link_parser(std::string_view source) const override {
+        return require<ports::ILinkParser>(source);
+    }
+    [[nodiscard]] domain::Result<std::shared_ptr<ports::IAssetResolver>>
+    asset_resolver(std::string_view source) const override {
+        return require<ports::IAssetResolver>(source);
+    }
     // The verifier bound to source + auth_profile + kind, created on first use.
     [[nodiscard]] domain::Result<std::shared_ptr<ports::ICredentialVerifier>>
     require_verifier(std::string_view source, std::string_view auth_profile,

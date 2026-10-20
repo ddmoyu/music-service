@@ -2,6 +2,8 @@
 
 #include "application/accounts/credential_service.hpp"
 #include "application/accounts/identity_admin.hpp"
+#include "application/catalog/asset_service.hpp"
+#include "application/catalog/catalog_service.hpp"
 #include "application/config/service_config.hpp"
 #include "application/ports/providers/directory.hpp"
 #include "domain/result.hpp"
@@ -70,6 +72,8 @@ struct ControlApiServices {
     std::shared_ptr<const application::accounts::AccessTokenAuthenticator> authenticator;
     std::shared_ptr<application::accounts::CredentialService> credentials;
     std::shared_ptr<const application::ports::ProviderDirectory> providers;
+    std::shared_ptr<application::catalog::CatalogService> catalog;
+    std::shared_ptr<application::catalog::AssetService> assets;
     // Destinations the principal may use, with current availability.
     std::function<std::vector<DestinationView>(const std::string& principal_id)> destinations;
     std::function<bool()> ready;
@@ -83,9 +87,9 @@ struct ControlApiServices {
 
 // The control HTTP entry (/health, /api/v1) on cpp-httplib: Bearer authentication with
 // scopes, the JSON envelope, request ids, CORS, body and content-type limits, and the
-// system, provider, destination, credential, default-selection and admin/status
-// routes. Routes of later tasks are not mounted, so they answer 404 instead of a fake
-// success. Owns its listener and worker pool; no GUI or desktop dependency.
+// system, provider, destination, credential, default-selection, search, track
+// detail, link parsing, asset resolve/probe and admin/status routes. Routes of later
+// tasks are not mounted, so they answer 404 instead of a fake success. Owns its listener and worker pool; no GUI or desktop dependency.
 class ControlApi {
 public:
     ControlApi(ControlApiOptions options, ControlApiServices services);

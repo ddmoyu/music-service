@@ -100,6 +100,13 @@ public:
     virtual domain::Result<CapabilitySpec> describe_capability(std::string_view source,
                                                                std::string_view key) const = 0;
 
+    // Capability objects of an enabled source, created on first use:
+    // UNKNOWN_PROVIDER, PROVIDER_DISABLED or CAPABILITY_UNSUPPORTED otherwise.
+    virtual domain::Result<std::shared_ptr<ITrackSearch>> track_search(std::string_view source) const = 0;
+    virtual domain::Result<std::shared_ptr<ITrackDetail>> track_detail(std::string_view source) const = 0;
+    virtual domain::Result<std::shared_ptr<ILinkParser>> link_parser(std::string_view source) const = 0;
+    virtual domain::Result<std::shared_ptr<IAssetResolver>> asset_resolver(std::string_view source) const = 0;
+
     virtual domain::Result<std::shared_ptr<ICredentialVerifier>>
     require_verifier(std::string_view source, std::string_view auth_profile,
                      CredentialKind kind) const = 0;

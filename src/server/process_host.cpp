@@ -3,6 +3,8 @@
 #include "api/httplib/control_api.hpp"
 #include "application/accounts/credential_service.hpp"
 #include "application/accounts/identity_admin.hpp"
+#include "application/catalog/asset_service.hpp"
+#include "application/catalog/catalog_service.hpp"
 #include "application/transport/upstream_client.hpp"
 #include "infrastructure/auth/access_tokens.hpp"
 #include "infrastructure/filesystem/paths.hpp"
@@ -11,6 +13,7 @@
 #include "providers/registry/builtin_bundles.hpp"
 #include "providers/registry/provider_registry.hpp"
 #include "runtime/admission/admission_ledger.hpp"
+#include "runtime/executors/bounded_executor.hpp"
 #include "server/instance.hpp"
 
 #include <algorithm>
@@ -68,6 +71,9 @@ struct ProcessHost::State {
     std::shared_ptr<runtime::AdmissionLedger> admission;
     std::shared_ptr<infrastructure::transport::HttplibTransport> transport;
     std::shared_ptr<application::transport::UpstreamClient> upstream;
+    std::shared_ptr<runtime::BoundedExecutor> catalog_executor;
+    std::shared_ptr<application::catalog::CatalogService> catalog;
+    std::shared_ptr<application::catalog::AssetService> assets;
     std::unique_ptr<api::ControlApi> control;
 
     StartupReport report;
@@ -121,6 +127,16 @@ struct ProcessHost::State {
                 control.reset();
             }
             log.info("shutdown.listeners_stopped");
+            if (catalog_executor) {
+                // Platform calls still running finish or see the stop signal before the
+                // services they use are released.
+                catalog_executor->stop_accepting();
+                catalog_executor->request_stop();
+                catalog_executor->join();
+            }
+            assets.reset();
+            catalog.reset();
+            catalog_executor.reset();
             registry.reset(); // capability objects hold the upstream client
             upstream.reset();
             transport.reset();
@@ -250,16 +266,29 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
         state->log.info("startup.orphan_secrets_removed", {{"count", static_cast<std::uint64_t>(reclaimed.value())}});
     }
 
+    state->catalog_executor = std::make_shared<runtime::BoundedExecutor>(
+        "catalog", std::max<std::uint32_t>(1, config.upstream.short_workers), config.upstream.queue);
+    application::catalog::CatalogLimits catalog_limits{config.catalog, config.cache, config.handles, config.lifetimes, 4};
+    state->catalog = std::make_shared<application::catalog::CatalogService>(
+        catalog_limits, state->registry, state->credentials, state->catalog_executor, clock,
+        [ids = inst.ids] { return ids->next("cur_"); });
+    state->assets = std::make_shared<application::catalog::AssetService>(
+        config.lifetimes, config.handles, 4, state->registry, state->credentials, state->upstream, clock,
+        [ids = inst.ids] { return ids->next("ast_"); }, config.catalog.total_budget);
+
     api::ControlApiOptions api_options{config.control, config.http, config.cors, config.catalog,
                                        config.download_limits, config.media_limits, {}};
     api_options.info.version = std::string{service_version};
     api_options.info.instance_id = state->report.instance_id;
-    // Nothing that later tasks deliver is declared: no search, downloads, media or SSE yet.
+    // Search is served (T13); downloads, files, media and SSE are declared once delivered.
+    api_options.info.features.search = true;
     State* raw = state.get();
     api::ControlApiServices services{
         state->authenticator,
         state->credentials,
         state->registry,
+        state->catalog,
+        state->assets,
         [raw](const std::string& principal) { return raw->destinations_for(principal); },
         [raw] { return raw->ready.load(); },
         [raw] { return raw->status(); },

@@ -1,8 +1,10 @@
-# Use cases (accounts, upstream transport rules and hop admission) and the outbound
+# Use cases (accounts, catalog, upstream transport rules and hop admission) and the outbound
 # ports in ports/, built on domain types.
 add_library(music_service_application STATIC
     accounts/credential_service.cpp
     accounts/identity_admin.cpp
+    catalog/asset_service.cpp
+    catalog/catalog_service.cpp
     transport/http_rules.cpp
     transport/upstream_client.cpp
     transport/url.cpp

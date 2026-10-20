@@ -155,6 +155,24 @@ void send_data(httplib::Response& res, int status, json data, const std::string&
                     "application/json; charset=utf-8");
 }
 
+json error_json(const ApiError& error) {
+    json details = json::array();
+    for (const auto& detail : error.details) {
+        details.push_back({{"field", detail.field}, {"reason", detail.reason}});
+    }
+    return json{{"code", error.code},
+                {"message", error.message},
+                {"retryable", error.retryable},
+                {"details", std::move(details)}};
+}
+
+// Full envelope for responses that carry extra meta (search source results).
+void send_envelope(httplib::Response& res, int status, json data, json meta_object, json error) {
+    res.status = status;
+    res.set_content(json{{"data", std::move(data)}, {"meta", std::move(meta_object)}, {"error", std::move(error)}}.dump(),
+                    "application/json; charset=utf-8");
+}
+
 void send_error(httplib::Response& res, const ApiError& error, const std::string& request_id) {
     json details = json::array();
     for (const auto& detail : error.details) {
@@ -243,6 +261,77 @@ json selection_json(const ports::DefaultSelection& selection) {
                 {"credential_id", optional_string(selection.credential_id)},
                 {"selection_version", selection.selection_version}};
 }
+
+json ref_json(const domain::PlatformRef& ref) { return json{{"source", ref.source.value()}, {"id", ref.id.value()}}; }
+
+json optional_ref(const std::optional<domain::PlatformRef>& ref) { return ref ? ref_json(*ref) : json(nullptr); }
+
+std::string_view version_kind(domain::VersionKind kind) {
+    switch (kind) {
+    case domain::VersionKind::studio:
+        return "studio";
+    case domain::VersionKind::live:
+        return "live";
+    case domain::VersionKind::remix:
+        return "remix";
+    case domain::VersionKind::cover:
+        return "cover";
+    case domain::VersionKind::instrumental:
+        return "instrumental";
+    case domain::VersionKind::unknown:
+        break;
+    }
+    return "unknown";
+}
+
+json track_json(const domain::Track& track) {
+    json artists = json::array();
+    for (const auto& artist : track.artists) {
+        artists.push_back({{"name", artist.name}, {"ref", optional_ref(artist.ref)}});
+    }
+    json evidence = json::array();
+    for (const auto& item : track.version.evidence) {
+        evidence.push_back(item);
+    }
+    return json{{"ref", ref_json(track.ref)},
+                {"title", track.title},
+                {"artists", std::move(artists)},
+                {"album", track.album ? json{{"title", track.album->title}, {"ref", optional_ref(track.album->ref)}}
+                                      : json(nullptr)},
+                {"duration_ms", track.duration_ms ? json(*track.duration_ms) : json(nullptr)},
+                {"version",
+                 {{"kind", version_kind(track.version.kind)},
+                  {"label", optional_string(track.version.label)},
+                  {"evidence", std::move(evidence)}}},
+                {"artwork", nullptr},
+                // No supported source needs private context yet.
+                {"context_ref", nullptr}};
+}
+
+json warnings_json(const std::vector<domain::ResourceWarning>& warnings) {
+    json out = json::array();
+    for (const auto warning : warnings) {
+        std::string_view message = "the resource could not be fully verified";
+        switch (warning) {
+        case domain::ResourceWarning::full_length_unverified:
+            message = "no sufficient evidence of the full length";
+            break;
+        case domain::ResourceWarning::quality_unverified:
+            message = "the actual quality is not verified";
+            break;
+        case domain::ResourceWarning::quality_lowered:
+            message = "a lower quality than requested was accepted";
+            break;
+        case domain::ResourceWarning::preview_resource:
+            message = "this is a preview, not the full track";
+            break;
+        }
+        out.push_back({{"code", domain::to_string(warning)}, {"message", message}});
+    }
+    return out;
+}
+
+json optional_int(const std::optional<std::int64_t>& value) { return value ? json(*value) : json(nullptr); }
 
 json string_array(const std::vector<std::string>& values) {
     json out = json::array();
@@ -572,6 +661,13 @@ struct ControlApi::Impl {
         server.Delete(R"(/api/v1/credential-defaults/([a-z0-9_]+))",
                       guard(Access::scoped, credentials, [this](Call& call) { clear_default(call); }));
 
+        const auto catalog = accounts::scope::catalog_read;
+        server.Get("/api/v1/search/tracks", guard(Access::scoped, catalog, [this](Call& call) { search_tracks(call); }));
+        server.Get("/api/v1/tracks/detail", guard(Access::scoped, catalog, [this](Call& call) { track_detail(call); }));
+        server.Post("/api/v1/links/parse", guard(Access::scoped, catalog, [this](Call& call) { parse_link(call); }));
+        server.Post("/api/v1/assets/resolve", guard(Access::scoped, catalog, [this](Call& call) { resolve_asset(call); }));
+        server.Post("/api/v1/assets/probe", guard(Access::scoped, catalog, [this](Call& call) { probe_asset(call); }));
+
         server.Get("/api/v1/admin/status",
                    guard(Access::scoped, accounts::scope::admin, [this](Call& call) { admin_status(call); }));
     }
@@ -695,6 +791,281 @@ struct ControlApi::Impl {
                  {"destinations", {{"configured", s.destinations}}},
                  {"control", {{"workers", s.control_workers}}},
                  {"upstream", {{"connections_in_use", s.upstream_connections_in_use}, {"cooldowns", s.upstream_cooldowns}}}});
+    }
+
+    // ----------------------------------------------------------- catalog
+
+    static std::string_view status_name(application::catalog::SourceStatus status) {
+        switch (status) {
+        case application::catalog::SourceStatus::ok:
+            return "ok";
+        case application::catalog::SourceStatus::unsupported:
+            return "unsupported";
+        case application::catalog::SourceStatus::disabled:
+            return "disabled";
+        case application::catalog::SourceStatus::failed:
+            break;
+        }
+        return "failed";
+    }
+
+    void search_tracks(Call& call) {
+        if (!only_params(call, {"q", "sources", "limit", "cursor", "page", "timeout_ms"})) {
+            return;
+        }
+        if (call.req.has_param("page")) {
+            call.fail(bad_request("page", "page jumps are not supported by the available sources; use cursor"));
+            return;
+        }
+        application::catalog::SearchRequest request;
+        request.owner_id = call.principal();
+        request.q = call.req.get_param_value("q");
+        if (call.req.has_param("sources")) {
+            const auto text = call.req.get_param_value("sources");
+            if (text == "all") {
+                request.all_sources = true;
+            } else {
+                std::size_t at = 0;
+                while (at <= text.size()) {
+                    const auto comma = text.find(',', at);
+                    const auto part = text.substr(at, comma == std::string::npos ? std::string::npos : comma - at);
+                    if (part.empty()) {
+                        call.fail(bad_request("sources", "must be a comma-separated list of sources or all"));
+                        return;
+                    }
+                    request.sources.push_back(part);
+                    if (comma == std::string::npos) {
+                        break;
+                    }
+                    at = comma + 1;
+                }
+            }
+        }
+        if (!read_uint_param(call, "limit", request.limit)) {
+            return;
+        }
+        if (call.req.has_param("cursor")) {
+            request.cursor = call.req.get_param_value("cursor");
+        }
+        if (call.req.has_param("timeout_ms")) {
+            std::uint32_t timeout = 0;
+            if (!read_uint_param(call, "timeout_ms", timeout)) {
+                return;
+            }
+            request.timeout = std::chrono::milliseconds{timeout};
+        }
+        auto searched = services.catalog->search_tracks(request);
+        if (!searched) {
+            call.fail(searched.error());
+            return;
+        }
+        auto& result = searched.value();
+        json items = json::array();
+        for (const auto& track : result.items) {
+            items.push_back(track_json(track));
+        }
+        json sources = json::array();
+        for (const auto& source : result.sources) {
+            json page = nullptr;
+            if (source.page) {
+                const auto& p = *source.page;
+                page = {{"limit", p.limit},
+                        {"returned", p.returned},
+                        {"total", p.total ? json(*p.total) : json(nullptr)},
+                        {"has_more", p.has_more ? json(*p.has_more) : json(nullptr)},
+                        {"next_cursor", optional_string(p.next_cursor)}};
+            }
+            json error = nullptr;
+            if (source.error) {
+                const auto api = from_domain(*source.error);
+                error = {{"code", api.code}, {"message", api.message}, {"retryable", api.retryable}};
+            }
+            json cache = nullptr;
+            if (source.cache) {
+                cache = {{"hit", source.cache->hit}, {"created_at", utc(source.cache->created_at)}};
+            }
+            sources.push_back({{"source", source.source},
+                               {"status", status_name(source.status)},
+                               {"elapsed_ms", source.elapsed.count()},
+                               {"page", std::move(page)},
+                               {"error", std::move(error)},
+                               {"cache", std::move(cache)}});
+        }
+        json meta_object{{"request_id", call.request_id}, {"partial", result.partial}, {"source_results", std::move(sources)}};
+        if (result.failure) {
+            const auto api = from_domain(*result.failure);
+            send_envelope(call.res, api.status, nullptr, std::move(meta_object), error_json(api));
+            return;
+        }
+        send_envelope(call.res, 200, {{"items", std::move(items)}}, std::move(meta_object), nullptr);
+    }
+
+    // Reads an optional unsigned integer parameter; sends 400 when malformed.
+    static bool read_uint_param(const Call& call, const char* name, std::uint32_t& out) {
+        if (!call.req.has_param(name)) {
+            return true;
+        }
+        const auto value = call.req.get_param_value(name);
+        std::uint32_t parsed = 0;
+        const auto [end, ec] = std::from_chars(value.data(), value.data() + value.size(), parsed);
+        if (ec != std::errc{} || end != value.data() + value.size()) {
+            call.fail(bad_request(name, "must be a non-negative integer"));
+            return false;
+        }
+        out = parsed;
+        return true;
+    }
+
+    void track_detail(Call& call) {
+        if (!only_params(call, {"source", "id", "context_ref"})) {
+            return;
+        }
+        if (!call.req.has_param("source") || !call.req.has_param("id")) {
+            call.fail(bad_request("source", "source and id are required"));
+            return;
+        }
+        auto detail = services.catalog->track_detail(call.principal(), call.req.get_param_value("source"),
+                                                     call.req.get_param_value("id"));
+        detail ? call.ok(track_json(detail->track)) : call.fail(detail.error());
+    }
+
+    void parse_link(Call& call) {
+        if (!only_params(call, {})) {
+            return;
+        }
+        auto body = body_object(call, {"text"});
+        if (!body) {
+            return;
+        }
+        std::optional<std::string> text;
+        if (!read_string(call, *body, "text", text)) {
+            return;
+        }
+        auto parsed = services.catalog->parse_link(call.principal(), text.value_or(""));
+        if (!parsed) {
+            call.fail(parsed.error());
+            return;
+        }
+        call.ok({{"matched", parsed->matched},
+                 {"kind", parsed->matched ? json(parsed->kind) : json(nullptr)},
+                 {"ref", optional_ref(parsed->ref)}});
+    }
+
+    static json asset_json(const application::catalog::AssetDescriptor& a) {
+        return json{{"asset_id", a.asset_id},
+                    {"original_track", ref_json(a.original_track)},
+                    {"actual_track", ref_json(a.actual_track)},
+                    {"requested_quality", domain::to_string(a.requested_quality)},
+                    {"actual_quality", a.actual_quality ? json(domain::to_string(*a.actual_quality)) : json(nullptr)},
+                    {"container", optional_string(a.container)},
+                    {"bitrate_bps", optional_int(a.bitrate_bps)},
+                    {"size_bytes", nullptr},
+                    {"access_state", "available"},
+                    {"completeness", domain::to_string(a.completeness)},
+                    {"expires_at", utc(a.expires_at)},
+                    {"warnings", warnings_json(a.warnings)}};
+    }
+
+    void resolve_asset(Call& call) {
+        if (!only_params(call, {})) {
+            return;
+        }
+        auto body = body_object(call, {"track", "context_ref", "quality", "quality_policy", "allow_preview", "fallback",
+                                       "match_selection"});
+        if (!body) {
+            return;
+        }
+        const auto track = body->find("track");
+        if (track == body->end() || !track->is_object() || !(*track)["source"].is_string() ||
+            !(*track)["id"].is_string() || track->size() != 2) {
+            call.fail(bad_request("track", "must be {source, id}"));
+            return;
+        }
+        auto source = domain::SourceId::parse((*track)["source"].get<std::string>());
+        auto id = domain::PlatformId::parse((*track)["id"].get<std::string>());
+        if (!source || !id) {
+            call.fail(bad_request("track", "has an invalid source or id"));
+            return;
+        }
+        application::catalog::ResolveRequest request{call.principal(), {std::move(source).value(), std::move(id).value()},
+                                                     {}, false, false};
+        std::optional<std::string> quality;
+        std::optional<std::string> policy;
+        if (!read_string(call, *body, "quality", quality) || !read_string(call, *body, "quality_policy", policy)) {
+            return;
+        }
+        if (quality) {
+            auto parsed = domain::parse_quality(*quality);
+            if (!parsed) {
+                call.fail(bad_request("quality", "must be standard, high, lossless or hires"));
+                return;
+            }
+            request.requirement.requested = parsed.value();
+        }
+        if (policy) {
+            auto parsed = domain::parse_quality_policy(*policy);
+            if (!parsed) {
+                call.fail(bad_request("quality_policy", "must be strict or allow_lower"));
+                return;
+            }
+            request.requirement.policy = parsed.value();
+        }
+        if (const auto preview = body->find("allow_preview"); preview != body->end()) {
+            if (!preview->is_boolean()) {
+                call.fail(bad_request("allow_preview", "must be a boolean"));
+                return;
+            }
+            request.requirement.allow_preview = preview->get<bool>();
+        }
+        if (const auto fallback = body->find("fallback"); fallback != body->end()) {
+            if (!fallback->is_object() || !(*fallback)["mode"].is_string() || fallback->size() != 1) {
+                call.fail(bad_request("fallback", "must be {mode: disabled|auto}"));
+                return;
+            }
+            const auto mode = (*fallback)["mode"].get<std::string>();
+            if (mode != "disabled" && mode != "auto") {
+                call.fail(bad_request("fallback.mode", "must be disabled or auto"));
+                return;
+            }
+            request.automatic_fallback = mode == "auto";
+        }
+        request.match_selection = body->contains("match_selection") && !(*body)["match_selection"].is_null();
+        auto resolved = services.assets->resolve(request);
+        resolved ? call.ok(asset_json(resolved.value())) : call.fail(resolved.error());
+    }
+
+    void probe_asset(Call& call) {
+        if (!only_params(call, {})) {
+            return;
+        }
+        auto body = body_object(call, {"asset_id"});
+        if (!body) {
+            return;
+        }
+        std::optional<std::string> asset_id;
+        if (!read_string(call, *body, "asset_id", asset_id)) {
+            return;
+        }
+        if (!asset_id) {
+            call.fail(bad_request("asset_id", "is required"));
+            return;
+        }
+        auto report = services.assets->probe(call.principal(), *asset_id);
+        if (!report) {
+            call.fail(report.error());
+            return;
+        }
+        const auto& r = report.value();
+        call.ok({{"asset_id", r.asset_id},
+                 {"accessible", r.accessible},
+                 {"http_status", r.http_status},
+                 {"content_type", optional_string(r.content_type)},
+                 {"size_bytes", optional_int(r.size_bytes)},
+                 {"range_supported", r.range_supported},
+                 {"format", optional_string(r.format)},
+                 {"estimated_duration_ms", optional_int(r.estimated_duration_ms)},
+                 {"completeness", domain::to_string(r.completeness)},
+                 {"warnings", warnings_json(r.warnings)}});
     }
 
     // ------------------------------------------------------- credentials

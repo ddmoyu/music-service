@@ -363,8 +363,39 @@ TEST_CASE("the service serves the control API and stops in order", "[server]") {
         CHECK(cleared["selection_version"] == 2);
         CHECK(body(admin.Delete("/api/v1/credential-defaults/aud"))["data"]["selection_version"] == 2);
 
+        // Search, details, links and resolve over HTTP.
+        CHECK(info_body["data"]["features"]["search"] == true);
+        const auto found = body(reader_client.Get("/api/v1/search/tracks?q=hello&sources=cat&limit=5"));
+        CHECK(found["data"]["items"][0]["title"] == "hello");
+        CHECK(found["data"]["items"][0]["ref"]["source"] == "cat");
+        CHECK(found["data"]["items"][0]["context_ref"].is_null());
+        CHECK(found["meta"]["partial"] == false);
+        CHECK(found["meta"]["source_results"][0]["status"] == "ok");
+        CHECK(found["meta"]["source_results"][0]["cache"]["hit"] == false);
+        CHECK(found["meta"]["source_results"][0]["page"]["limit"] == 5);
+        const auto unsupported = reader_client.Get("/api/v1/search/tracks?q=hello&sources=aud");
+        CHECK(unsupported->status == 422);
+        CHECK(body(unsupported)["meta"]["source_results"][0]["status"] == "unsupported");
+        CHECK(error_code(reader_client.Get("/api/v1/search/tracks?q=hello&sources=ghost")) == "UNKNOWN_PROVIDER");
+        CHECK(reader_client.Get("/api/v1/search/tracks?sources=cat")->status == 400);
+        CHECK(reader_client.Get("/api/v1/search/tracks?q=x&sources=cat&page=2")->status == 400);
+        CHECK(anonymous.Get("/api/v1/search/tracks?q=x")->status == 401);
+        CHECK(body(reader_client.Get("/api/v1/tracks/detail?source=cat&id=7"))["data"]["title"] == "detail");
+        CHECK(reader_client.Get("/api/v1/tracks/detail?source=cat")->status == 400);
+        CHECK(body(reader_client.Post("/api/v1/links/parse", R"({"text":"nothing to see"})", "application/json"))
+                  ["data"]["matched"] == false);
+        CHECK(error_code(reader_client.Post("/api/v1/assets/resolve", R"({"track":{"source":"cat","id":"1"}})",
+                                            "application/json")) == "CAPABILITY_UNSUPPORTED");
+        CHECK(error_code(reader_client.Post("/api/v1/assets/resolve",
+                                            R"({"track":{"source":"aud","id":"1"},"quality":"best"})",
+                                            "application/json")) == "VALIDATION_FAILED");
+        CHECK(error_code(reader_client.Post("/api/v1/assets/resolve", R"({"track":{"source":"aud","id":"1"}})",
+                                            "application/json")) == "CREDENTIALS_REQUIRED");
+        CHECK(reader_client.Post("/api/v1/assets/probe", R"({"asset_id":"ast_missing"})", "application/json")->status ==
+              404);
+
         // Undelivered routes are absent, not empty successes; errors keep the envelope.
-        const auto missing = admin.Get("/api/v1/search/tracks?q=x");
+        const auto missing = admin.Get("/api/v1/downloads");
         CHECK(missing->status == 404);
         CHECK(error_code(missing) == "NOT_FOUND");
 

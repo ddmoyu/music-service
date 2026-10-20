@@ -1,6 +1,7 @@
 #pragma once
 
 #include "application/ports/runtime/operation_context.hpp"
+#include "application/ports/storage/secret_store.hpp"
 #include "domain/assets/quality.hpp"
 #include "domain/catalog/track.hpp"
 #include "domain/identity/account.hpp"
@@ -8,6 +9,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -37,6 +39,8 @@ struct ProviderContext {
     OperationContext operation;
     domain::AuthIdentityKey identity;
     std::optional<std::string> region;
+    // The leased credential secret for user bindings; empty for anonymous calls.
+    std::shared_ptr<const SecretBytes> secret{};
 };
 
 struct TrackSearchQuery {
