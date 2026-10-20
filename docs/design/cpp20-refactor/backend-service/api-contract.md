@@ -16,7 +16,7 @@ v1 允许新增可选响应字段；删除、改义、改变单位或必填参�
 
 ## 2. 身份、权限与请求约定
 
-控制 API 使用 `Authorization: Bearer <access-token>`，token 对应 principal。首版由管理配置创建 token，不设计注册登录网站；同一个 principal 的多个前端可查看同一组任务，独立 principal 的凭证和文件相互隔离。
+控制 API 使用 `Authorization: Bearer <access-token>`，token 对应 principal。首版通过[本机身份管理命令](configuration-and-deployment.md#本机身份管理命令)创建身份和签发／撤销 token，不设计注册登录网站；同一个 principal 的多个前端可查看同一组任务，独立 principal 的凭证和文件相互隔离。
 
 | scope | 允许操作 |
 | --- | --- |
@@ -25,12 +25,12 @@ v1 允许新增可选响应字段；删除、改义、改变单位或必填参�
 | `downloads:write` | 创建、取消、重试自己的任务与批次 |
 | `files:read` | 自己的已保存文件元数据、文件读取及其访问票据 |
 | `media:read` | 自己的已解析 asset 的在线直链／代理读取及其访问票据；不管理播放器 |
-| `credentials:write` | 自己的凭证列表、创建、更新、校验与删除 |
+| `credentials:write` | 自己的凭证列表、创建、更新、校验、删除及默认平台凭证选择 |
 | `admin` | 运行状态与全局下载调度开关；不隐含向普通响应泄漏秘密 |
 
 缺 token／无效 token 返回 401，scope 不足返回 403。资源不属于调用方时按 404 处理；管理员操作其他用户资源需使用明确管理用例，首版普通路由不接受 owner_id 越权参数。
 
-存在 JSON body 时要求 `Content-Type: application/json`，默认 body 上限 256 KiB；非此类型返回 415，超限 413。文档注明无 body 的操作允许空请求体，不因此要求 Content-Type。查询文本 UTF-8，关键词最长 200 字符；平台 ID 最长 1024 字节；枚举大小写敏感。秒／字节单位不能通过前端语言自行猜测。
+存在 JSON body 时要求 `Content-Type: application/json`，body 上限使用配置 http.body_limit；非此类型返回 415，超限 413。文档注明无 body 的操作允许空请求体，不因此要求 Content-Type。查询文本 UTF-8，关键词最长 200 字符；平台 ID 最长 1024 字节；枚举大小写敏感。秒／字节单位不能通过前端语言自行猜测。
 
 响应带 `X-Request-Id`。客户端可提供长度不超过 64、仅字母数字与 `._-` 的 request ID，服务仍校验并必要时生成新值。认证信息、Cookie、媒体票据与带签名 URL 不写入普通日志。
 
@@ -77,12 +77,12 @@ v1 允许新增可选响应字段；删除、改义、改变单位或必填参�
 | 409 | IDEMPOTENCY_CONFLICT、TASK_FINALIZING、TASK_TERMINAL、ACTIVE_DUPLICATE、RESOURCE_CHANGED |
 | 410 | RESOURCE_EXPIRED、CURSOR_EXPIRED、FILE_MISSING、MEDIA_TICKET_EXPIRED |
 | 413／415 | PAYLOAD_TOO_LARGE／UNSUPPORTED_CONTENT_TYPE |
-| 422 | CAPABILITY_UNSUPPORTED、PROVIDER_DISABLED、CONTEXT_REQUIRED、QUALITY_UNAVAILABLE、PREVIEW_REJECTED、CREDENTIALS_REQUIRED、RESOURCE_RESTRICTED、DELIVERY_UNAVAILABLE |
+| 422 | CAPABILITY_UNSUPPORTED、PROVIDER_DISABLED、CONTEXT_REQUIRED、QUALITY_UNAVAILABLE、PREVIEW_REJECTED、CREDENTIALS_REQUIRED、CREDENTIAL_KIND_UNSUPPORTED、RESOURCE_RESTRICTED、DELIVERY_UNAVAILABLE、DESTINATION_UNAVAILABLE；凭证选择不合法使用 VALIDATION_FAILED |
 | 429 | CALLER_LIMIT_EXCEEDED／QUEUE_LIMIT_EXCEEDED，服务方对该调用者的额度限制 |
 | 500 | INTERNAL_ERROR，仅显示去敏错误与 request_id |
 | 501 | FEATURE_UNAVAILABLE，服务级功能尚未启用 |
 | 502 | UPSTREAM_FAILED／UPSTREAM_ALL_FAILED，上游接口或协议失败 |
-| 503 | SERVICE_BUSY／STORAGE_UNAVAILABLE，整体容量、存储或停机状态 |
+| 503 | SERVICE_BUSY／STORAGE_UNAVAILABLE，整体容量、存储或停机状态；PROVIDER_UNAVAILABLE 表示已实现能力的依赖或运行环境不可用 |
 | 504 | UPSTREAM_TIMEOUT／REQUEST_DEADLINE_EXCEEDED |
 
 业务错误中保留 source、operation、上游状态的去敏信息。上游 429 不直接等于调用者超出本服务额度；可作为逐源错误 `UPSTREAM_RATE_LIMITED`，附 retryable 与等待提示。
@@ -93,13 +93,17 @@ v1 允许新增可选响应字段；删除、改义、改变单位或必填参�
 
 `POST /downloads`、`POST /download-batches`、任务 retry 必须提供 Idempotency-Key，长度 16～128 的可打印安全 ASCII。作用域和至少 24 小时保留规则见[模型](data-models.md)。重放返回首次响应及原状态码，增加 `Idempotency-Replayed: true`；客户端随后查询 task_id 得到最新进度。
 
+通过当前身份与 scope 校验后先检查已有幂等记录；同 key 同输入的已提交请求直接重放，不重新读取已过期的 context／match 句柄，也不重新应用已变化的默认账号或配置。不同输入仍返回 409；没有有效幂等记录的新请求才执行完整上下文校验。
+
 连接断开或提交等待超时，不能证明事务一定没有提交；客户端保留原 key 重试，由幂等记录消除结果不确定造成的重复任务。
 
-首次搜索可传多个来源，limit 是**每来源**数量，默认 20、范围 1～50；sources 默认 all（当前启用来源），或逗号分隔的来源 ID，初始上限 8 个，以 limits 公布的配置为准。all 超出配置上限时要求显式缩小来源或调整配置，不静默截断。服务结果顺序固定按平台注册顺序分组，来源内部保留平台顺序，不声称统一相关度排名。
+首次搜索可传多个来源，limit 是**每来源**数量，默认 20、范围 1～50；sources 省略时使用配置的 catalog.default_sources，显式值为逗号分隔的来源 ID 或 all。all 表示当前启用且支持该搜索能力的来源，单请求上限使用 catalog.max_sources_per_request，以 limits 公布值为准。超限返回 400 VALIDATION_FAILED，并在 details 说明实际数量与上限；客户端可通过 providers 发现来源后分批查询，不静默截断。此限制不约束可注册或安装的平台总数。服务结果按配置的稳定平台顺序分组，来源内部保留平台顺序，不声称统一相关度排名。
 
 后续页使用该来源的 next_cursor：只传一个 source 和相同查询条件。初次单来源可传 page（默认 1），仅在 Provider 支持页码跳转时允许；多来源不接受 page，cursor 与 page 互斥。没有全局 next_cursor 或全局精确 total。
 
-搜索、匹配、解析等 timeout_ms 默认 10000，范围 1000～15000，入队等待计入预算。平台超时与整体截止分别执行。持久下载任务不继承这个 HTTP 请求的预算。
+平台目录页游标绑定完整授权身份，包含具体账号 ID 和版本；隐式使用默认账号时还绑定 selection_version。默认账号切换（含切换后又选回）、凭证撤销或授权版本变化后，旧游标返回 410 CURSOR_EXPIRED，客户端重新取第一页；来源／查询参数写错仍为 400 CURSOR_MISMATCH。不包含平台查询的任务／providers 列表继续使用各自的 owner 与筛选绑定规则。
+
+搜索、匹配、解析等 timeout_ms 缺省使用 catalog 总查询预算，允许范围 1000～15000，入队等待计入预算。平台超时与整体截止分别执行。持久下载任务不继承这个 HTTP 请求的预算。
 
 ## 5. 系统与能力接口
 
@@ -108,9 +112,11 @@ v1 允许新增可选响应字段；删除、改义、改变单位或必填参�
 | `GET /health/live` | 无 | 进程可响应时 200，最小状态，不探测平台 |
 | `GET /health/ready` | 无 | 可接收工作时 200；启动／迁移／停机或关键存储不可用时 503 |
 | `GET /api/v1/info` | 任一有效 scope | 版本、API 版本、features、media_base_url、events_base_url、实例启动标识；支持仅有下载权限的客户端发现事件入口 |
-| `GET /api/v1/providers` | catalog:read | source、能力、enabled、品质提示、目录来源类型与凭证状态摘要 |
+| `GET /api/v1/providers` | catalog:read | 可选 capability、enabled、limit（默认 50、1～100）、cursor；data 为 items + page，项包含平台、实现、能力、要求、可用状态及当前调用方凭证摘要 |
 | `GET /api/v1/limits` | catalog:read | 当前调用者的查询、批次、任务与媒体额度 |
-| `GET /api/v1/destinations` | downloads:read | 有权使用的 destination_id、名称与可用状态，不返回实际目录 |
+| `GET /api/v1/destinations` | downloads:read | 有权使用的 destination_id、名称、可用状态与 accept_new_tasks，不返回实际目录 |
+
+providers 仅列出当前注册的来源，不将开发候选列表当作已安装能力；游标绑定 principal、筛选条件与注册表版本，重启失效返回 410 CURSOR_EXPIRED。读取不发起平台网络请求。source 是开放字符串，客户端按能力渲染，不内置固定平台枚举；未知能力键可以忽略。字段语义见[模型](data-models.md#平台与能力)。
 
 info.data 示例：
 
@@ -186,7 +192,7 @@ features 反映实际构建及运行配置；客户端不能把该示例的布�
 }
 ```
 
-至少一个来源 ok，包含已知空列表，返回 200；有未成功来源则 partial=true。全部超时返回 504；其余全部执行失败返回 502，并保留 meta.source_results。全部所选来源均不支持／被禁用时返回 422；混合支持与不支持可返回 200 partial。
+至少一个来源 ok，包含已知空列表，返回 200；有未成功来源则 partial=true。所有已执行来源均失败时：全部为超时返回 504，其余情况（包括超时与其他失败混合）返回 502，并保留 meta.source_results。全部所选来源均不支持／被禁用时返回 422；混合支持与不支持可返回 200 partial。
 
 继续网易云用相同 q、`sources=netease` 和 `cursor=cur_demo`。QQ 失败项没有下一页游标，需要重试它当前那一页，不能直接跳过。
 
@@ -230,11 +236,13 @@ v1 为单实体解析契约；文本含多个不同的已识别实体时返回 4
 
 均需要 catalog:read，属于有额度的昂贵控制操作。resolve 中的 track 为 TrackRef，客户端提供 title 等展示字段不作为平台身份或匹配证据；后端先读取可信元信息。默认 standard、strict、allow_preview=false、fallback.mode=disabled。
 
-match 请求默认最多返回 5 个候选、上限 10 个，候选包含 candidate_id、Track、score、reasons、availability 和 completeness；score 是排序分数，不宣称统计概率。匹配上下文默认保留 5 分钟。
+match 请求默认最多返回 5 个候选、上限 10 个，候选包含 candidate_id、Track、score、reasons、availability 和 completeness；score 是排序分数，不宣称统计概率。匹配上下文期限使用 lifetimes 配置。
 
-手动选择时提交 `match_selection: {match_id, candidate_id}`，track 仍是原曲；服务校验匹配上下文的 owner 与原曲，再以候选作为实际歌曲。match_selection 与 auto fallback 互斥。上下文过期返回 410，不能信任客户端自行填的 matchedFrom 字段。
+手动选择时提交 `match_selection: {match_id, candidate_id}`，track 仍是原曲；服务校验上下文的 owner、原曲、原曲及候选的完整授权身份，以及隐式默认选择的 selection_version，再以候选作为实际歌曲。match_selection 与 auto fallback 互斥。上下文过期、授权身份或默认选择版本变化返回 410 RESOURCE_EXPIRED，不能信任客户端自行填的 matchedFrom 字段。接受下载前保存已验证的稳定目标 TrackRef、证据和必要上下文，后续排队、恢复与任务 retry 不再读取该短期句柄。
 
 自动换源必须同时被服务启用、请求明确允许，且满足最低匹配条件。网络失败不会任意触发替曲；返回 actual_track、quality 与 warnings。解析结果不给普通客户端原始 CDN URL、秘密请求头或解密密钥；播放与文件获取使用后面的媒体契约。
+
+目录型来源可支持搜索／详情而不支持同源 resolve_audio。未指定 match_selection 且 fallback.mode=disabled 时，resolve 返回 422 CAPABILITY_UNSUPPORTED；下载创建同样在接受任务前拒绝这类没有执行路径的请求。手动选择先验证原曲与匹配上下文，再检查候选的音源能力，不要求原平台也支持音频。显式 auto 模式可把目录源能力缺失作为受控匹配入口，仍须满足上述服务开关与阈值，候选无结果则明确失败。original_track 与 actual_track 始终分别保存，不将 Spotify 曲目信息误报为 Spotify 音频。
 
 示例 resolve.data：
 
@@ -275,9 +283,13 @@ match 请求默认最多返回 5 个候选、上限 10 个，候选包含 candid
 }
 ```
 
-可选 credential_id 选择自己对应 source 的账号；未提供时用自己的默认凭证或平台允许的匿名访问。auto fallback 对其他来源只使用调用方自己的默认凭证。destination_id 缺省为调用方默认目标；不接受任意绝对路径、文件名模板或完整歌曲私有扩展。
+可选 credential_id 只选择 original_track.source 对应的本人账号；未提供时使用本人的默认凭证，或该能力明确允许的 application／anonymous 模式。手动及 auto 目标来源使用调用方在各来源的默认选择，绝不转交原曲的凭证。接收任务时固定所需 AccountBinding；auto 候选来源的可用绑定固定保存，无可用绑定的来源排除并记录原因，不能在排队后静默改用新默认账号。执行时租用已固定绑定的最新有效版本。destination_id 缺省为调用方默认目标；不接受任意绝对路径、文件名模板或完整歌曲私有扩展。
 
 quality／策略默认见模型，duplicate_policy 为 reuse（默认）或 force；force 仅允许绕过已完成结果，相同活动任务仍 409。match_selection 可按候选接口的规则附加。
+
+新任务及手动 retry 要求 destination 存在、本人有权使用且 accept_new_tasks=true；目标无权访问返回 404，已停用新任务入口返回 422 DESTINATION_UNAVAILABLE。旧任务恢复与已发布文件读取使用原 destination 的持久根及当前 ACL，不跟随新的默认目录。
+
+去重按[规范下载意图](data-models.md#幂等与下载去重)，包含 allow_preview、metadata_policy、稳定手动目标、固定账号绑定及影响产物的有效策略。不同标签要求、试听要求或手动目标不互相复用；同一目标由不同 match 句柄选出可形成相同意图。完成结果必须仍满足权限、文件与策略条件才返回 reused=true；不合格结果按新任务处理。force 不改变指纹，也不能绕过活动唯一约束。
 
 新任务事务提交后返回 202，Location 指向任务查询；去重命中返回 200 和既有 task_id，data.reused=true。返回不等待上游解析与整首下载。
 
@@ -298,7 +310,7 @@ quality／策略默认见模型，duplicate_policy 为 reuse（默认）或 forc
 | --- | --- | --- |
 | `GET /api/v1/downloads` | downloads:read | 自己的任务；status、source、batch_id、limit（默认 50，最大 100）、cursor |
 | `GET /api/v1/downloads/{task_id}` | downloads:read | 公开 Task 快照，支持 If-None-Match |
-| `POST /api/v1/downloads/{task_id}/cancel` | downloads:write | queued 立即取消返回 200；运行中接受取消返回 202 |
+| `POST /api/v1/downloads/{task_id}/cancel` | downloads:write | queued／waiting_retry 立即取消返回 200；运行中接受取消返回 202 |
 | `POST /api/v1/downloads/{task_id}/retry` | downloads:write | failed／canceled 创建新任务；必须有新 Idempotency-Key |
 
 任务列表稳定按 created_at、task_id 倒序分页，游标绑定过滤条件；不接受随意 SQL 排序字段。默认只看自己的任务，关闭前端不会触发 cancel。
@@ -318,25 +330,27 @@ task.data 示例：
   "attempt": 1, "destination_id": "dst_default",
   "progress": {
     "received_bytes": 4200000, "total_bytes": 8400000,
-    "speed_bps": 700000, "eta_ms": 6000, "stage_progress": 0.5
+    "speed_bytes_per_second": 700000, "eta_ms": 6000, "stage_progress": 0.5
   },
   "created_at": "2026-10-19T08:00:00.000Z",
   "updated_at": "2026-10-19T08:00:06.000Z",
-  "next_retry_at": null, "result": null, "error": null, "warnings": []
+  "next_retry_at": null, "wait_reason": null, "result": null, "error": null, "warnings": []
 }
 ```
 
 查询响应使用基于公开快照版本的弱 ETag，例如 `W/"task-tsk_demo-v8"`；忽略 request_id 等追踪差异，资源语义未变返回 304，客户端保留原快照。默认通过 SSE 更新进度，不同时持续轮询。客户端不支持 SSE 或暂时无法订阅时，可活动任务 1 秒、后台列表 5 秒查询，终态停止；服务可返回 Retry-After。
 
+waiting_retry 的 wait_reason 为 admission（本地额度／已知冷却）或 upstream_retry（实际请求失败后的重试），其他状态为 null；next_retry_at 是计划再次调度时间，不承诺该时刻必定获准。入场等待不额外消耗 attempt，初始排队 attempt=0；暂停后重新领取仍受原截止时间限制。SSE 保持精简投影，需要等待原因时查询 Task。
+
 再次取消 canceling／canceled 返回当前状态，不重复施加副作用。finalizing 返回 409 TASK_FINALIZING；completed／failed 返回 409 TASK_TERMINAL。取消不会隐含删除已发布文件。
 
-retry body 可为空，沿用原请求快照，但需重新校验当前权限与目标可用性；若要改变品质／目标则创建普通新任务。返回 202 新 task_id 和 retry_of，不改变旧任务终态。原任务未终态返回 409。
+retry body 可为空，沿用原 normalized_intent、稳定手动目标和账号绑定，重新校验当前权限、能力与目标可用性，并租用新的授权版本；不重放已过期 match/context 句柄，不重新选择默认账号。若要改变品质／目标／账号则创建普通新任务。返回 202 新 task_id 和 retry_of，不改变旧任务终态；相同活动意图存在时返回 409 ACTIVE_DUPLICATE。原任务未终态返回 409。
 
 ### 9.3 批量任务
 
-`POST /api/v1/download-batches`，downloads:write，必须有 Idempotency-Key。body 为 `{items: [单任务请求, ...]}`，1～100 项，总 body 仍受 256 KiB 限制。
+`POST /api/v1/download-batches`，downloads:write，必须有 Idempotency-Key。body 为 `{items: [单任务请求, ...]}`，1～100 项，总 body 仍受 http.body_limit 限制。
 
-结构、权限、额度和入队上下文校验全有或全无：任意项无效返回 422／相应身份或额度错误，details 标出 `items[index]`，不创建其他任务。上游能否实际取流在各任务执行时判定，不为验证批次而预先下载全部音源。
+结构、权限、额度和入队上下文校验全有或全无：任意项无效时整批失败，不创建其他任务。状态码与单任务创建相同（参数错误 400 VALIDATION_FAILED，能力／目标不可用 422，额度 429 等）；多项失败时取输入顺序中首个失败项的状态码与错误码，details 列出全部已发现失败项并标出 `items[index]`。上游能否实际取流在各任务执行时判定，不为验证批次而预先下载全部音源。
 
 事务内按输入顺序解析去重，重复项可关联同一既有 task。至少创建一条新任务返回 202；全部复用返回 200；响应包含 batch_id、created_count、reused_count 和 item 到 task_id 的映射。执行阶段各任务独立成功／失败，不因其中一首失败回滚已完成文件。
 
@@ -357,13 +371,13 @@ retry body 可为空，沿用原请求快照，但需重新校验当前权限与
 | --- | --- |
 | `stream.ready` | `{instance_id, sync_required: true}`；订阅已注册，首次连接和每次重连都重新获取 HTTP 状态 |
 | `task.updated` | task_id、version、status、progress、updated_at；创建、进度和状态变化共用此类型 |
-| 注释心跳 | `: heartbeat` 加空行，不是业务事件，默认每 15 秒发送 |
+| 注释心跳 | `: heartbeat` 加空行，不是业务事件，周期使用 event_stream.heartbeat_seconds |
 
 示例帧（空行结束一条消息）：
 
 ```text
 event: task.updated
-data: {"task_id":"tsk_demo","version":8,"status":"downloading","progress":{"received_bytes":4200000,"total_bytes":8400000,"speed_bps":700000,"eta_ms":6000,"stage_progress":0.5},"updated_at":"2026-10-19T08:00:06.000Z"}
+data: {"task_id":"tsk_demo","version":8,"status":"downloading","progress":{"received_bytes":4200000,"total_bytes":8400000,"speed_bytes_per_second":700000,"eta_ms":6000,"stage_progress":0.5},"updated_at":"2026-10-19T08:00:06.000Z"}
 
 ```
 
@@ -414,7 +428,7 @@ completed 任务的 result 至少为：
 }
 ```
 
-mode 为 auto（默认）／direct／proxy；auth 为 ticket（默认）／bearer，仅影响后端代理／文件 URL。ttl_seconds 为访问描述申请的有效期，15～300 秒，默认 60，实际期限受目标和上游已知寿命限制。file 永远走后端文件读取，direct 对 file 返回 422 DELIVERY_UNAVAILABLE。
+mode 为 auto（默认）／direct／proxy；auth 为 ticket（默认）／bearer，仅影响后端代理／文件 URL。ttl_seconds 为访问描述申请的有效期，15～300 秒，缺省使用 lifetimes 的媒体访问期限，实际期限受目标和上游已知寿命限制。file 永远走后端文件读取，direct 对 file 返回 422 DELIVERY_UNAVAILABLE。
 
 auto 只有在 direct_media_urls 已启用、平台声明可外发且资源不需要秘密头／解密时才选择 direct，否则选择 proxy。强制 direct 而功能未启用返回 501，资源不满足条件返回 422；需要在线 proxy 但 media_proxy 未启用返回 501。未知资源条件不直接开放 URL。file_access 与在线 media_proxy 分开，关闭在线代理不影响已有文件读取。
 
@@ -440,7 +454,7 @@ direct URL 是可能携带限时授权参数的敏感能力，仅在此显式访
 | `GET/HEAD /media/v1/assets/{asset_id}` | media:read Bearer | 固定音源的上游音频；要求 media_proxy 启用 |
 | `GET/HEAD /media/v1/tickets/{token}` | 资源专用票据 | 映射到固定 file 或 asset，不突破目标到期与权限 |
 
-媒体 CORS 允许配置的前端来源与 Range／条件请求，暴露 Content-Length、Content-Range、Accept-Ranges、ETag、Content-Disposition。票据不得写入 access log、错误回显或 Referer 外发。
+媒体 CORS 允许配置的前端来源与 Range／条件请求，暴露 Content-Length、Content-Range、Accept-Ranges、ETag、Content-Disposition。票据不得写入 access log、错误回显或 Referer 外发；票据位于 URL 路径中，经反向代理部署时须在代理日志中同样脱敏，见[部署约定](configuration-and-deployment.md#运行与集成方式)。远程访问必须经 HTTPS，规则见配置 security。
 
 ### 10.5 Range、缓存与错误
 
@@ -462,14 +476,30 @@ direct URL 是可能携带限时授权参数的敏感能力，仅在此显式访
 | 方法与路径 | 输入／语义 |
 | --- | --- |
 | `GET /api/v1/credentials` | 可选 source，列出自己的描述和状态 |
-| `POST /api/v1/credentials` | source、label、cookie；201，新 credential_id；Cookie 最多 64 KiB |
-| `PUT /api/v1/credentials/{credential_id}` | 更新 cookie／label；200，凭证版本递增并使对应缓存失效 |
+| `POST /api/v1/credentials` | source、label、kind、auth_profile、secret；201，新 credential_id；secret 编码后最多 64 KiB，按平台 schema 验证 |
+| `PUT /api/v1/credentials/{credential_id}` | 更新同 kind／auth_profile 的 secret 或 label；200，凭证版本递增并使对应缓存失效；换凭证类型须新建 |
 | `POST /api/v1/credentials/{credential_id}/verify` | 无秘密 body；有限平台校验，200 返回 valid／invalid／unknown 与原因 |
 | `DELETE /api/v1/credentials/{credential_id}` | 200，撤销未来使用；重复撤销自己的已知记录仍成功 |
 
-校验接口不替代账号登录。暂不设计平台扫码／短信登录流程；未来按平台增加独立能力。删除凭证会阻止后续读取和重新解析，但已经交给在途请求的凭证不保证可被“收回”；需停止下载时调用任务取消。
+kind 支持 cookie、oauth2、api_key，只有平台声明并已实现的 kind／auth_profile 可写入。secret 分别为 `{cookie}`、`{access_token, refresh_token?, expires_at?, scopes?}` 或 `{api_key}`；平台可在已公布 schema 中约束必填字段，声明的 scopes 不能代替上游校验。保留原顶层 cookie 作为 kind=cookie 的简写，与 kind／auth_profile／secret 完整形式互斥；简写使用该平台默认 Cookie profile。OAuth 应用 client_secret 通过服务管理配置的 SecretStore 引用设置，不能由普通用户替换整个服务的应用身份。所有秘密仅写入、不回显。
 
-默认凭证选择由每用户配置决定；写入不存在或不属于自己的 credential_id 返回 404。不能将任意他人的 Cookie 作为 query 参数覆盖整个服务的当前账号。
+校验接口不替代账号登录。S1 使用外部提供的 Cookie；OAuth 凭证导入和按版本更新在需要的平台接入时实现，未实现时不声明对应 kind。auth_methods 公布对应 profile 的 supports_verify／supports_refresh／supports_application_token；没有验证工厂时 verify 返回 422 CAPABILITY_UNSUPPORTED，没有刷新工厂时要求外部更新凭证。扫码／短信／OAuth 授权跳转仍为独立能力；刷新由 CredentialService 调用平台注册的 ICredentialRefresher 并条件提交，规则见[扩展设计](provider-extensibility.md#6-凭证与账号)。删除凭证会阻止后续读取和重新解析，但已经交给在途请求的凭证不保证可被“收回”；需停止下载时调用任务取消。
+
+不能将任意他人的 Cookie 作为 query 参数覆盖整个服务的当前账号。用户默认选择通过下列接口写入 SQLite，配置文件不管理用户默认凭证。
+
+### 11.1 默认平台凭证
+
+以下需要 credentials:write，owner 取自当前 principal；source 使用既有稳定标识格式。
+
+| 方法与路径 | 输入与结果 |
+| --- | --- |
+| `GET /api/v1/credential-defaults/{source}` | 返回 source、credential_id（可空）、selection_version；尚无记录时为 null／0，不返回秘密 |
+| `PUT /api/v1/credential-defaults/{source}` | body 为 `{credential_id}`；验证属于本人、source 一致、未撤销且 profile 与当前平台注册匹配；200 返回选择与版本 |
+| `DELETE /api/v1/credential-defaults/{source}` | 清除该来源的默认引用，200 返回 null 与版本；已为空则保持原版本 |
+
+不存在或他人的凭证返回 404；自己的凭证 source／profile 不匹配或已撤销返回 422 VALIDATION_FAILED。PUT 未知 source 返回 400 UNKNOWN_PROVIDER；GET／DELETE 允许读取或清除已移除平台的历史选择。重复设置同一选择不递增版本，其他变更原子推进 selection_version；并发设置按事务提交顺序生效，不隐式修改凭证本身的 version。
+
+创建凭证不自动设默认。DELETE 凭证时，同事务清除指向它的默认引用并递增 selection_version；不改选其他账号。没有默认用户账号时，只有平台能力允许的 application／anonymous 模式可继续，否则返回 CREDENTIALS_REQUIRED。新请求立即使用新选择，已受理任务仍用固定绑定；旧默认选择生成的游标失效，详见[账号模型](data-models.md#账号绑定与授权身份)。
 
 ## 12. 管理接口
 

@@ -16,32 +16,47 @@
 | --- | --- |
 | `config_version` | 1；配置版本与 API、数据库版本分别管理 |
 | `control` | host=127.0.0.1，port=17632，workers=16，connection_queue=64 |
-| `media` | enabled 按构建／阶段启用，host=127.0.0.1，port=17633，workers=8，connection_queue=16 |
+| `media` | enabled 按构建／阶段启用，host=127.0.0.1，port=17633，workers=12，connection_queue=16 |
 | `features` 媒体项 | file_access 随下载闭环启用；media_proxy=false、direct_media_urls=false，在线能力按验证结果启用 |
 | `auth` | mode=bearer；principal、token 哈希与 scope 的唯一事实来源为 SQLite |
-| `events` | enabled 随下载闭环启用，host=127.0.0.1，port=17634，workers=8，connection_queue=16 |
-| `event_limits` | 全局订阅 6／每 principal 2；每订阅最多 128 条、256 KiB；单事件最大 16 KiB |
+| `events` | enabled 随下载闭环启用，host=127.0.0.1，port=17634，workers=16，connection_queue=16 |
+| `event_limits` | 全局订阅 14／每 principal 4；每订阅最多 128 条、256 KiB；单事件最大 16 KiB。同一 principal 的网页、桌面、CLI 及浏览器多标签共享该额度，超出返回 429，客户端退回 HTTP 查询 |
 | `event_stream` | progress_interval_ms=1000，heartbeat_seconds=15，write_idle_seconds=10，max_connection_seconds=1800 |
 | `public_urls` | 对外 api_base、media_base 与 events_base；远程部署显式配置，不信任任意 Host／Forwarded 头拼 URL |
+| `security` | allow_insecure_remote=false。任一 public URL 为非 loopback 地址且使用 http 时，check-config 与启动失败，必须改用入站 TLS 或前置 HTTPS 反向代理；仅内网测试可显式设为 true，启动时持续记录警告，因为 Bearer token 与媒体票据会以明文传输 |
 | `http` | body_limit=256 KiB，控制读写空闲各 10 秒，keep_alive_timeout=3 秒，单连接请求数上限 50 |
 | `admission` | 昂贵控制请求全局 8／每 principal 2；调用者超出 429，整体不足 503 |
-| `upstream` | short_workers=8，queue=64，per_source_short=2，max_total_connections=16，max_response=2 MiB |
-| `catalog` | 总查询预算 10 秒／上限 15 秒，每来源 5 秒，单请求 fanout=4，最多 8 个来源 |
-| `downloads` | workers=3，per_source=2，max_attempts=3，transport_retries=2，文件最大 2 GiB |
+| `upstream` | short_workers=8，queue=64，per_source_short=2，max_total_connections=16，max_response=2 MiB，redirect_max=5；普通连接默认 3 秒 |
+| `catalog` | 总查询预算 10 秒／上限 15 秒，每来源 5 秒，单请求 fanout=4、max_sources_per_request=8；default_sources 随发行 preset 生成，S1 为 [kuwo] |
+| `providers` | 按 source 配置 enabled、implementation、options、app_profile_id 和稳定配额组；app profile 包含版本及 app_secret_ref，按 bundle 的授权 schema 校验，不预设平台总数上限 |
+| `app_profiles` | 默认空；按稳定 ID 配置允许的 source／auth_profile、version、公开应用参数、app_secret_ref、scope 范围和 rate_limit_group；只由管理配置建立，秘密不直接写入配置 |
+| `external_adapters` | 默认关闭；启用后 max_processes=2，明确程序路径／版本、允许能力、协议响应和执行预算，不能由普通 API 指定命令 |
+| `downloads` | workers=3 为 Runner 执行槽；per_source=2 为实际音源传输上限，由统一入场管理；max_attempts=3，transport_retries=2，文件最大 2 GiB。只启用一个来源时（S1）实际传输并发为 2，调度器依据入场就绪提示不领取已知受限来源的任务，避免第三个执行槽反复领取后延后 |
+| `retry` | 传输重试退避初值 1 秒、倍增系数 2，并加抖动；仍受逻辑尝试和任务 deadline 约束 |
 | `download_limits` | 每 principal 非终态任务最多 500，全局 2000，批次最多 100 |
-| `download_timeouts` | 连接 10 秒、读取空闲 30 秒、一次尝试 10 分钟、首次开始后绝对预算 30 分钟 |
+| `download_timeouts` | 连接 10 秒、读取空闲 30 秒、一次逻辑尝试 10 分钟（不含该尝试因 admission 暂停的时间）、首次开始逻辑尝试后绝对预算 30 分钟；首次尝试开始前的排队和 admission 延后不计入，开始后的等待计入且不因重新领取或重启而重置 |
+| `idempotency` | 幂等记录至少保留 24 小时，过期后由后台清理 |
 | `processing` | workers=2，queue=16；外部工具如启用，必须另设可取消的时间上限 |
-| `media_limits` | 全局响应 6／每 principal 2，其中播放上游最多 4、本地文件最多 4 |
+| `media_limits` | 全局响应 10／每 principal 4，其中播放上游最多 6、本地文件最多 8；播放器拖动时新 Range 请求常在旧连接关闭前到达，每 principal 额度需容纳“播放 + 拖动重叠 + 另存文件” |
+| `media_upstream` | workers=6；仅在线代理启用时建立，已取得媒体额度才派发，不排长队 |
 | `media_stream` | bridge_buffer=256 KiB，connect_timeout=5 秒，read/write idle=30 秒，单流最长 30 分钟 |
 | `lifetimes` | 解析描述 5 分钟，游标 10 分钟，匹配上下文 5 分钟，媒体访问／票据默认 60 秒；不设播放会话寿命 |
 | `storage` | SQLite WAL，单 writer、队列 128、读取连接最多 2、数据库等待预算 500 ms |
-| `cache` | catalog 128 项／总估算 16 MiB／60 秒，失败抑制最多 5 秒；其他短期句柄另有总量限制 |
+| `cache` | catalog 128 项／总估算 16 MiB／60 秒，失败抑制最多 5 秒；应用 token 最多 128 条，计入下文短期句柄的 32 MiB 预算；其他短期句柄另有总量限制 |
 | `shutdown` | 在途工作软收尾预算 15 秒，之后保存检查点并请求停止 |
 | `filesystem` | 失败任务工作文件默认最多保留 24 小时；用户取消清理未发布工作文件，活动恢复文件不按终态 TTL 删除 |
 
-普通上游连接默认 3 秒，读取空闲不超过来源预算；所有操作受总截止时间和全局并发约束。
+按上述默认值，各工作池配置上限合计约 63 个线程（控制 16、事件 16、媒体 12、短请求 8、媒体上游 6、下载 3、处理 2），未计入库内部线程；低资源 NAS 应按实测下调事件与媒体池，并同步保持“订阅／响应额度低于线程数”的约束。
+
+本表是运行配额与期限默认值的唯一规范位置；API 请求字段的合法范围仍由 API 契约定义。普通上游读取空闲不超过来源预算；所有操作受总截止时间和全局并发约束。示例配置只演示组合，不另设一份默认值。
+
+上述 source／origin／共享应用组及 helper 预算由 runtime/admission 统一执行，Transport 和平台包不得各建一套计数。配额组标识与凭证版本分开：多个平台或应用 profile 共用同一上游配额时配置为同组，token 刷新不新建配额。用户默认凭证保存在 SQLite，通过 API 提交后立即生效；启动配置不包含用户默认账号。既有任务使用保存的绑定和策略，不因默认选择或配置重启而静默迁移。
+
+app_profile 的 version 是管理配置中的正整数，应用身份或授权配置变化必须递增；SecretStore 引用不可原地覆盖秘密而维持同一版本。下载意图中的目标／命名／元数据配置版本则由加载后的有效配置和规则 schema 生成确定性摘要，保存对应非秘密快照；不使用整个配置文件的时间戳，也不让无关日志配置变化导致重复下载。
 
 短期内存句柄另设实例上限：context 10000、cursor 5000、asset 1000、match 1000、media_ticket 2000，总估算额外 32 MiB；每 principal 不超过实例上限的可配置份额。到期优先清理，正在传输的请求持有独立资源引用直到结束；无法接收新句柄时返回 SERVICE_BUSY。媒体访问描述不另建句柄表，不保存播放器状态。
+
+平台注册数量与每次查询来源数分开。default_sources 必须是已注册且启用的来源，数量不超过 max_sources_per_request；S0 无平台时可以为空，搜索返回明确的能力不可用。新增平台不会自动加入默认搜索，不为每个平台创建专属线程池。provider options 按各实现声明校验，未知 source／配置键失败；可选工具缺失只使依赖它的能力不可用，其他平台正常启动。扩展规则见[多平台适配](provider-extensibility.md)。
 
 ## 监听地址与端口冲突
 
@@ -59,8 +74,8 @@
   "config_version": 1,
   "data_dir": "./data",
   "control": {"host": "127.0.0.1", "port": 17632, "workers": 16, "connection_queue": 64},
-  "media": {"enabled": true, "host": "127.0.0.1", "port": 17633, "workers": 8, "connection_queue": 16},
-  "events": {"enabled": true, "host": "127.0.0.1", "port": 17634, "workers": 8, "connection_queue": 16},
+  "media": {"enabled": true, "host": "127.0.0.1", "port": 17633, "workers": 12, "connection_queue": 16},
+  "events": {"enabled": true, "host": "127.0.0.1", "port": 17634, "workers": 16, "connection_queue": 16},
   "public_urls": {
     "api_base": "http://127.0.0.1:17632",
     "media_base": "http://127.0.0.1:17633",
@@ -70,13 +85,16 @@
   "cors": {"allowed_origins": ["http://127.0.0.1:5173"]},
   "destinations": [{"id": "dst_default", "name": "默认下载", "root": "./downloads", "principals": ["prn_local"]}],
   "upstream": {"short_workers": 8, "queue": 64, "per_source_short": 2, "max_total_connections": 16},
+  "catalog": {"default_sources": ["kuwo"], "max_sources_per_request": 8},
+  "providers": {"kuwo": {"enabled": true, "implementation": "native"}},
+  "external_adapters": {"enabled": false, "max_processes": 2},
   "downloads": {"workers": 3, "per_source": 2, "max_attempts": 3, "transport_retries": 2},
   "features": {"file_access": true, "media_proxy": false, "direct_media_urls": false, "automatic_fallback": false, "transcoding": false},
   "logging": {"format": "json", "level": "info"}
 }
 ```
 
-启用功能必须已包含在构建中，否则启动失败。principal 与 token 由初始化／管理配置建立。
+启用功能必须已包含在构建中，否则启动失败。principal 与 token 由 init／本机身份管理命令建立，JSON 配置不导入或恢复 token。
 
 file_access／media_proxy 要求 media.enabled=true。S1 提供文件出口和票据；media_proxy 单独控制在线代理。direct_media_urls 不依赖媒体监听，外发条件见 [API](api-contract.md)。
 
@@ -84,15 +102,45 @@ events.enabled=true 同样要求构建包含 SSE 功能，且 event_limits 全�
 
 ### 环境变量与命令行
 
-首版仅支持确定的覆盖项：MUSIC_DL_CONFIG、MUSIC_DL_DATA_DIR、MUSIC_DL_CONTROL_LISTEN、MUSIC_DL_MEDIA_LISTEN、MUSIC_DL_PUBLIC_API_URL、MUSIC_DL_PUBLIC_MEDIA_URL、MUSIC_DL_DOWNLOAD_DIR。最后一项只覆盖默认 destination 根目录，不允许从普通 HTTP 请求改写。
+首版仅支持确定的覆盖项：MUSIC_DL_CONFIG、MUSIC_DL_DATA_DIR、MUSIC_DL_CONTROL_LISTEN、MUSIC_DL_MEDIA_LISTEN、MUSIC_DL_PUBLIC_API_URL、MUSIC_DL_PUBLIC_MEDIA_URL、MUSIC_DL_DOWNLOAD_DIR。最后一项只覆盖默认 destination 的待校验配置，仍受下文不可变根绑定约束，不允许从普通 HTTP 请求改写。
 
 事件监听补充 MUSIC_DL_EVENTS_LISTEN、MUSIC_DL_PUBLIC_EVENTS_URL；覆盖规则与控制／媒体一致。
 
-命令行提供 config、data-dir、check-config、init、version；端口和线程数走配置。init 不覆盖已有实例；check-config 校验配置、能力和路径。
+启动参数提供 config、data-dir，基础命令为 check-config、init、version、healthcheck；healthcheck 请求本机控制入口的 `/health/ready` 并以退出码报告结果，供不含 shell／curl 的最小镜像作为容器健康探测，不读取 token 或修改数据；端口和线程数走配置。init 不覆盖已有实例；check-config 校验配置、能力、路径及已有目录绑定，不修改持久状态。身份维护另使用下列明确的本机子命令。
+
+### 本机身份管理命令
+
+命令归属 `apps/server` 的薄 CLI 入口，调用 application 的 Principal／AccessToken 管理用例与 Repository；属于 T08／T10 的交付。首版采用离线管理：服务停止后取得同一个 data_dir 独占锁再操作。实例正在运行时返回非零退出码，不绕开单实例约束直接修改数据库；HTTP admin scope 不提供以下管理权限。
+
+| 命令 | 语义 |
+| --- | --- |
+| `init` | 初始化空实例，创建 prn_local 和首个 token，按下述一次性交付规则写 bootstrap-token.txt；默认包含 API 已列明的各 scope，后续可签发更小权限的 token |
+| `principal create --name <name>` | 生成新 principal_id，初始 enabled；不自动签发 token |
+| `principal list` | 仅列 ID、名称、enabled，不输出 token 或平台秘密 |
+| `principal disable/enable --id <principal_id>` | 修改访问状态；不存在失败，重复同状态成功；enable 不复活已撤销 token |
+| `token issue --principal <id> --scopes <list> --output <path>` | 只向有效 principal 签发；scope 必须来自 API 定义且显式提供；返回 token_id，明文只写新建的受限文件 |
+| `token list --principal <id>` | 返回 token_id、scopes、创建／撤销时间，不返回 token 明文或哈希 |
+| `token revoke --id <token_id>` | 原子设置 revoked_at；已撤销幂等成功，不存在失败；其他 token 不受影响 |
+
+轮换使用“签发新 token → 客户端取得并验证 → 撤销旧 token”，避免新凭证尚未交付就失去访问。上述命令依赖本机数据目录的操作系统权限，不经远程 HTTP 暴露；改变身份后下次启动读取 SQLite 事实，配置、旧引导文件和旧输出文件均不重新导入。
+
+签发时先以排他创建和受限权限写入、刷写交付文件，再事务保存 token 哈希；目标文件已存在就失败，不能覆盖。数据库提交失败时该文件不对应有效 token，尽力清理并报告失败；崩溃后残留文件也不自动导入。init 使用相同规则。明文不进入参数、普通 stdout、日志或命令历史；身份和 token 的普通输出只有描述信息。
+
+撤销 token／禁用 principal 阻止其客户端访问，不隐式取消已受理的持久任务；任务取消使用既有任务接口。离线管理前的服务停止按正常停机流程保存任务，重启后仍按固定平台账号和目标权限执行。此处服务 token 与平台 Cookie／OAuth 凭证是不同对象。
+
+### 目标目录绑定与变更
+
+`destination_id` 是持久位置身份。首次初始化／启动校验通过后，把 ID 与按目标系统规则规范化的绝对根目录写入 SQLite `destinations`；之后同一 ID 不允许改根。启动和 check-config 将有效配置（含环境覆盖）与持久绑定比较，不一致返回 `DESTINATION_ROOT_CHANGED` 并在恢复任务／启动 worker 前失败。注册须完成路径和权限校验；根离线不允许回落到其他目录。accept_new_tasks 默认 true，仅控制该位置的新任务受理。
+
+换下载位置时新增 destination_id。旧项可设置 `accept_new_tasks=false`：不接受普通创建请求或手动 retry，已受理任务、发布恢复和已有文件读取仍使用原根；保留该项的名称、ACL 与根配置。被任务、工作区、发布意图或资产引用的 ID 不能从配置移除，也不能回收给另一根；启动返回 `DESTINATION_IN_USE`，不能把旧资产直接标 missing 掩盖配置变更。名称和允许 principal 可变，访问始终校验当前 ACL，不因保存了旧快照而绕过撤权。
+
+首版不提供目录迁移命令，也不自动移动已有文件。FileAccess、Finalizer 和 Recovery 均通过持久根绑定解析相对路径；修改全局默认 destination 仅影响之后的新请求。同 ID 根不变、程序安装目录移动不影响已有资产；配置文件移动导致相对根解析改变时同样拒绝，管理员应保持指向原位置的绝对根配置。
 
 ## 凭证与 TLS
 
-SQLite 统一保存 token 哈希、principal 和 scopes。init 通过受权限保护的 bootstrap-token.txt 一次性交付明文 token，取走后删除；该文件不参与运行时认证。日志只打印文件位置。平台 Cookie 放 SecretStore，DB 保存 secret_ref。
+SQLite 统一保存 token 哈希、principal 和 scopes。init 通过受权限保护的 bootstrap-token.txt 一次性交付明文 token，取走后删除；该文件不参与运行时认证。日志只打印文件位置。平台 Cookie、OAuth token、API key 放 SecretStore，DB 保存 kind、auth_profile、secret_ref 和版本；应用级 client_secret 由 app_profile 管理配置引用，不能混入普通用户账号。app_profile_id 与用户 credential_id 稳定且不可回收复用，配置及授权变化推进相应版本；应用 token 使用受限内存缓存，上限见配置表 cache，重启后重新获取。
+
+平台注册的授权工厂负责协议，CredentialService 负责租约与刷新合并；配置只有应用秘密不会自动开启未实现的刷新／登录能力。身份键与提交规则见[账号模型](data-models.md#账号绑定与授权身份)和[内部契约](internal-contracts.md#62-凭证和秘密提交)。
 
 首版使用操作系统文件权限保护秘密。后续系统密钥管理作为 SecretStore 适配，备份须包含对应密钥策略。
 
@@ -143,7 +191,7 @@ SSE 退出时停止接受订阅，唤醒等待并关闭现有流，注销订阅�
 
 ### 系统、架构与支持级别
 
-以下是设计目标，当前尚未创建 C++ 工程，均不表示已经构建或运行通过。Windows、Linux 与 Docker 为必需目标；首批架构按下表建议推进，版本下限和正式发布组合由实际验证确定。
+以下是设计目标。当前仅初始化 C++ 工程骨架，没有服务程序；骨架配置检查不表示业务或目标环境运行通过。Windows、Linux 与 Docker 为必需目标；首批架构按下表建议推进，版本下限和正式发布组合由实际验证确定。
 
 | 运行目标 | CPU／镜像平台 | 计划与交付 |
 | --- | --- | --- |
@@ -182,7 +230,7 @@ SSE 退出时停止接受订阅，唤醒等待并关闭现有流，注销订阅�
 | 桌面程序打包 | 前端连接本机已有实例，或明确管理打包进程；若要求关窗口后继续，不能随前端一起杀后端 |
 | Linux 主机／NAS | 对应架构二进制、受管理的长期进程、明确用户与目录权限；验证 x86_64／ARM64 而非只宣称支持 |
 | Docker | 前台无界面进程、容器内绑定适当地址、映射启用的三个端口或经代理；data_dir 和下载目录使用持久卷 |
-| 同域反向代理 | `/api/v1` 与健康路径转控制，`/media/v1` 转媒体，`/events/v1` 转事件；SSE 关闭代理缓冲与压缩，代理空闲超时大于心跳间隔（初始 60 秒）；媒体配置适合长流的超时 |
+| 同域反向代理 | `/api/v1` 与健康路径转控制，`/media/v1` 转媒体，`/events/v1` 转事件；SSE 关闭代理缓冲与压缩，代理空闲超时大于心跳间隔（初始 60 秒）；媒体配置适合长流的超时；`/media/v1/tickets/` 路径中的票据须在代理访问日志中关闭或脱敏 |
 | 远程多个客户端 | public URLs 使用客户端可达地址；每调用方有 token，按需要选择共享或独立 principal |
 
 容器须绑定可访问接口；public URL 使用客户端可达的宿主／代理地址。
@@ -195,7 +243,8 @@ SSE 退出时停止接受订阅，唤醒等待并关闭现有流，注销订阅�
 - 默认非 root 运行，明确 UID／GID 与持久卷所有权；不依赖 privileged 或 host 网络。配置可只读挂载，`data_dir` 与下载目录可写并持久化，临时目录和日志去向明确。
 - 容器内通过 exec 形式的 ENTRYPOINT 直接运行前台服务；若有启动脚本，最终 exec 服务。必须实测收到停止信号后执行收尾，Compose 停止宽限期大于配置的停机预算。[ENTRYPOINT 与信号](https://docs.docker.com/reference/dockerfile/#entrypoint)
 - Compose 示例显式配置启用入口的容器监听、宿主映射、public URLs、持久卷和运行用户；本机原生默认 loopback，容器按需监听 `0.0.0.0`，不把容器内部 `127.0.0.1` 公布为远程访问地址。
-- 日志默认输出 stdout／stderr，健康探测使用现有本地健康接口，不依赖 GUI 或上游音乐平台在线；最小镜像未包含 shell／curl 时，须提供可执行的探测方式。
+- 日志默认输出 stdout／stderr，健康探测使用现有本地健康接口，不依赖 GUI 或上游音乐平台在线；最小镜像未包含 shell／curl 时，HEALTHCHECK 使用 exec 形式调用 `music-dl-server healthcheck`。
+- Compose 示例对外发布端口时同时提供 HTTPS 反向代理，或明确仅映射到宿主 127.0.0.1；不得以 http 公布远程 public URL，除非按 security 规则显式允许。
 - 分别验证 amd64／arm64 镜像启动、HTTPS、下载与停止；交叉编译或模拟构建成功只证明构建完成。删除并重建容器后任务与文件仍可恢复，不把可写镜像层作为持久存储。
 
 ## 观测与维护
@@ -208,4 +257,4 @@ SSE 退出时停止接受订阅，唤醒等待并关闭现有流，注销订阅�
 
 ## 发布前需验证
 
-按上述支持矩阵逐项记录构建、启动、HTTPS、下载、停止与恢复结果；覆盖实际 TLS 组合、目标系统／架构／运行库、NAS 文件系统、端口和 CORS、媒体长流、中文与长路径、权限、容器非 root 与持久卷、停止信号与停机上限、数据库迁移与备份、文件重名和链接路径、依赖分发总大小。支持级别分为设计目标、构建通过、运行验证通过和正式发布，不用单一系统测试代替其他组合。数字默认值在验证后修改本文件与运行时文档，不能只在代码里形成第二套配置事实。
+按上述支持矩阵逐项记录构建、启动、HTTPS、下载、停止与恢复结果；覆盖实际 TLS 组合、目标系统／架构／运行库、NAS 文件系统、端口和 CORS、媒体长流、中文与长路径、权限、容器非 root 与持久卷、停止信号与停机上限、数据库迁移与备份、文件重名和链接路径、依赖分发总大小。支持级别分为设计目标、构建通过、运行验证通过和正式发布，不用单一系统测试代替其他组合。数字默认值验证后只修改本页的配置基线并同步实际配置定义；运行时与图引用配置键，不复制一份数值表。

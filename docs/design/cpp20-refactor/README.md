@@ -2,7 +2,7 @@
 
 将 Go Music DL 的音乐平台适配与业务编排迁移到 C++20。本项目是纯后端，不开发或依赖 GUI，以可独立常驻运行的跨平台服务交付，并支持 Docker。网页、Electron、Tauri、Qt、Win32 等均为外部客户端，通过同一套 HTTP API 接入；后端通过 HTTP 客户端访问音乐平台。Windows 与 Linux 从基础阶段共同验证，兼顾普通并发下的可用性与依赖体积；cpp-httplib 暂定为主方案，Drogon 作为备选。
 
-更新日期：2026-10-19。状态：设计阶段，配套依赖待验证。
+更新日期：2026-10-20。状态：工程骨架已初始化，开发任务已拆分，业务未实现，配套依赖待验证。
 
 ## 当前方向
 
@@ -22,7 +22,9 @@
 | HTTP 客户端 | 先验证 cpp-httplib Client 与 Server 的组合；TLS 或下载需求必要时独立替换客户端 |
 | TLS | 先验证覆盖 Windows／Linux 与容器的实现；Schannel 仅作为 Windows 可选适配，不成为其他系统的依赖 |
 | 音频处理 | 以直接保存原始音频和写入元数据为主要需求，评估减少 FFmpeg 依赖 |
-| 实施状态 | 当前只整理设计和选型记录，尚未建立 C++ 工程或引入这些依赖 |
+| 音乐平台 | 酷我优先；已研究平台由易到难，Spotify／海外来源持续加入，不设固定平台数量上限；见[平台开发计划](platform-roadmap.md) |
+| 平台扩展 | 能力组合与开放注册；目录源、实际音源和实现工具分开；原生适配与可选外部 helper 共用业务端口 |
+| 实施状态 | 已建立 [C++ 工程骨架](../../../cpp/README.md)，仅含目录、CMake 与说明；没有业务源码或第三方依赖 |
 
 ## 文档导航
 
@@ -31,18 +33,22 @@
 | [后端服务详细设计](backend-service/README.md) | 当前 C++20 + cpp-httplib 主方案的设计基线、文档分工与功能分期 |
 | [功能模块详细设计](backend-service/feature-modules.md) | 搜索与发现、平台适配、音源与换源、后端下载、媒体访问、SSE、身份与存储 |
 | [内部接口与一致性](backend-service/internal-contracts.md) | 操作契约、执行上下文、对象所有权、事务、索引和崩溃恢复 |
-| [关键流程与验收](backend-service/flows-and-acceptance.md) | 搜索／下载／媒体访问时序，断线与取消处理，34 项故障验收条件 |
-| [模块边界审查](backend-service/module-boundary-review.md) | 前后端职责、8 项边界修正、保留原因和明确的范围限制 |
+| [关键流程与验收](backend-service/flows-and-acceptance.md) | 搜索／下载／媒体访问时序，断线与取消处理，行为验收矩阵 |
+| [模块边界审查](backend-service/module-boundary-review.md) | 前后端职责、已确认边界及 R1～R4 的设计补齐、规范归属和验收映射 |
 | [模块与目录结构](backend-service/modules-and-layout.md) | 组件职责、依赖方向、内部端口、拟建源代码目录与构建目标 |
 | [公共模型与存储](backend-service/data-models.md) | 身份、品质、分页、任务快照、资产、幂等和 SQLite 表 |
 | [对外 HTTP API](backend-service/api-contract.md) | 完整路由、权限、错误、批次、SSE、HTTP 进度查询与媒体契约 |
 | [运行时与后台任务](backend-service/runtime-and-tasks.md) | 三套 httplib 监听、线程额度、下载状态机、事件分发、取消、续传、恢复与流桥接 |
 | [配置与部署](backend-service/configuration-and-deployment.md) | 纯后端边界、系统与架构矩阵、跨平台约束、默认值、数据布局和 Docker／NAS 生命周期 |
 | [构建与依赖](backend-service/build-and-dependencies.md) | C++20、CMake、FetchContent 浅克隆、版本固定、缓存与工具链隔离 |
-| [重构架构](architecture.md) | 迁移功能、层次划分、模型、API 草案、下载与换源流程 |
+| [架构评估与总览](architecture.md) | 合理性判断、实施风险、系统与部署边界、迁移关系 |
+| [详细架构图](architecture-details.md) | 编译依赖、用例与平台、下载时序、资源调度、发布恢复、媒体与事件六个视图 |
 | [技术栈选型](technology-stack.md) | 各候选库的适用位置、依赖关系、限制和待验证问题 |
 | [网络库对比与排序](library-comparison.md) | 10 个库的 Stars、近 30 天与 90 天提交、Release、功能特点和项目契合度 |
 | [实施阶段与验证](implementation-plan.md) | 网络验证、平台迁移、任务下载、元数据和发布验证 |
+| [开发任务拆分](development-tasks.md) | S0～S5 任务、直接／可选前置、平台扩展与验收责任 |
+| [音乐平台开发顺序](platform-roadmap.md) | 平台难度、确定的接入顺序、首批范围和完成条件 |
+| [多平台适配与扩展](backend-service/provider-extensibility.md) | 平台包、注册、能力、凭证、外部工具、Spotify 路线与扩展验收 |
 | [Go Music DL 功能实现拆解](../../research/go-music-dl/README.md) | 原项目的源码依据、功能细节、平台差异和现有边界 |
 | [Lanyue 多平台音乐功能实现拆解](../../research/lanyue/README.md) | Electron 业务分层、八平台搜索与取流、下载队列、播放和换源策略的补充参考 |
 

@@ -11,8 +11,8 @@
 | 上下文 | 包含内容 | 使用范围 |
 | --- | --- | --- |
 | RequestContext | principal、scope、request_id、绝对截止时间、取消信号 | 一次控制请求 |
-| ProviderContext | principal、source、凭证版本／只读秘密租约、截止时间、取消信号 | 一次平台操作 |
-| TaskExecutionContext | task_id、execution_id、attempt、配置快照、任务截止时间、取消源 | 一次任务执行，不持 HTTP Request |
+| ProviderContext | 完整 AuthIdentityKey、只读 CredentialLease、地区、稳定应用配额组、deadline、取消信号 | 一次平台操作；不向其他来源转交秘密，不代表已获得网络额度 |
+| TaskExecutionContext | owner、task_id、execution_id、attempt、normalized_intent、配置快照、任务截止时间、取消源 | 一次任务执行，不持 HTTP Request；逐操作租用授权与上游额度 |
 | MediaContext | owner、asset／file 身份、Range、传输预算、取消信号 | 一次媒体响应，无播放位置或播放器状态 |
 | SubscriptionContext | principal、订阅 ID、授权版本、连接期限、关闭信号 | 一条 SSE 连接 |
 
@@ -39,6 +39,11 @@
 | FileAccessService.describe/open | owner、file_id → 描述／只读文件租约 | 文件存在性、归属与 immutable 校验 |
 | MediaTicketService.issue/authorize | owner、file／asset 目标、期限 → 票据／授权目标 | 媒体模块内部组件，不提供另一套重复公开签发接口；不能延长 asset 寿命 |
 | CredentialService.put/verify/remove | owner、source、凭证输入 → 去敏描述 | 秘密存储与版本更新，不在验证中修改任务 |
+| CredentialService.select/lease | owner、source、可选账号选择／固定 AccountBinding → 绑定／CredentialLease | 唯一身份键生成处；固定绑定不重新选择默认账号，需要刷新时由用例协调 |
+| CredentialService.get_default/set_default/clear_default | owner、source、可选 credential_id → 默认引用与 selection_version | SQLite 单事务，验证 owner／source；不改其他账号，不自动选择替代凭证 |
+| PrincipalService.create/set_enabled/list | 本机管理输入 → 身份描述 | 独占实例锁后调用 Repository；不通过普通 HTTP admin 暴露 |
+| AccessTokenService.issue/revoke/list | principal、明确 scope／token_id → token 描述 | 明文只交付至受限新文件；DB 存哈希和撤销事实，规则见本机管理命令 |
+| DownloadIntentNormalizer.prepare | 请求、有效策略、授权与上下文 → PreparedDownloadIntent | application/tasks 内部步骤；事务外校验候选并保存稳定目标，领域纯规则生成规范意图与指纹 |
 
 入口通过应用层调用 Provider。Runner 使用 TaskExecutionContext 调用 ResolveService 等用例，不依赖 HTTP 请求。
 
@@ -46,7 +51,7 @@
 
 ### 3.1 能力接口
 
-每种能力独立声明，如 ITrackSearch、IPlaylistSearch、IAlbumSearch、ICollectionItems、IDiscovery、IAssetResolver、ILyrics。Registry 提供 Descriptor 与受类型约束的能力访问；不存在能力时返回 unsupported，不通过 dynamic_cast 失败或空指针推断业务错误。
+每种能力独立声明，如 ITrackSearch、ITrackDetail、IPlaylistSearch、IAlbumSearch、ICollectionItems、IDiscovery、ILinkParser、IAssetResolver、ILyrics。Registry 提供 Descriptor 与受类型约束的能力访问；不存在能力时返回 unsupported，不通过 dynamic_cast 失败或空指针推断业务错误。ProviderBundle 注册、按需实例化、外部适配协议与新增平台流程见[多平台扩展](provider-extensibility.md)。
 
 Provider 输入仅使用统一查询和自己的内部解析上下文；输出使用领域对象、SourcePage、内部 ResolvedAsset 或 ProviderError。ProviderError 保留平台码、HTTP 状态、可重试提示和去敏诊断，应用层决定它对当前用例意味着什么。
 
@@ -55,24 +60,49 @@ Provider 输入仅使用统一查询和自己的内部解析上下文；输出�
 | 平台调用线程安全 | 长期 Provider 对象保存不可变配置；每次请求的 Cookie、参数和解析缓冲均局部持有 |
 | 跨线程共享 | 显式声明线程安全的 Registry／Repository／EventHub；第三方 Client 不隐含线程安全 |
 | 时间预算 | 内部所有请求共享调用者 deadline，分页补充请求不重置预算 |
-| 账号选择 | 先绑定 owner + source + credential version，再构建请求 |
+| 账号选择 | 先由 CredentialService 建立 AccountBinding 和完整 AuthIdentityKey，再构建请求；任何缓存／租约不得只用版本标识账号 |
 | 上游失败 | 不把响应解析错误当成零结果，不把所有 HTTP 403 当成永久账号失败 |
 | 平台适配更换 | 换协议实现不修改 TrackRef 和已有任务身份 |
 
+ProviderBundle 的声明必须与能力工厂一致；Registry 启动冻结。Context 与 task 私有快照记录 schema／implementation 版本；变更后通过受控迁移或重新解析恢复，不能盲读旧结构。Provider 和外部 helper 不拥有任务队列、数据库或最终文件发布职责。
+
+目录型平台的匹配由 MatchService／ResolveService 编排，不通过平台内部跨源递归调用。ResolveService 先处理合法的 match_selection，再检查实际目标 IAssetResolver；原曲无音源能力不妨碍手动选择目标。
+
+ICredentialVerifier、ICredentialRefresher、IApplicationTokenProvider 是可选的小端口，以 source + auth_profile + kind 由 ProviderBundle 注册。输入为只读授权快照和操作上下文，输出为校验结果或待提交的秘密候选；平台工厂不得取得 Repository 或可写 SecretStore。CredentialService 负责刷新合并与条件提交，详见[授权注册与调用](provider-extensibility.md#授权能力注册与调用)。
+
 ### 3.2 HttpTransport
 
-`request` 接收方法、受校验目标、头、body、响应上限与上下文，返回有界响应。`receive` 先调用响应头消费者，只有状态和资源校验接受后才调用正文消费者。消费者可以拒绝继续读取，并返回明确原因。
+`request` 接收方法、受校验目标、头、body、响应上限、上下文与匹配的 UpstreamLease，返回有界响应；同步便捷入口可通过注入的入场端口非阻塞申请租约，但不得内部阻塞排队。`receive` 先调用响应头消费者，只有状态和资源校验接受后才调用正文消费者。消费者可以拒绝继续读取，并返回明确原因。
 
 逐块数据在回调返回后不保证存活。写盘消费者必须当场写入或复制到受限缓冲，不能保存指向传输库内部缓冲的裸指针。回调不得持有调度锁或等待另一个会反向依赖本操作的任务。
 
 取消句柄支持请求停止和等待最终结束，二者不是同一动作。ClientLease 析构或回收前确保请求结束；正常完成可以复用连接，取消、协议不完整或错误的连接按传输适配规则废弃。
 
+ClientLease 按完整 AuthIdentityKey、origin、代理和 TLS 策略隔离。连接池复用不代表可以绕过入场，每跳与每次重试均检查实际操作租约；没有租约不开始网络请求。传输结束报告配额反馈，具体归还与重定向规则见[运行时](runtime-and-tasks.md#上游入场与租约)。
+
+### 3.3 扩展传输与文件处理
+
+ResolvedAsset 携带类型化传输计划和处理计划。TransferExecutor 按 HttpAsset／已启用 ExternalTransfer 分派；AudioProcessor 按 processor_id 与版本调用已注册处理器，不按平台字符串分支。外部进程遵守同一取消、临时文件、大小和恢复规则，结束后才释放实际执行额度；不把任意命令字符串作为计划内容。首版仅启用 HttpAsset，额外传输形态通过独立能力验证后开放。
+
+### 3.4 上游入场端口
+
+| 操作 | 契约 |
+| --- | --- |
+| UpstreamAdmissionPort.try_acquire | AdmissionRequest → Granted(UpstreamLease)／Deferred／截止或取消错误；所有维度一起预留，不占 worker 等待 |
+| UpstreamAdmissionPort.readiness | 操作维度 → 可运行提示／最早重试时刻；仅供公平派发，不能代替租约 |
+| UpstreamAdmissionPort.feedback | 已执行操作、可信上游状态／Retry-After → 更新对应配额组冷却；不修改任务状态 |
+| UpstreamLease.release | 实际操作结束后唯一归还；未开始且派发失败可以撤销，停止信号不等于结束 |
+
+端口定义在 application/ports/runtime，唯一实现位于 runtime/admission；应用服务、Provider 传输适配和下载执行器通过依赖注入共用实例，不反向包含 runtime 的实现头。Deferred 是调度结果，不伪装成平台网络错误。其持久化及公平重派发由调用用例／Runner 决定，runtime 不读取歌曲或任务表。
+
 ## 4. 任务端口与状态写入
 
 | 端口操作 | 条件／结果 |
 | --- | --- |
-| TaskRepository.create_transaction | 校验 owner 配额，写幂等、任务、批次关系；成功返回提交结果 |
-| TaskRepository.claim | 仅领取合适的 queued／到期 waiting_retry；返回 execution_id 和新版本 |
+| TaskRepository.create_transaction | 接收 PreparedDownloadIntent，在事务内复核绑定／配置版本、owner 配额与幂等竞争，按规范意图去重，写任务与批次；成功返回提交结果 |
+| TaskRepository.claim | 仅领取合适的 queued／到期 waiting_retry；生成 execution_id 和新版本，关联恢复位置及当前尝试，不因领取自动递增 attempt |
+| TaskRepository.begin_attempt | 带执行世代与版本；尚未开始新尝试时原子递增 attempt、写尝试开始时刻与尝试截止，首次调用时同时固定任务绝对截止；同一次调用重放不重复计数 |
+| TaskRepository.defer_admission | 当前 I/O 已结束；条件保存 waiting_retry、wait_reason=admission、resume_stage、attempt_open、next_retry_at 和恢复证据；提交后才释放执行槽 |
 | TaskRepository.transition | 带 task_id、execution_id、expected_version、合法迁移；冲突返回当前快照 |
 | TaskRepository.checkpoint | 只写当前执行允许状态下的进度与恢复证据；不覆盖 canceling 或终态 |
 | TaskRepository.request_cancel | 按当前状态原子决定立即取消、进入 canceling 或拒绝 |
@@ -82,7 +112,7 @@ Provider 输入仅使用统一查询和自己的内部解析上下文；输出�
 
 version 用于状态与进度并发控制，execution_id 用于区分执行世代。二者同时检查，避免旧尝试刚好遇到可写状态而错误更新新尝试。取消操作不携带执行凭证，只通过应用授权和 Repository 条件更新作用于当前任务。
 
-下载进行中可以每秒更新公开版本；数据库繁忙时合并尚未提交的普通进度，只保留当前执行的最新计数。状态转换与终态不能当作普通进度合并掉；若提交失败，保留未发布状态并走错误／恢复处理。
+下载进行中按配置的进度发布间隔更新公开版本；数据库繁忙时合并尚未提交的普通进度，只保留当前执行的最新计数。状态转换与终态不能当作普通进度合并掉；若提交失败，保留未发布状态并走错误／恢复处理。
 
 ## 5. 对象所有权与锁规则
 
@@ -92,6 +122,7 @@ version 用于状态与进度并发控制，execution_id 用于区分执行世�
 | ProviderRegistry | CompositionRoot 构造的不可变对象 | 进程收尾 |
 | OperationState | 应用用例与执行器共享 | HTTP 返回后，迟到工作退出才释放最后引用 |
 | ClientLease | 执行实际 I/O 的 worker 独占 | 请求真实结束并回收／关闭连接 |
+| UpstreamLease | 入场管理者发放，实际操作独占 | I/O／helper 真实结束后归还；未派发可以撤销 |
 | TaskRunner | 调度器管理句柄，Runner 持自身执行状态 | 进入终态、等待重试或安全停机 |
 | FileWorkspace | 当前 Runner 独占 | 成功发布／用户取消清理／交给恢复流程 |
 | StreamBridge | 上游 worker 与媒体 responder 共享 | 双方退出，剩余缓冲释放 |
@@ -102,7 +133,7 @@ version 用于状态与进度并发控制，execution_id 用于区分执行世�
 
 锁规则：短时间修改内存状态，释放锁后再做网络、磁盘或数据库等待；注册表锁只保护索引，不在持锁期间向所有订阅写 socket。数据库事务也不跨越网络与文件处理。
 
-上游 worker 不能向同一个已满的上游池提交子任务后同步等待。Provider 已在上游 worker 执行时，其内部串行 HTTP 调用直接消费该 worker 和相应连接额度；需要并发时由外层规划后派发。processing worker 不等待下载 worker，数据库 writer 不等待任何业务 worker。
+上游 worker 不能向同一个已满的上游池提交子任务后同步等待。Provider 已在上游 worker 执行时，串行 HTTP 可直接消费该 worker，但每个操作仍须非阻塞取得匹配租约；Deferred 必须退出到外层协调，不能原地等待。刷新等待者也不占短请求 worker 等刷新工作；需要并发时由外层规划后派发。processing worker 不等待下载 worker，数据库 writer 不等待任何业务 worker。
 
 ## 6. 持久实体与索引补充
 
@@ -113,34 +144,45 @@ version 用于状态与进度并发控制，execution_id 用于区分执行世�
 | download_tasks | id 唯一；owner/status/created_at/id；status/next_retry_at | 查询分页、公平调度与到期领取 |
 | 活动任务指纹 | owner + fingerprint 在活动状态内唯一 | 并发创建不能绕过去重检查 |
 | batch_items | batch_id + ordinal 唯一；task_id 有反查索引 | 保留输入顺序，允许多批引用同一任务 |
-| task_attempts | task_id + attempt_no 唯一，execution_id 唯一 | 执行追踪与旧 worker 拒写 |
+| task_attempts | task_id + attempt_no 唯一，last_execution_id 记录该尝试的最后世代 | 入场暂停不新增逻辑尝试；旧 worker 拒写以任务当前 execution_id/version 为准，历次世代由日志追踪 |
 | idempotency_records | owner + method + route + key 唯一 | 并发提交只有一个结果 |
 | file_assets | file_id 唯一；owner + created_at；目标路径唯一 | 文件获取、资产追踪和路径冲突处理 |
 | finalization_intents | task_id 唯一；发布状态索引 | 重启优先恢复未完成发布 |
-| credentials | id 唯一；owner + source；每 owner/source 最多一个默认账号 | 账号选择稳定且可验证 |
+| credentials | id 唯一；owner + source；秘密引用及版本 | 平台账号描述，不另存 is_default 与默认选择表竞争 |
+| credential_defaults | owner + source 主键；credential_id 可空、selection_version | 默认选择唯一且清除后仍保留世代；关联凭证必须同 owner/source |
+| destinations | id 主键；canonical_root 不可变 | FileAsset、工作区与发布意图解析同一持久位置，不跟随默认目录变化 |
 
 所有任务所属批次关系以 batch_items 为准；task 不使用一个可变 batch_id 列来表达多对多关系。批次统计实时按其条目关联任务快照计算；条目重复时计数按条目，取消时按唯一 task_id 执行。
 
-fingerprint 在同一事务中检查与插入，不能只先 SELECT 再在另一个事务 INSERT。已完成结果复用还需校验资产存在性；文件系统校验不持长事务，提交前再次核对相关任务／资产版本，不能把一次旧检查当成永久存在保证。
+fingerprint 在同一事务中检查与插入，不能只先 SELECT 再在另一个事务 INSERT。规范化字段与完成结果适配规则以[下载意图](data-models.md#幂等与下载去重)为准；Repository 不自行补默认值或解释 match_selection。已完成结果复用须在事务外核验文件、权限与策略证据，事务内再次核对相关任务／资产版本；不能把一次旧检查当成永久存在保证。未通过复用检查的完成任务不占活动指纹，新任务可以正常创建。
 
 ### 6.1 事务边界
 
 | 事务 | 必须一起提交 | 提交外的工作 |
 | --- | --- | --- |
-| 创建任务／批次 | 幂等响应、请求快照、任务、批次条目、配额检查 | 参数解析、必要上下文补全；提交后调度唤醒 |
-| 领取任务 | execution_id、attempt、状态、版本和领取记录 | 平台请求、文件准备 |
+| 创建任务／批次 | 幂等响应、normalized_intent、请求快照、任务、批次条目、配额和版本复核 | 查已有幂等、准备意图与账号绑定、上下文补全／候选验证、文件复用检查；提交后调度唤醒 |
+| 领取任务 | execution_id、当前尝试关联、状态、版本 | 入场申请、平台请求、文件准备 |
+| 开始逻辑尝试 | attempt 递增、attempt_open、尝试开始／截止、首次尝试时的任务绝对 deadline、task_attempts | 已获准的业务阶段；提交失败则不开始 I/O |
+| 延后入场 | waiting_retry、wait_reason、恢复位置、尝试开闭、next_retry_at、检查点 | 先结束旧 I/O；提交后释放执行槽，按预算重新派发 |
 | 取消请求 | cancel_requested、状态、版本 | 提交后停止句柄与事件通知 |
 | 进度检查点 | 当前公开进度、版本、可恢复证据 | 字节接收、文件刷写策略 |
 | 开始发布 | 状态 finalizing、目标预留、发布意图 | 文件重命名、验证 |
 | 完成发布 | file_assets、task_files、completed、意图完成标记 | 提交后 SSE 通知 |
+| 默认凭证选择 | 默认引用与 selection_version；核对 owner/source、凭证可选状态与 profile | 提交后新请求生效，旧选择句柄失效；重复设置不新增版本 |
+| 撤销平台凭证 | 撤销状态、凭证 version、清除其默认引用并推进 selection_version | 提交后失效缓存／新租约，清理秘密；不改已持久任务的绑定 |
+| 服务 token 签发／撤销 | token 描述、哈希与撤销事实 | 离线独占锁；签发前安全创建并刷写明文交付文件，失败残留不导入 |
 
 检查点中的 received_bytes 是公开传输进度，不等同于断电后必定存在的持久字节。恢复时以工作文件实际长度和资源证据重新验证；需要强恢复点时文件刷写先于相应恢复证据提交。
+
+使用默认账号创建任务时，PreparedDownloadIntent 另带准备阶段读取的 selection_version；提交事务复核它及相关凭证版本，变化则重新准备或明确冲突，不提交旧默认选择。该提交校验信息不加入下载指纹；已受理任务执行与 retry 使用固定绑定，不再依赖默认选择世代。目录注册和检查发生在任务恢复前，根绑定冲突不得进入恢复流程，见[目标目录规则](configuration-and-deployment.md#目标目录绑定与变更)。
 
 ### 6.2 凭证和秘密提交
 
 先把新秘密写到新的不可变 secret_ref，再事务更新凭证描述与版本，最后使相关缓存失效并清理不再引用的旧秘密。DB 提交失败时新秘密成为待回收孤立项，旧有效凭证仍可使用；不能先覆盖旧秘密后让 DB 失败。
 
 删除先使数据库凭证不可新租用，再清理秘密文件。清理失败记录待重试，不重新暴露已删除的凭证。日志和任务快照只记录 credential_id/version，不记录秘密正文。
+
+用户刷新提交还检查原 credential version、所依赖应用配置版本和撤销标记；成功才发布新身份键。应用 token 使用受限内存缓存，按 app_profile、scope 与配置版本合并获取；条目有唯一 app_token_id，条件替换递增 app_token_version，淘汰后重建使用新 ID。重启失效后重新获取，不为此新增平台专表或回写管理配置。应用私钥／client_secret 仍从 SecretStore 只读租用。
 
 ## 7. 文件发布与崩溃矩阵
 
@@ -153,7 +195,8 @@ Finalizer 的输入是通过验证的临时产物和已确认策略，输出是�
 | 文件已移动，资产事务未提交 | finalizing + 目标文件 | 用意图证据确认文件，补提交资产与终态 |
 | 资产事务已提交，SSE 未发出 | completed + file_id | 返回已完成事实，重连查询恢复显示 |
 | 临时与目标同时存在 | 有意图，位置冲突 | 根据证据确认归属，不覆盖不属于本任务的文件 |
-| 临时与目标都不存在 | 有意图，无产物 | 报告恢复错误，按允许策略重做；不得标 completed |
+| 临时与目标都不存在 | 有意图，无产物 | 预算与尝试次数允许时转 waiting_retry 重做下载；否则转 failed（FINALIZATION_FAILED）；不得标 completed 或停留在 finalizing |
+| 重命名／目标写入本身失败 | finalizing + 错误 | 释放目标预留，保留工作产物与诊断，转 failed；磁盘或权限问题由用户处理后创建重试任务 |
 
 路径预留和实际“禁止覆盖”的文件操作都要实施，数据库唯一约束不能防止外部程序在同一路径创建文件。重命名后验证失败时保留诊断与恢复材料，不把未知文件当成合法下载结果。
 

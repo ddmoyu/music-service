@@ -1,12 +1,14 @@
 # 构建与依赖
 
+当前已初始化 [cpp 构建骨架](../../../../cpp/README.md)，最低 CMake 设为 3.30，提供 Windows MSVC 与 Linux GCC 的 Debug／Release Ninja 预设。模块目标暂为 INTERFACE，没有业务源码、第三方下载、安装包或服务程序；后续依赖接入遵守本页规则。
+
 ## 基线
 
 | 项目 | 规则 |
 | --- | --- |
 | 语言 | C++20，target 显式要求标准，关闭语言扩展 |
 | 产品边界 | 纯后端、无 GUI；不获取 Qt、桌面运行时或前端构建依赖，构建和运行均不要求图形会话 |
-| 构建 | CMake + Presets；先验证 3.30+，最低版本由实际构建确定 |
+| 构建 | CMake + Presets；骨架最低设为 3.30，正式支持的工具链组合由实际源码构建确定 |
 | 获取 | 顶层 FetchContent，Git 依赖统一浅克隆 |
 | 固定版本 | 发布 tag + 期望 commit + 实际 HEAD 校验 |
 | 使用 | 模块只链接 target，依赖宏和头文件按目标传播 |
@@ -56,6 +58,12 @@
 
 非标准上游构建入口由 cmake/adapters 处理，不散落到业务目录，不静默回退系统第三方库。首次接入在 Windows 与目标 Linux 工具链验证。
 
+### 平台包与外部工具
+
+各 `music_dl_provider_<source>` 独立声明实际依赖，发行 preset 通过 MUSIC_DL_PROVIDERS 列表选择平台；新平台增加注册项和 target，无需修改公共 source 枚举。由构建清单生成显式工厂引用，未选平台不获取或链接它的专属依赖。S1 最小组合仅含酷我及公共基础设施。
+
+外部 adapter 另设构建／运行开关。yt-dlp 等工具与其运行时、媒体工具按选定发布组合显式安装和锁定版本，不纳入默认基础包；本机调用仍经统一 helper 协议。第三方源码依赖沿用 FetchContent 规则，外部可执行工具则记录来源、版本、校验值及适配协议版本，不把 Python 工具伪装成 C++ 链接库。基础包缺少可选工具时仍能独立启动。设计见[多平台扩展](provider-extensibility.md#4-两条接入路径)。
+
 ## CMake 布局
 
 ```text
@@ -69,11 +77,13 @@ cpp/
       Versions.cmake               # URL、tag、期望 commit
       Dependencies.cmake           # 声明与 MakeAvailable 顺序
       VerifyDependency.cmake
-      adapters/
+    adapters/
     toolchains/
 ```
 
 目标划分见[模块与目录](modules-and-layout.md)。先设置第三方功能／测试／示例选项，再 MakeAvailable；编译器、架构、运行库、TLS 和功能组合纳入 Preset。
+
+上述依赖版本、获取与校验文件在首次接入依赖时创建；当前保留说明目录，不用空声明假装依赖已接入。共享预设不包含本机绝对路径，Windows MSVC 预设要求调用环境已初始化编译器与 Ninja；Linux 预设使用目标主机的 GCC，交叉编译工具链另行添加。
 
 ## 缓存与验证
 
