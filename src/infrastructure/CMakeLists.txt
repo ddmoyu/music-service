@@ -1,5 +1,5 @@
 # Adapters for access tokens, configuration, observability, files, secrets and SQLite
-# storage; later transport. Access tokens use Mbed TLS for randomness and SHA-256.
+# storage and upstream HTTP(S). Access tokens use Mbed TLS for randomness and SHA-256,
 # transport uses cpp-httplib with Mbed TLS, storage uses SQLite, config uses JSON.
 add_library(music_service_infrastructure STATIC
     auth/access_tokens.cpp
@@ -20,6 +20,7 @@ add_library(music_service_infrastructure STATIC
     storage/sqlite/database.cpp
     storage/sqlite/migrations.cpp
     storage/sqlite/task_repositories.cpp
+    transport/httplib_transport.cpp
 )
 add_library(music_service::infrastructure ALIAS music_service_infrastructure)
 target_link_libraries(music_service_infrastructure

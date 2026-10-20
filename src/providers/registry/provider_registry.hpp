@@ -119,6 +119,10 @@ public:
     require_verifier(std::string_view source, std::string_view auth_profile,
                      ports::CredentialKind kind) const override;
 
+    // The plaintext HTTP endpoints the source registered, for its transport requests.
+    // Empty for unknown sources.
+    [[nodiscard]] std::vector<ports::PlaintextEndpoint> plaintext_endpoints(std::string_view source) const;
+
     // Capability and verifier objects created so far, for diagnostics and tests.
     [[nodiscard]] std::size_t instantiated() const noexcept;
 

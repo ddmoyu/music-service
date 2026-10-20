@@ -32,6 +32,7 @@ add_executable(music_service_unit_tests
     unit/domain/result_test.cpp
     unit/domain/task_status_test.cpp
     unit/application/ports_test.cpp
+    unit/application/transport_rules_test.cpp
     unit/infrastructure/config_test.cpp
     unit/infrastructure/filesystem_test.cpp
     unit/infrastructure/observability_test.cpp
@@ -62,17 +63,23 @@ target_link_libraries(music_service_fault_tests PRIVATE
 )
 catch_discover_tests(music_service_fault_tests DISCOVERY_MODE PRE_TEST)
 
-# Infrastructure and use cases against real local resources (SQLite and secret files);
-# no network.
+# Infrastructure and use cases against real local resources: SQLite and secret files,
+# and HTTP(S) servers on 127.0.0.1 with the test certificates. No outside network.
 add_executable(music_service_integration_tests
     integration/accounts_test.cpp
     integration/storage_test.cpp
+    integration/transport_test.cpp
 )
 target_link_libraries(music_service_integration_tests PRIVATE
     music_service::application
     music_service::infrastructure
     music_service::providers
+    music_service::runtime
+    music_service::third_party_httplib
     music_service::project_warnings
     Catch2::Catch2WithMain
+)
+target_compile_definitions(music_service_integration_tests PRIVATE
+    MUSIC_SERVICE_TEST_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
 )
 catch_discover_tests(music_service_integration_tests DISCOVERY_MODE PRE_TEST)

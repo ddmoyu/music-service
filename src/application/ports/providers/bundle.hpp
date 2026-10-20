@@ -2,6 +2,7 @@
 
 #include "application/ports/providers/auth.hpp"
 #include "application/ports/providers/provider.hpp"
+#include "application/ports/transport/http_transport.hpp"
 #include "domain/assets/quality.hpp"
 #include "domain/catalog/refs.hpp"
 #include "domain/result.hpp"
@@ -162,6 +163,8 @@ struct ProviderBundle {
     std::vector<AuthProfileSpec> auth_profiles{};
     // Tiers the implementation may return; no promise for any account or track.
     std::vector<domain::Quality> quality_hints{};
+    // Endpoints that only exist as plaintext HTTP. Internal; never returned by the API.
+    std::vector<PlaintextEndpoint> plaintext_endpoints{};
     // Checks providers.<source>.options (a JSON object). Without a validator only an
     // empty object is accepted.
     std::function<domain::Result<void>(std::string_view options_json)> validate_options{};

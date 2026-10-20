@@ -136,17 +136,17 @@ TEST_CASE("transport requires a matching lease", "[application][ports]") {
     REQUIRE(granted);
     auto& lease = std::get<UpstreamLease>(*granted);
 
-    HttpRequest same_origin{HttpMethod::get, "http://search.kuwo.cn/r.s?all=x", {}, {}, 0};
-    HttpRequest other_origin{HttpMethod::get, "https://evil.example/x", {}, {}, 0};
+    HttpRequest same_origin{.method = HttpMethod::get, .url = "http://search.kuwo.cn/r.s?all=x"};
+    HttpRequest other_origin{.method = HttpMethod::get, .url = "https://evil.example/x"};
 
     const auto response = transport.request(same_origin, lease, context);
     REQUIRE(response);
     CHECK(response->head.header("content-type") == "application/json");
     CHECK_FALSE(response->head.header("ETag").has_value());
     CHECK_FALSE(transport.request(other_origin, lease, context));
-    HttpRequest prefixed_host{HttpMethod::get, "http://search.kuwo.cn.evil.example/x", {}, {}, 0};
+    HttpRequest prefixed_host{.method = HttpMethod::get, .url = "http://search.kuwo.cn.evil.example/x"};
     CHECK_FALSE(transport.request(prefixed_host, lease, context));
-    HttpRequest other_port{HttpMethod::get, "http://search.kuwo.cn:8080/x", {}, {}, 0};
+    HttpRequest other_port{.method = HttpMethod::get, .url = "http://search.kuwo.cn:8080/x"};
     CHECK_FALSE(transport.request(other_port, lease, context));
 
     lease.release();

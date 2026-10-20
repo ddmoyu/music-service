@@ -188,6 +188,19 @@ void check_capabilities(const ports::ProviderBundle& bundle, const std::string& 
     }
 }
 
+void check_plaintext_endpoints(const ports::ProviderBundle& bundle, const std::string& base, Problems& p) {
+    for (const auto& endpoint : bundle.plaintext_endpoints) {
+        const auto lowercase = std::none_of(endpoint.host.begin(), endpoint.host.end(),
+                                            [](char c) { return c >= 'A' && c <= 'Z'; });
+        if (endpoint.host.empty() || !lowercase || endpoint.port == 0 || endpoint.path_prefix.empty() ||
+            endpoint.path_prefix.front() != '/' || endpoint.operation.empty()) {
+            p.add(base + "/plaintext_endpoints",
+                  "each needs a lowercase host, a port, a path prefix starting with / and an operation");
+            return;
+        }
+    }
+}
+
 void check_bundle(const ports::ProviderBundle& bundle,
                   const application::config::ProviderConfig& config, Problems& p) {
     const auto base = "providers/" + bundle.source.value();
@@ -225,6 +238,7 @@ void check_bundle(const ports::ProviderBundle& bundle,
     }
     check_auth_profiles(bundle, base, p);
     check_capabilities(bundle, base, p);
+    check_plaintext_endpoints(bundle, base, p);
 }
 
 std::uint64_t fnv1a64(std::string_view data) noexcept {
@@ -331,6 +345,7 @@ struct Slot {
 struct ProviderRegistry::Entry {
     ProviderView view;
     ports::ProviderSetup setup;
+    std::vector<ports::PlaintextEndpoint> plaintext_endpoints;
     std::map<std::string, std::pair<ports::CapabilityBinding, std::unique_ptr<Slot>>, std::less<>>
         bindings;
     struct Profile {
@@ -396,7 +411,8 @@ ProviderRegistry::build(std::vector<ports::ProviderBundle> bundles,
                   [](const auto& a, const auto& b) { return a.auth_profile < b.auth_profile; });
 
         auto entry = std::unique_ptr<Entry>(
-            new Entry{std::move(view), ports::ProviderSetup{bundle.source, settings.options_json}, {}, {}});
+            new Entry{std::move(view), ports::ProviderSetup{bundle.source, settings.options_json},
+                      std::move(bundle.plaintext_endpoints), {}, {}});
         for (auto& binding : bundle.bindings) {
             auto key = binding.key();
             entry->bindings.emplace(std::move(key),
@@ -471,6 +487,11 @@ std::vector<domain::SourceId> ProviderRegistry::sources() const {
 }
 
 std::size_t ProviderRegistry::size() const noexcept { return entries_.size(); }
+
+std::vector<ports::PlaintextEndpoint> ProviderRegistry::plaintext_endpoints(std::string_view source) const {
+    const auto it = entries_.find(source);
+    return it == entries_.end() ? std::vector<ports::PlaintextEndpoint>{} : it->second->plaintext_endpoints;
+}
 
 domain::Result<void> ProviderRegistry::check_source(std::string_view source) const {
     if (entries_.find(source) == entries_.end()) {

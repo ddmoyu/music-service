@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T05 **已完成**，T06～T08 **待验收**（等待 Linux CI），其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T05 **已完成**，T06～T09 **待验收**（等待 Linux CI），其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,7 +262,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-下一项为 **T09**（HTTP／TLS 上游传输）；T07、T09 完成后即可并行开始 T12，T08、T09 完成后进入 T10。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+下一项为 **T10**（组装入口与基础 HTTP／管理 CLI），可并行开始 **T12**（酷我标准品质协议包）。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
@@ -363,4 +363,16 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 | Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条警告；`ctest --preset windows-msvc-debug` 143/143 通过（新增账号集成测试 11 项） |
 | GCC 证据（部分） | MinGW GCC 16.2 在严格警告下对新增与改动的源文件及测试做语法检查 0 条警告；Linux 运行证据待推送后由 CI 提供 |
 | 未覆盖 | 实例锁下的 CLI 命令、HTTP 凭证与默认选择路由、Bearer 中间件归 T10；缓存与游标的失效（含 selection_version 绑定）随 T13 的缓存实现；A06 中请求头、任务与 SSE 的隔离分别在 T09、T14、T18 复验；application 模式、应用 token 与刷新在 T24 |
+
+### T09 HTTP／TLS 上游传输：待验收（等待 Linux CI）
+
+| 项目 | 记录 |
+| --- | --- |
+| 交付 | 传输端口：HttpRequest 增加 secret_headers、operation、平台登记的明文端点与已跟随跳数，HttpResponseHead 增加跨 origin 重定向与消费者停止标记；ProviderBundle 增加 plaintext_endpoints（注册表校验并按来源提供）。`application/transport`：严格 URL 解析／origin 规范化／Location 解析，每跳请求规则与重定向规则，UpstreamClient（每个 origin 非阻塞入场、旧跳结束释放后再入场、无法入场交回 PendingHop、429／503 的 Retry-After 反馈冷却）。`infrastructure/transport`：HttplibTransport（Mbed TLS，校验证书链与主机名，可配 CA bundle，有界与流式两种读取，截止与取消）。测试 TLS 材料见 `tests/fixtures/tls` |
+| 覆盖的验收 | 本地 HTTPS 上游的 GET／POST 与错误状态；自签名证书链、证书主机名不符、未信任测试根时均失败且不发出请求；未登记明文端点拒绝且不联网，登记后可用，明文请求携带秘密被拒；同 origin 重定向保留 Cookie，跨 origin 重定向不带 Cookie、先归还旧租约再按新 origin 入场（A42 的传输部分），新 origin 无额度时立即交回且不等待；303 改 GET 去 body，跳数上限；HTTPS→HTTP 降级仅限登记的下载端点并剥离秘密；Retry-After 写入冷却，冷却内的请求延后；4 MiB 分块流式接收不整体缓冲，有界读取超限失败（分块与 Content-Length 两种）；消费者拒绝响应头时不读正文；响应被截断为可重试的 connection_lost；正文传输中取消、截止时间到达均结束并归还租约；租约缺失或不覆盖目标 origin 时不发请求 |
+| 规则补充 | 已写回[上游传输说明](../../../src/infrastructure/transport/README.md)与[测试 TLS 材料说明](../../../tests/fixtures/tls/README.md)。实现约定：Cookie／Authorization／Proxy-Authorization 只能放在 secret_headers；明文端点按主机＋端口＋路径前缀＋操作登记；Retry-After 只采信秒数形式 |
+| Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条项目警告（httplib.h 的 C4702 在包含处局部屏蔽）；`ctest --preset windows-msvc-debug` 158/158 通过；传输集成测试（10 项、185 个断言）连续运行 20 次无失败 |
+| GCC 证据（部分） | MinGW GCC 16.2 在严格警告下对新增与改动的源文件及测试做语法检查 0 条警告；Linux 运行证据待推送后由 CI 提供 |
+| 已知限制 | Windows 上等待响应头期间的取消不能立即中断（本地 shutdown 不唤醒阻塞等待，httplib 客户端无可中断读），要到上游应答、空闲超时（30 秒）或截止时间才返回，期间租约保持；Linux 上的即时中断待 CI 验证。暂不复用连接，每跳新建连接；CA bundle 尚无配置键，部署所需的信任根配置在 T11 确定；配置只能关闭明文端点的开关留待有平台登记时加入 |
+| 未覆盖 | 平台实际端点登记与在线协议探测在 T12；下载写盘、断点续传与传输重试策略在 T17／T29；媒体代理在 T34 |
 

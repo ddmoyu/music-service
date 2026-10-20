@@ -432,3 +432,20 @@ TEST_CASE("contract version, implementation and options are checked", "[provider
     (void)unwrap(registry->require<ports::ITrackSearch>("picky"));
     CHECK(seen == R"({"region":"cn"})");
 }
+
+TEST_CASE("plaintext endpoints are validated and kept per source", "[providers]") {
+    auto plain = mock_catalog("plain");
+    plain.plaintext_endpoints = {{"search.example", 80, "/r.s", "search_tracks", false}};
+    auto broken = mock_catalog("broken");
+    broken.plaintext_endpoints = {{"Search.Example", 80, "r.s", "", false}};
+
+    const auto error = build_error({mock_catalog("ok"), std::move(broken)});
+    CHECK(has_problem(error, "providers/broken/plaintext_endpoints"));
+
+    const auto registry = build({std::move(plain), mock_catalog("secure")});
+    const auto endpoints = registry->plaintext_endpoints("plain");
+    REQUIRE(endpoints.size() == 1);
+    CHECK(endpoints[0].host == "search.example");
+    CHECK(registry->plaintext_endpoints("secure").empty());
+    CHECK(registry->plaintext_endpoints("ghost").empty());
+}
