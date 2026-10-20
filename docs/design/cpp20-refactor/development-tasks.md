@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T12 **已完成**，S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T13 **已完成**，S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,7 +262,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-下一项为 **T13**（搜索、详情、解析与缓存用例）；T14～T19 随后按前置推进。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+下一项为 **T14**（下载意图、命令、查询与批次）；T15（最小音频验证）可并行，T16～T19 随后按前置推进。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
@@ -411,4 +411,17 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 | Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 171/171 通过（2 项在线用例按设计跳过） |
 | Linux 证据（CI 运行 39439859236） | ubuntu-24.04，GCC 13.3.0，glibc 2.39：0 条项目警告，171/171 通过（离线契约测试；酷我在线探测不在 CI 运行，因海外运行器可能受地区限制）；Windows 与容器任务同时通过 |
 | 已知限制 | 高品质、歌词（XOR+Base64 参数）、歌单／专辑／榜单与凭证均未实现、未声明；详情依赖歌曲页面结构，页面改版会以协议错误暴露；替代短片的 rid 未作为 actual_track 记录（无该 rid 的元信息） |
+
+### T13 搜索、详情、解析与缓存用例：已完成（2026-10-20，提交 9e4efaa）
+
+| 项目 | 记录 |
+| --- | --- |
+| 交付 | `application/catalog`：CatalogService（单曲搜索、详情、分享文本链接解析）与 AssetService（同源音源解析、asset 句柄、有限探测），通用的身份分区结果缓存、在途合并与有界句柄表。控制入口新增 `GET /api/v1/search/tracks`、`GET /api/v1/tracks/detail`、`POST /api/v1/links/parse`、`POST /api/v1/assets/resolve`、`POST /api/v1/assets/probe`，info 声明 search。新增 WorkExecutor 端口（BoundedExecutor 实现，ProcessHost 以 upstream.short_workers／queue 建 catalog 池并在停机时先于服务收尾）、ProviderContext 携带租用的秘密、ProviderDirectory 的类型化能力访问 |
+| 规则落实 | 来源为显式列表、all（启用且支持搜索的来源）或 catalog.default_sources；未知来源整体 400，超过 max_sources_per_request 为 400；按 catalog.fanout 有界并发，单源截止取 per_source_budget 与总预算较小者，总截止到时未答来源记为 UPSTREAM_TIMEOUT 并请求停止，迟到结果丢弃；至少一源成功 200（有失败则 partial），已执行来源全超时 504、其他全失败 502、无可用来源 422，均附逐源结果。缓存键与在途合并键含完整 AuthIdentityKey、实现版本、查询与页游标，失败不缓存。游标为服务句柄，绑定 owner、来源、查询、页大小、实现版本、授权身份及隐式默认选择的 selection_version，未知／他人／过期／重启后为 410 CURSOR_EXPIRED，来源或查询不符为 400 CURSOR_MISMATCH。asset_id 绑定 owner 与授权身份，有效期取 lifetimes.asset 与上游有效期减 30 秒的较小者，到手即过期的地址视为失败；探测只读 16 字节，按首字节识别格式，不以扩展名作证据。不提供自动换源与匹配选择（CAPABILITY_UNSUPPORTED）；没有任何来源需要私有上下文，context_ref 暂为 null |
+| 覆盖的验收 | A38：同 principal 同来源两个 version=1 凭证的搜索结果与缓存分区互不复用；A47 的游标部分：默认账号 A→B 后旧游标 410，切回 A 仍 410，A 的缓存分区仍只服务 A；A39：凭证更新后旧游标 410、新版本另起分区；A06：两 principal 结果与游标互不可用，asset 他人不可见；单源超时不拖住请求（1 秒内返回 partial）；并发相同查询只发一次上游调用；过期 asset、账号变化后的 asset 探测为 410；strict／allow_lower、preview 规则与 422 无执行路径；HTTP 层的信封、逐源 meta、状态码映射、scope 与参数校验 |
+| 端到端（2026-10-20，本机，真实酷我） | 经 music-service.exe：搜索“晴天”5 条（共 3552，201 ms），重复搜索命中缓存，游标翻到第 2 页；详情、分享文本解析成功；解析得到 standard／full／mp3／128 kbit/s 的 asset，响应不含上游地址；探测 206、2,829,338 字节、首字节识别为 mp3、估算 176.8 秒（目录时长 176 秒） |
+| Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 179/179 通过（2 项在线用例按设计跳过）；目录集成测试连续 10 次无失败 |
+| Linux 证据（CI 运行 39451786357） | ubuntu-24.04，GCC 13.3.0，glibc 2.39：0 条项目警告，179/179 通过；Windows 与容器任务同时通过 |
+| 过程问题 | 容器任务的发布构建（GCC 13 -O2）对 T12 酷我搜索解析中已检查的 optional 读取报告 -Wmaybe-uninitialized（调试构建不出现，误报），改为带哨兵的整数读取（提交 fix(kuwo)）；此后对全部源码执行 GCC -O2 严格警告检查无警告 |
+| 已知限制 | 歌单／专辑／歌手搜索与集合、分类、歌词归 T21／T23；匹配、自动换源归 T33；context_ref 在出现需要私有上下文的来源时实现；在途合并的跟随者只等到自己的截止时间，领头调用失败时跟随者得到同一错误 |
 
