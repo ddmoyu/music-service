@@ -107,7 +107,10 @@ queued → resolving → probing → downloading → processing → finalizing �
 
 resolving / probing / downloading / processing → canceling → canceled
 waiting_retry → canceled
+queued / waiting_retry → failed（领取前发现预算耗尽或能力已移除）
 ```
+
+完整的合法迁移表由领域规则 `is_transition_allowed` 实现（`cpp/src/domain/tasks/task_status.cpp`），本图与之保持一致。
 
 finalizing 不能长期停留：同文件系统重命名失败、目标冲突无法确认归属、磁盘或权限错误，以及恢复时意图存在但产物缺失且策略不允许重做，均通过条件转换进入 failed（error.code 为 FINALIZATION_FAILED），释放目标预留并保留诊断材料，不标 completed。允许重做的情形回到 waiting_retry（wait_reason=upstream_retry，resume_stage=resolving），按正常逻辑尝试计数。canceling 期间出现的错误仍以 canceled 结束，错误只记录在诊断中。
 

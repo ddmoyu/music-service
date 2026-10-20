@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01 为**待验收**（Windows 已通过，Linux 待 CI 结果），其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01 **已完成**，T02 **待验收**（等待 Linux CI），其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,11 +262,11 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-T01 之后的下一项为 **T02**；T02 确定最小端口后再展开基础设施分支。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+T02 之后的下一项为 **T03**；端口已确定，T03～T09 可按各自前置展开，T07、T09 完成后即可并行开始 T12。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
-### T01 构建、依赖与验证基础：待验收
+### T01 构建、依赖与验证基础：已完成（2026-10-20，提交 7a60bb0）
 
 | 项目 | 记录 |
 | --- | --- |
@@ -275,5 +275,17 @@ T01 之后的下一项为 **T02**；T02 确定最小端口后再展开基础设�
 | Windows 证据（2026-10-20） | Windows 11 x64，MSVC 19.51.36257（VS 2026，工具集 14.51.36231），Windows SDK 10.0.28000.0，CMake 4.4.4，Ninja 1.13.2。从空目录 `cmake --preset windows-msvc-debug` 获取并校验全部依赖；构建 0 条项目警告；`ctest --preset windows-msvc-debug` 5/5 通过；windows-msvc-release 配置与构建通过 |
 | 校验失败验证 | 将 nlohmann/json 源码覆盖指向其他提交的检出，配置以 “HEAD is …, expected …” 失败 |
 | GCC 证据（部分） | MinGW GCC 16.2.0 在 `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion` 下编译项目测试文件无警告；该编译器构建 Mbed TLS 时发生内部编译器错误，MinGW 不是支持的工具链，不作为 Linux 证据 |
-| 未完成 | Linux x86_64／GCC 构建与测试：本机与 DDMOYU 均无 WSL／Docker，由 CI 的 ubuntu-24.04 任务提供证据后转为已完成。Docker 最小容器属于 T11 |
+| Linux 证据（CI 运行 39358091883） | GitHub Actions ubuntu-24.04 x86_64，GCC 13.3.0，glibc 2.39，CMake 3.31.6：全部依赖校验通过，构建 0 条项目警告，`ctest --preset linux-gcc-debug` 5/5 通过；同一运行的 windows-2025（MSVC 19.51.36260）5/5 通过 |
+| 后续 | Linux ARM64 与 Docker 最小容器属于 T11 |
 | 已知限制 | 首次配置需要联网；MSYS2／MinGW 发行的 cmake 无法校验 HTTPS 证书，Windows 须使用官方或 VS 自带 CMake；Mbed TLS 上游 CMakeLists 有 cmake_minimum_required 弃用警告，不影响构建 |
+
+### T02 领域规则与最小应用端口：待验收（等待 Linux CI）
+
+| 项目 | 记录 |
+| --- | --- |
+| 交付 | `music_dl::domain` 静态库：Result／错误码、SourceId／PlatformId／TrackRef 与 UTF-8 校验、曲目与分页、品质选择与资源判定、AccountBinding／AuthIdentityKey、任务状态迁移与取消决策、NormalizedDownloadIntent 归一与指纹。`application/ports` 头文件端口：平台描述与搜索／音源解析能力、上游入场与租约、时钟与操作上下文、上游 HTTP、任务仓储 |
+| 覆盖的验收 | strict／allow_lower、已知试听拒绝、未知完整性与未知品质带警告；同版本不同凭证的身份键不同（A38 领域部分）；试听／标签策略、手动目标、账号绑定、auto 顺序与策略版本进入指纹（A35、A36 领域部分）；终态无出口、finalizing 不可取消、非法迁移报错；入场不阻塞并延后、其他来源可推进、租约只归还一次、传输拒绝不匹配的租约（替身） |
+| 规则补充 | 已写回规范：queued／waiting_retry → failed 迁移；品质未知与降级的警告规则、从不自动升档；指纹编码与 FNV-1a 摘要；auto 去除原曲来源、手动目标等于原曲时归一为同源、绑定按需裁剪 |
+| Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条警告；`ctest --preset windows-msvc-debug` 45/45 通过（含 5 项依赖测试） |
+| GCC 证据（部分） | MinGW GCC 16.2 在严格警告下编译 domain 与单元测试 0 条警告，单元测试 40 项、503 个断言全部通过；Linux 证据待推送后由 CI 提供 |
+| 未覆盖 | 端口只有替身实现；真实入场账本（T06）、传输（T09）、仓储（T05）分别在对应任务实现和验收 |

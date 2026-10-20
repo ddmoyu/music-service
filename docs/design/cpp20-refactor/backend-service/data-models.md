@@ -102,6 +102,8 @@ AccountBinding 表达稳定的账号选择，不含 token、Cookie、secret_ref 
 
 探测报告分开表达 HTTP 可访问性、格式迹象、大小、时长证据及整曲判断。未知完整性的资源不因 `allow_preview=false` 被假装认证为整曲：可按现有证据继续下载并保留 unknown 警告；若已明确为 preview，则按选项拒绝。要求严格整曲验证的扩展策略另行实现，首版不承诺完整解码证明。
 
+品质判定同理：已知低于请求品质时，strict 拒绝（QUALITY_UNAVAILABLE），allow_lower 接受并附 QUALITY_LOWERED；实际品质未知时接受并附 QUALITY_UNVERIFIED，不当作已满足。选择品质档位时只在请求档位不可用且 allow_lower 时取较低档中最高者，从不自动升到更高档位。
+
 ## 分页与部分成功
 
 `PageInfo`：limit、returned、total、has_more、next_cursor。total 与 has_more 可以为 null；next_cursor 不存在时为 null。next_cursor 是服务生成的游标，绑定完整 AuthIdentityKey、操作、关键词／过滤条件、实现版本及使用默认选择时的 selection_version，有效期使用 lifetimes 配置。后续页按当前选择的账号建立身份键后核对；默认账号切换、凭证撤销或授权版本变化使旧游标返回 `410 CURSOR_EXPIRED`，不能把旧页令牌交给新账号。
@@ -137,7 +139,7 @@ phase 用 status 表达，`stage` 用于 processing 内部的 decrypt／validate
 
 幂等记录以 principal、方法、路径、Idempotency-Key 为键，保存原始请求体规范化哈希、首次提交结果与创建时间，保留期使用配置 idempotency（默认至少 24 小时）。同键同请求重放原结果；同键不同请求返回 409。哈希基于请求输入，而非重试时可能已变化的配置默认值；首次执行的配置快照随记录保存。通过当前身份与 scope 校验后，先检查已有幂等记录，再读取临时上下文或重新选择默认账号；已提交请求不会因 match/context 过期而无法重放。事务内再次处理幂等竞争。
 
-下载指纹基于持久 `NormalizedDownloadIntent`，由 application/tasks 补全默认、校验授权和选择后交给领域纯规则生成。指纹带 schema_version；规范字段以固定规则编码，命中摘要后仍核对规范化值，不能只凭哈希认定相同。
+下载指纹基于持久 `NormalizedDownloadIntent`，由 application/tasks 补全默认、校验授权和选择后交给领域纯规则生成。指纹带 schema_version；规范字段以带长度前缀的固定规则编码（字段值中的分隔符不会产生歧义），摘要为该编码的 64 位 FNV-1a 十六进制值，仅用于索引。命中摘要后仍核对完整规范编码，不能只凭哈希认定相同。
 
 | 指纹内容 | 归一规则 |
 | --- | --- |
@@ -147,7 +149,7 @@ phase 用 status 表达，`stage` 用于 processing 内部的 decrypt／validate
 | 音质与内容 | requested_quality、quality_policy、allow_preview |
 | 产物 | metadata_policy、destination_id 及目标配置版本、命名与元数据配置版本；包含封面／歌词等会影响产物的有效配置 |
 
-auto 来源顺序有语义，保留首次出现顺序去重；关闭 auto 时归一为空候选列表。客户端省略与显式提交相同默认值生成同一下载意图，但幂等请求哈希仍按各自输入判定。手动候选保存目标、证据摘要、必要上下文及验证版本；排队、恢复和 retry 不依赖短期 match_id／candidate_id。临时句柄、token／URL、授权版本、request_id、task_id、时间和 duplicate_policy 不进入下载指纹；凭证刷新不会单独制造一个新下载意图。
+auto 来源顺序有语义，保留首次出现顺序去重并移除原曲来源，去除后至少保留一个候选；关闭 auto 时归一为同源。手动目标与原曲相同时归一为同源。账号绑定只保留所选音源实际需要的来源，按来源排序，同一来源出现不同绑定即拒绝。客户端省略与显式提交相同默认值生成同一下载意图，但幂等请求哈希仍按各自输入判定。手动候选保存目标、证据摘要、必要上下文及验证版本；排队、恢复和 retry 不依赖短期 match_id／candidate_id。临时句柄、token／URL、授权版本、request_id、task_id、时间和 duplicate_policy 不进入下载指纹；凭证刷新不会单独制造一个新下载意图。
 
 默认 duplicate_policy=reuse：只复用规范化意图相同的活动任务或合格的已完成结果，不跨不同策略“猜测兼容”。完成结果还要满足当前文件访问权限、文件存在性、原曲／手动目标、品质／试听限制与 metadata_policy；best_effort 可复用带相同报告的部分结果，required 不能复用未满足必需产物的文件。检查文件和结果证据后，在提交事务内重验相关版本；不合格完成结果不复用，正常创建新任务。force 可绕过完成结果，但相同活动意图仍返回 409 ACTIVE_DUPLICATE。
 

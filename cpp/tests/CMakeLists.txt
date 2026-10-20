@@ -1,6 +1,6 @@
 include(Catch)
 
-# Pinned-dependency checks; business tests are added under unit/, integration/ and contract/.
+# Pinned-dependency checks.
 add_executable(music_dl_dependency_tests dependencies/third_party_smoke_test.cpp)
 target_link_libraries(music_dl_dependency_tests PRIVATE
     music_dl::project_options
@@ -20,5 +20,21 @@ target_compile_definitions(music_dl_dependency_tests PRIVATE
     MUSIC_DL_EXPECTED_MBEDTLS_VERSION="${mbedtls_version}"
     MUSIC_DL_EXPECTED_SQLITE_VERSION="${MUSIC_DL_SQLITE_VERSION}"
 )
-
 catch_discover_tests(music_dl_dependency_tests DISCOVERY_MODE PRE_TEST)
+
+# Domain rules and application ports; no network, files or databases.
+add_executable(music_dl_unit_tests
+    unit/domain/account_test.cpp
+    unit/domain/download_intent_test.cpp
+    unit/domain/quality_test.cpp
+    unit/domain/refs_test.cpp
+    unit/domain/result_test.cpp
+    unit/domain/task_status_test.cpp
+    unit/application/ports_test.cpp
+)
+target_link_libraries(music_dl_unit_tests PRIVATE
+    music_dl::application
+    music_dl::project_warnings
+    Catch2::Catch2WithMain
+)
+catch_discover_tests(music_dl_unit_tests DISCOVERY_MODE PRE_TEST)

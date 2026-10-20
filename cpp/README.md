@@ -1,6 +1,6 @@
 # C++ 后端工程
 
-已完成 T01：固定版本的第三方依赖已接入（cpp-httplib + Mbed TLS、nlohmann/json、SQLite，测试用 Catch2），配置阶段联网获取并校验版本，见[依赖说明](cmake/dependencies/README.md)。尚无业务源码、平台实现或服务入口；现有测试只验证依赖本身。
+已完成 T01（固定版本依赖，见[依赖说明](cmake/dependencies/README.md)）与 T02（领域规则与最小应用端口，见[公共头说明](include/music_dl/README.md)）。domain 为静态库，application 目前只有头文件端口；尚无平台实现、存储、运行时或服务入口。
 
 ## 目录与职责
 
@@ -63,7 +63,7 @@ Windows 上应使用官方 CMake 或 Visual Studio 自带的 CMake。MSYS2／Min
 
 ## 后续实现入口
 
-下一项为 T02（领域规则与最小应用端口）。先完成酷我单平台闭环；外部工具、多平台和 Spotify 目录按开发计划逐步接入，不增加 GUI 或默认外部运行时。
+下一项为 T03（配置、时钟与可观测性基础）；T07、T09 完成后可并行开始 T12。先完成酷我单平台闭环；外部工具、多平台和 Spotify 目录按开发计划逐步接入，不增加 GUI 或默认外部运行时。
 
 - [模块与目录设计](../docs/design/cpp20-refactor/backend-service/modules-and-layout.md)
 - [构建与依赖规则](../docs/design/cpp20-refactor/backend-service/build-and-dependencies.md)
