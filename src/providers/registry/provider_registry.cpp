@@ -472,6 +472,44 @@ std::vector<domain::SourceId> ProviderRegistry::sources() const {
 
 std::size_t ProviderRegistry::size() const noexcept { return entries_.size(); }
 
+domain::Result<void> ProviderRegistry::check_source(std::string_view source) const {
+    if (entries_.find(source) == entries_.end()) {
+        return Error{ErrorCode::unknown_provider, "source is not registered", false, {}};
+    }
+    return domain::ok();
+}
+
+domain::Result<ports::AuthProfileInfo>
+ProviderRegistry::describe_auth_profile(std::string_view source, std::string_view auth_profile) const {
+    const auto it = entries_.find(source);
+    if (it == entries_.end()) {
+        return Error{ErrorCode::unknown_provider, "source is not registered", false, {}};
+    }
+    const auto profile = it->second->profiles.find(auth_profile);
+    if (profile == it->second->profiles.end()) {
+        return Error{ErrorCode::capability_unsupported, "auth profile is not registered", false, {}};
+    }
+    const auto& spec = profile->second.spec;
+    return ports::AuthProfileInfo{spec.auth_profile, spec.kind, spec.version, spec.input_fields,
+                                  static_cast<bool>(spec.verifier)};
+}
+
+domain::Result<ports::CapabilitySpec> ProviderRegistry::describe_capability(std::string_view source,
+                                                                           std::string_view key) const {
+    auto entry = enabled_entry(source);
+    if (!entry) {
+        return std::move(entry).error();
+    }
+    const auto& capabilities = entry.value()->view.capabilities;
+    const auto it = std::find_if(capabilities.begin(), capabilities.end(),
+                                 [&](const CapabilityView& capability) { return capability.spec.key == key; });
+    if (it == capabilities.end()) {
+        return Error{ErrorCode::capability_unsupported, "source does not support " + std::string{key},
+                     false, {}};
+    }
+    return it->spec;
+}
+
 std::size_t ProviderRegistry::instantiated() const noexcept { return instantiated_.load(); }
 
 std::uint64_t ProviderRegistry::generation() const noexcept { return generation_; }

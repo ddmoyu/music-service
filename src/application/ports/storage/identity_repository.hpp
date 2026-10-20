@@ -39,8 +39,11 @@ class IdentityRepository {
 public:
     virtual ~IdentityRepository() = default;
 
-    virtual domain::Result<PrincipalRecord> create_principal(std::string display_name,
-                                                             PrincipalRole role) = 0;
+    // fixed_id is for well-known principals such as init's prn_local; otherwise a new
+    // prn_ id is generated. An id already in use is CONFLICT.
+    virtual domain::Result<PrincipalRecord>
+    create_principal(std::string display_name, PrincipalRole role,
+                     std::optional<std::string> fixed_id) = 0;
     virtual domain::Result<PrincipalRecord> get_principal(const std::string& id) = 0;
     virtual domain::Result<std::vector<PrincipalRecord>> list_principals() = 0;
     // Setting the current value again succeeds; enabling does not revive revoked tokens.

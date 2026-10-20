@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T05 **已完成**，T06、T07 **待验收**（等待 Linux CI），其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T05 **已完成**，T06～T08 **待验收**（等待 Linux CI），其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,7 +262,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-下一项为 **T08**（服务身份与 Cookie 凭证）与 **T09**（HTTP／TLS 上游传输）；T07、T09 完成后即可并行开始 T12。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+下一项为 **T09**（HTTP／TLS 上游传输）；T07、T09 完成后即可并行开始 T12，T08、T09 完成后进入 T10。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
@@ -352,3 +352,15 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 | Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条警告；`ctest --preset windows-msvc-debug` 132/132 通过；providers 用例（12 项、203 个断言）连续运行 20 次无失败 |
 | GCC 证据（部分） | MinGW GCC 16.2 在严格警告下对新增源文件与测试做语法检查 0 条警告；Linux 运行证据待推送后由 CI 提供 |
 | 未覆盖 | availability 与当前调用方凭证摘要的投影在 T08／T10；`GET /api/v1/providers` 路由与 CLI 组装在 T10；酷我实际能力在 T12；刷新／应用 token 端口在 T24；100 个来源的规模验证在 T28 |
+
+### T08 服务身份与 Cookie 凭证基线：待验收（等待 Linux CI）
+
+| 项目 | 记录 |
+| --- | --- |
+| 交付 | `application` 改为静态库并新增 `accounts`：IdentityAdminService（init、principal 创建／列出／启停、token 签发／列出／撤销）、AccessTokenAuthenticator、CredentialService（Cookie 凭证创建／更新／撤销／校验、默认选择、resolve_binding、lease、reclaim_orphan_secrets）与 API scope 清单。新增端口 AccessTokenCodec、TokenDelivery、ProviderDirectory（ProviderRegistry 实现）。`infrastructure/auth`：MbedTlsTokenCodec（`mst_` + 32 字节随机数，SHA-256 存储）与 FileTokenDelivery。仓储：principal 可用固定 ID（init 的 prn_local）；凭证更新可只改标签；新增校验结果记录与被引用秘密清单；CredentialRecord 增加最近校验时间与结果 |
+| 覆盖的验收 | A34：撤销后引导文件仍在也不能认证，重启与再次 init 均不导入；A48 用例部分：交付文件已存在则不签发不覆盖，数据库失败后删除交付文件且无有效 token，撤销一个 token 不影响其他 token，禁用 principal 阻止认证、重新启用不复活已撤销 token，scope 必须显式、已定义且不重复；中断的 init 仅在 prn_local 无 token 时续做；A47：默认选择的设置／重复设置不增版本／A→B→A／清除／他人凭证 404／来源不符与已撤销 422／未知来源 UNKNOWN_PROVIDER／重启保留，撤销默认凭证同事务清空且不改选；A38：同 principal 同来源两个 version=1 凭证的身份键不同；A39：默认切换后已固定绑定仍租用原账号，更新后租用同一账号的新版本，校验期间凭证被更新时旧结果不写入新版本（VERSION_CONFLICT）；A06 用户凭证部分：他人凭证不可读取、伪造绑定不可租用；撤销后绑定返回 CREDENTIALS_REQUIRED 而不换账号；秘密先写新引用再条件提交，失败回收新秘密、成功后删除旧秘密，孤立秘密可回收 |
+| 规则补充 | 已写回[通用身份适配说明](../../../src/infrastructure/auth/README.md)：token 格式与哈希、交付文件规则。实现约定：Cookie 不得含控制字符（防止注入其他请求头），标签为至多 128 字节的 UTF-8；oauth2／api_key 在 T24 前返回 CAPABILITY_UNSUPPORTED；可选凭证能力在没有可用默认时退回 anonymous，并返回所读取的 selection_version；孤立秘密回收只在启动时、开始受理请求前运行 |
+| Windows 证据（2026-10-20） | MSVC 19.51 /W4：0 条警告；`ctest --preset windows-msvc-debug` 143/143 通过（新增账号集成测试 11 项） |
+| GCC 证据（部分） | MinGW GCC 16.2 在严格警告下对新增与改动的源文件及测试做语法检查 0 条警告；Linux 运行证据待推送后由 CI 提供 |
+| 未覆盖 | 实例锁下的 CLI 命令、HTTP 凭证与默认选择路由、Bearer 中间件归 T10；缓存与游标的失效（含 selection_version 绑定）随 T13 的缓存实现；A06 中请求头、任务与 SSE 的隔离分别在 T09、T14、T18 复验；application 模式、应用 token 与刷新在 T24 |
+

@@ -1,5 +1,12 @@
-# Use cases come later; for now application provides header-only outbound ports
-# (src/application/ports) built on domain types.
-add_library(music_service_application INTERFACE)
+# Use cases (accounts so far) and the outbound ports in ports/, built on domain types.
+add_library(music_service_application STATIC
+    accounts/credential_service.cpp
+    accounts/identity_admin.cpp
+)
 add_library(music_service::application ALIAS music_service_application)
-target_link_libraries(music_service_application INTERFACE music_service::domain)
+target_link_libraries(music_service_application
+    PUBLIC
+        music_service::domain
+    PRIVATE
+        music_service::project_warnings
+)

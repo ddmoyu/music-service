@@ -2,6 +2,7 @@
 
 #include "application/config/service_config.hpp"
 #include "application/ports/providers/bundle.hpp"
+#include "application/ports/providers/directory.hpp"
 #include "domain/catalog/refs.hpp"
 #include "domain/result.hpp"
 
@@ -67,7 +68,7 @@ struct ProviderListPage {
 // Immutable after build(); safe to share across threads. Capability objects are created
 // on first require() and then reused; listing or describing never creates them, starts
 // threads or touches the network.
-class ProviderRegistry {
+class ProviderRegistry final : public ports::ProviderDirectory {
 public:
     static constexpr std::uint32_t max_list_limit = 100;
 
@@ -79,7 +80,7 @@ public:
     build(std::vector<ports::ProviderBundle> bundles,
           const std::map<std::string, application::config::ProviderConfig>& config);
 
-    ~ProviderRegistry();
+    ~ProviderRegistry() override;
     ProviderRegistry(const ProviderRegistry&) = delete;
     ProviderRegistry& operator=(const ProviderRegistry&) = delete;
 
@@ -107,10 +108,16 @@ public:
         return std::static_pointer_cast<Interface>(std::move(erased).value());
     }
 
-    // The verifier bound to source + auth_profile + kind.
+    // ProviderDirectory.
+    [[nodiscard]] domain::Result<void> check_source(std::string_view source) const override;
+    [[nodiscard]] domain::Result<ports::AuthProfileInfo>
+    describe_auth_profile(std::string_view source, std::string_view auth_profile) const override;
+    [[nodiscard]] domain::Result<ports::CapabilitySpec>
+    describe_capability(std::string_view source, std::string_view key) const override;
+    // The verifier bound to source + auth_profile + kind, created on first use.
     [[nodiscard]] domain::Result<std::shared_ptr<ports::ICredentialVerifier>>
     require_verifier(std::string_view source, std::string_view auth_profile,
-                     ports::CredentialKind kind) const;
+                     ports::CredentialKind kind) const override;
 
     // Capability and verifier objects created so far, for diagnostics and tests.
     [[nodiscard]] std::size_t instantiated() const noexcept;

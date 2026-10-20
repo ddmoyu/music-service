@@ -23,7 +23,8 @@ public:
     explicit SqliteIdentityRepository(RepositoryContext context) : ctx_(std::move(context)) {}
 
     domain::Result<application::ports::PrincipalRecord>
-    create_principal(std::string display_name, application::ports::PrincipalRole role) override;
+    create_principal(std::string display_name, application::ports::PrincipalRole role,
+                     std::optional<std::string> fixed_id) override;
     domain::Result<application::ports::PrincipalRecord> get_principal(const std::string& id) override;
     domain::Result<std::vector<application::ports::PrincipalRecord>> list_principals() override;
     domain::Result<application::ports::PrincipalRecord> set_principal_enabled(const std::string& id,
@@ -54,8 +55,13 @@ public:
     list(const std::string& owner_id, const std::optional<std::string>& source) override;
     domain::Result<application::ports::SecretReplacement>
     replace_secret(const std::string& owner_id, const std::string& id,
-                   std::uint64_t expected_version, const std::string& new_secret_ref,
+                   std::uint64_t expected_version, const std::optional<std::string>& new_secret_ref,
                    const std::optional<std::string>& new_label) override;
+    domain::Result<application::ports::CredentialRecord>
+    record_verification(const std::string& owner_id, const std::string& id,
+                        std::uint64_t expected_version, application::ports::VerifyOutcome outcome,
+                        std::chrono::system_clock::time_point at) override;
+    domain::Result<std::vector<std::string>> referenced_secret_refs() override;
     domain::Result<application::ports::SecretReplacement> revoke(const std::string& owner_id,
                                                                  const std::string& id) override;
     domain::Result<application::ports::DefaultSelection>

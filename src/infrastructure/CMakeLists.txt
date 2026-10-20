@@ -1,6 +1,8 @@
-# Adapters for configuration, observability, files, secrets and SQLite storage; later transport.
+# Adapters for access tokens, configuration, observability, files, secrets and SQLite
+# storage; later transport. Access tokens use Mbed TLS for randomness and SHA-256.
 # transport uses cpp-httplib with Mbed TLS, storage uses SQLite, config uses JSON.
 add_library(music_service_infrastructure STATIC
+    auth/access_tokens.cpp
     config/address.cpp
     config/config_loader.cpp
     config/config_validate.cpp

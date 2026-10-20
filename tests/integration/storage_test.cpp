@@ -77,7 +77,7 @@ struct Store {
 };
 
 std::string make_principal(Store& s, std::string name = "local") {
-    return s.identity->create_principal(std::move(name), ports::PrincipalRole::user)->id;
+    return s.identity->create_principal(std::move(name), ports::PrincipalRole::user, std::nullopt)->id;
 }
 
 domain::NormalizedDownloadIntent intent_for(const std::string& owner, std::string_view track_id,
@@ -200,7 +200,7 @@ TEST_CASE("the single writer is bounded by the wait budget", "[storage][database
 
 TEST_CASE("principals and tokens", "[storage][identity]") {
     Store s{"identity"};
-    const auto principal = s.identity->create_principal("本机", ports::PrincipalRole::admin);
+    const auto principal = s.identity->create_principal("本机", ports::PrincipalRole::admin, std::nullopt);
     REQUIRE(principal);
     CHECK(principal->id.rfind("prn_", 0) == 0);
     CHECK(principal->enabled);

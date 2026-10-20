@@ -12,6 +12,9 @@ namespace music_service::application::ports {
 
 enum class CredentialStatus { active, invalid, revoked };
 
+// Stored result of the last platform verification.
+enum class VerifyOutcome { valid, invalid, unknown };
+
 // Platform account description. The secret itself lives in the SecretStore under
 // secret_ref; nothing here is secret.
 struct CredentialRecord {
@@ -26,6 +29,8 @@ struct CredentialRecord {
     CredentialStatus status{CredentialStatus::active};
     std::optional<std::chrono::system_clock::time_point> expires_at;
     std::chrono::system_clock::time_point created_at;
+    std::optional<std::chrono::system_clock::time_point> last_verified_at;
+    std::optional<VerifyOutcome> last_verify_result;
 };
 
 struct NewCredential {
@@ -61,12 +66,24 @@ public:
     virtual domain::Result<std::vector<CredentialRecord>>
     list(const std::string& owner_id, const std::optional<std::string>& source) = 0;
 
-    // Conditional on expected_version and the credential not being revoked;
-    // advances the version.
+    // Conditional on expected_version and the credential not being revoked; at least
+    // one of secret and label must be given. Advances the version. A new secret also
+    // returns the credential to active and forgets the last verification.
     virtual domain::Result<SecretReplacement>
     replace_secret(const std::string& owner_id, const std::string& id,
-                   std::uint64_t expected_version, const std::string& new_secret_ref,
+                   std::uint64_t expected_version, const std::optional<std::string>& new_secret_ref,
                    const std::optional<std::string>& new_label) = 0;
+
+    // Stores a verification result for the version that was checked: VERSION_CONFLICT
+    // if the credential changed meanwhile, VALIDATION_FAILED if revoked. valid and
+    // invalid also set the status; unknown leaves it. The version does not change.
+    virtual domain::Result<CredentialRecord>
+    record_verification(const std::string& owner_id, const std::string& id,
+                        std::uint64_t expected_version, VerifyOutcome outcome,
+                        std::chrono::system_clock::time_point at) = 0;
+
+    // Every secret_ref a credential still points to, for reclaiming orphaned secrets.
+    virtual domain::Result<std::vector<std::string>> referenced_secret_refs() = 0;
 
     // In one transaction: marks the credential revoked, advances its version, clears
     // any default pointing to it and advances that selection_version. Repeating the
