@@ -5,6 +5,7 @@ add_library(music_service_application STATIC
     accounts/identity_admin.cpp
     catalog/asset_service.cpp
     catalog/catalog_service.cpp
+    events/publishing_publication_repository.cpp
     events/publishing_task_repository.cpp
     events/task_event_hub.cpp
     tasks/download_service.cpp

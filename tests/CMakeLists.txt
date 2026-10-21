@@ -27,6 +27,7 @@ catch_discover_tests(music_service_dependency_tests DISCOVERY_MODE PRE_TEST)
 # no network or databases (opt-in [online-*] cases aside).
 add_executable(music_service_unit_tests
     unit/audio_processing/verifying_processor_test.cpp
+    unit/downloads/resume_policy_test.cpp
     unit/domain/account_test.cpp
     unit/domain/container_test.cpp
     unit/domain/download_intent_test.cpp
@@ -49,6 +50,7 @@ add_executable(music_service_unit_tests
 target_link_libraries(music_service_unit_tests PRIVATE
     music_service::application
     music_service::audio_processing
+    music_service::downloads
     music_service::infrastructure
     music_service::providers
     music_service::runtime
@@ -79,12 +81,14 @@ add_executable(music_service_integration_tests
     integration/catalog_test.cpp
     integration/downloads_test.cpp
     integration/events_test.cpp
+    integration/publication_test.cpp
     integration/server_test.cpp
     integration/storage_test.cpp
     integration/transport_test.cpp
 )
 target_link_libraries(music_service_integration_tests PRIVATE
     music_service::application
+    music_service::downloads
     music_service::infrastructure
     music_service::providers
     music_service::runtime

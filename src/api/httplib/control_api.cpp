@@ -123,6 +123,7 @@ int status_for(ErrorCode code) {
     case ErrorCode::destination_root_changed:
     case ErrorCode::destination_in_use:
     case ErrorCode::file_system:
+    case ErrorCode::finalization_failed:
     case ErrorCode::internal:
         break;
     }

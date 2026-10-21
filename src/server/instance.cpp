@@ -15,6 +15,7 @@ void Instance::close() noexcept {
     identities.reset();
     credentials.reset();
     destinations.reset();
+    publications.reset();
     tasks.reset();
     database.reset();
     lock.release();
@@ -32,7 +33,7 @@ domain::Result<std::unique_ptr<Instance>> open_instance(const application::confi
     std::unique_ptr<Instance> instance{new Instance{std::move(layout).value(), std::move(lock).value(),
                                                     std::make_shared<infrastructure::SystemClock>(),
                                                     std::make_shared<infrastructure::observability::IdGenerator>(),
-                                                    nullptr, nullptr, nullptr, nullptr, nullptr}};
+                                                    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr}};
     sqlite::DatabaseOptions options;
     options.read_connections = config.storage.read_connections;
     options.writer_queue = config.storage.writer_queue;
@@ -52,6 +53,7 @@ domain::Result<std::unique_ptr<Instance>> open_instance(const application::confi
     instance->tasks = std::make_shared<sqlite::SqliteTaskRepository>(
         context, sqlite::TaskRepositoryOptions{config.download_limits.per_principal_active,
                                                config.download_limits.global_active, config.idempotency.retention});
+    instance->publications = std::make_shared<sqlite::SqlitePublicationRepository>(context);
     return instance;
 }
 

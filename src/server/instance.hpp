@@ -30,6 +30,7 @@ struct Instance {
     std::shared_ptr<infrastructure::storage::sqlite::SqliteCredentialRepository> credentials;
     std::shared_ptr<infrastructure::storage::sqlite::SqliteDestinationRepository> destinations;
     std::shared_ptr<infrastructure::storage::sqlite::SqliteTaskRepository> tasks;
+    std::shared_ptr<infrastructure::storage::sqlite::SqlitePublicationRepository> publications;
 
     // Closes the repositories and the database, then releases the lock.
     void close() noexcept;

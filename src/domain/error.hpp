@@ -43,6 +43,7 @@ enum class ErrorCode {
     instance_locked,
     file_system,
     audio_invalid, // required decryption or validation of a downloaded file failed
+    finalization_failed, // a verified file could not be published to its destination
     internal,
 };
 

@@ -65,7 +65,10 @@ public:
     abandon(const std::string& task_id, const std::string& execution_id,
             std::uint64_t expected_version, domain::TaskStatus to,
             const std::string& error_json) override;
-    domain::Result<std::vector<application::ports::PublicationIntent>> pending() override;
+    domain::Result<void> relocate(const std::string& task_id, const std::string& execution_id,
+                                  const std::string& reserved_path) override;
+    domain::Result<std::vector<application::ports::PendingPublication>> pending() override;
+    domain::Result<std::vector<application::ports::TaskRecord>> in_status(domain::TaskStatus status) override;
     domain::Result<application::ports::FileAssetRecord> get_asset(const std::string& owner_id,
                                                                   const std::string& file_id) override;
     domain::Result<application::ports::FileAssetRecord> mark_missing(const std::string& file_id) override;

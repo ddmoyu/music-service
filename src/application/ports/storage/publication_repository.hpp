@@ -57,6 +57,12 @@ struct CompletedPublication {
     FileAssetRecord asset;
 };
 
+// An intent left behind with the task it belongs to (finalizing, same execution).
+struct PendingPublication {
+    PublicationIntent intent;
+    TaskRecord task;
+};
+
 // Publication steps that must commit together with task state (data-models.md,
 // 文件与数据库的协调). Each write checks the task's execution id and version.
 class PublicationRepository {
@@ -73,8 +79,14 @@ public:
                                            const std::string& execution_id,
                                            const std::string& stage) = 0;
 
+    // Moves the reservation to another path when an unknown file occupies the reserved
+    // one, so it is never overwritten. CONFLICT when the new path is taken; the intent
+    // keeps its old path then.
+    virtual domain::Result<void> relocate(const std::string& task_id, const std::string& execution_id,
+                                          const std::string& reserved_path) = 0;
+
     // finalizing -> completed: inserts the asset and the task-file relation, stores the
-    // result and removes the intent.
+    // result (a JSON object, completed with the new "file_id") and removes the intent.
     virtual domain::Result<CompletedPublication> complete(const std::string& task_id,
                                                           const std::string& execution_id,
                                                           std::uint64_t expected_version,
@@ -88,8 +100,12 @@ public:
                                                domain::TaskStatus to,
                                                const std::string& error_json) = 0;
 
-    // Intents left behind by a crash, for startup recovery.
-    virtual domain::Result<std::vector<PublicationIntent>> pending() = 0;
+    // Intents left behind by a crash, oldest first, for startup recovery.
+    virtual domain::Result<std::vector<PendingPublication>> pending() = 0;
+
+    // Tasks of any owner in a status only startup recovery resolves once their execution
+    // is gone (finalizing without an intent, canceling).
+    virtual domain::Result<std::vector<TaskRecord>> in_status(domain::TaskStatus status) = 0;
 
     virtual domain::Result<FileAssetRecord> get_asset(const std::string& owner_id,
                                                       const std::string& file_id) = 0;

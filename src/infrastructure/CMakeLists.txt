@@ -7,6 +7,7 @@ add_library(music_service_infrastructure STATIC
     config/config_loader.cpp
     config/config_validate.cpp
     filesystem/data_layout.cpp
+    filesystem/destination_files.cpp
     filesystem/files.cpp
     filesystem/instance_lock.cpp
     filesystem/paths.cpp

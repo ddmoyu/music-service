@@ -488,7 +488,8 @@ TEST_CASE("publication reserves, completes and releases paths", "[storage][publi
     CHECK(s.tasks->get(owner, other.task_id)->status == TaskStatus::processing);
 
     REQUIRE(s.publications->set_stage(task.task_id, *task.execution_id, "moved"));
-    CHECK(s.publications->pending()->front().stage == "moved");
+    CHECK(s.publications->pending()->front().intent.stage == "moved");
+    CHECK(s.publications->pending()->front().task.status == TaskStatus::finalizing);
 
     // Survives a restart until completed.
     s.reopen();

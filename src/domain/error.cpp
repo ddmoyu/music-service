@@ -74,6 +74,8 @@ std::string_view to_string(ErrorCode code) noexcept {
         return "FILE_SYSTEM_ERROR";
     case ErrorCode::audio_invalid:
         return "AUDIO_INVALID";
+    case ErrorCode::finalization_failed:
+        return "FINALIZATION_FAILED";
     case ErrorCode::internal:
         return "INTERNAL_ERROR";
     }

@@ -8,9 +8,11 @@
 #include "application/events/publishing_task_repository.hpp"
 #include "application/events/task_event_hub.hpp"
 #include "application/tasks/download_service.hpp"
+#include "downloads/recovery.hpp"
 #include "application/transport/upstream_client.hpp"
 #include "event_server/httplib/event_server.hpp"
 #include "infrastructure/auth/access_tokens.hpp"
+#include "infrastructure/filesystem/destination_files.hpp"
 #include "infrastructure/filesystem/paths.hpp"
 #include "infrastructure/secrets/file_secret_store.hpp"
 #include "infrastructure/transport/httplib_transport.hpp"
@@ -24,6 +26,7 @@
 #include <atomic>
 #include <chrono>
 #include <iostream>
+#include <map>
 #include <mutex>
 #include <thread>
 #include <utility>
@@ -71,6 +74,7 @@ struct ProcessHost::State {
     std::shared_ptr<application::accounts::AccessTokenAuthenticator> authenticator;
     std::shared_ptr<application::accounts::CredentialService> credentials;
     std::vector<DestinationState> destinations;
+    std::shared_ptr<infrastructure::filesystem::LocalDestinationFiles> files;
     std::shared_ptr<const providers::ProviderRegistry> registry;
     std::shared_ptr<runtime::AdmissionLedger> admission;
     std::shared_ptr<infrastructure::transport::HttplibTransport> transport;
@@ -155,6 +159,7 @@ struct ProcessHost::State {
             transport.reset();
             admission.reset();
             credentials.reset();
+            files.reset();
             authenticator.reset();
             codec.reset();
             secrets.reset();
@@ -163,6 +168,7 @@ struct ProcessHost::State {
                 instance->identities.reset();
                 instance->credentials.reset();
                 instance->destinations.reset();
+                instance->publications.reset();
                 instance->tasks.reset();
                 instance->database.reset();
                 log.info("shutdown.database_closed");
@@ -248,6 +254,37 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
         if (!d.available) {
             state->log.warn("startup.destination_unavailable", {{"destination_id", d.config.id}});
         }
+    }
+    std::map<std::string, std::filesystem::path> roots;
+    for (const auto& d : state->destinations) {
+        roots.emplace(d.config.id, d.root);
+    }
+    state->files = std::make_shared<infrastructure::filesystem::LocalDestinationFiles>(std::move(roots));
+
+    // Publications and cancels interrupted by the last exit are settled before anything
+    // can claim or query them (configuration-and-deployment.md, 启动与退出).
+    auto recovered = downloads::Recovery(inst.publications, inst.tasks, state->files,
+                                         downloads::RecoveryOptions{config.downloads.max_attempts})
+                         .run();
+    if (!recovered) {
+        return fail(std::move(recovered).error(), "recovery");
+    }
+    for (const auto& task : recovered->tasks) {
+        const bool attention =
+            task.action == downloads::RecoveryAction::failed || task.action == downloads::RecoveryAction::deferred;
+        state->log.log(attention ? observability::LogLevel::warn : observability::LogLevel::info,
+                       "startup.recovery_task",
+                       {{"task_id", task.task_id},
+                        {"action", downloads::to_string(task.action)},
+                        {"reason", task.reason}});
+    }
+    if (!recovered->tasks.empty()) {
+        state->log.info("startup.recovery",
+                        {{"completed", static_cast<std::uint64_t>(recovered->count(downloads::RecoveryAction::completed))},
+                         {"retry", static_cast<std::uint64_t>(recovered->count(downloads::RecoveryAction::retry))},
+                         {"failed", static_cast<std::uint64_t>(recovered->count(downloads::RecoveryAction::failed))},
+                         {"deferred", static_cast<std::uint64_t>(recovered->count(downloads::RecoveryAction::deferred))},
+                         {"canceled", static_cast<std::uint64_t>(recovered->count(downloads::RecoveryAction::canceled))}});
     }
 
     state->admission = std::make_shared<runtime::AdmissionLedger>(admission_limits(config), clock);

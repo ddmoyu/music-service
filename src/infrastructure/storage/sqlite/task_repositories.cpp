@@ -169,6 +169,27 @@ std::string path_key(std::string_view relative_path) {
     return key;
 }
 
+// Whether an asset or another task's intent already uses the path (case-insensitive).
+domain::Result<bool> path_taken(Connection& db, const std::string& destination_id, const std::string& key,
+                                const std::string& task_id) {
+    auto s = db.prepare("SELECT EXISTS (SELECT 1 FROM file_assets WHERE destination_id = ?"
+                        " AND path_key = ?) OR EXISTS (SELECT 1 FROM finalization_intents"
+                        " WHERE destination_id = ? AND path_key = ? AND task_id <> ?)");
+    if (!s) {
+        return std::move(s).error();
+    }
+    s->bind(1, destination_id).bind(2, key).bind(3, destination_id).bind(4, key).bind(5, task_id);
+    auto row = s->step();
+    if (!row) {
+        return std::move(row).error();
+    }
+    return s->integer(0) != 0;
+}
+
+domain::Error path_reserved() {
+    return domain::Error{domain::ErrorCode::conflict, "target path is already reserved", true, {}};
+}
+
 domain::Result<std::int64_t> count(Connection& db, std::string_view sql,
                                    const std::optional<std::string>& owner) {
     auto s = db.prepare(sql);
@@ -811,20 +832,12 @@ domain::Result<ports::TaskRecord> SqlitePublicationRepository::begin(const ports
         if (task->destination_id != intent.destination_id) {
             return domain::Error::validation("destination_id", "differs from the task's destination");
         }
-        auto taken = db.prepare("SELECT EXISTS (SELECT 1 FROM file_assets WHERE destination_id = ?"
-                                " AND path_key = ?) OR EXISTS (SELECT 1 FROM finalization_intents"
-                                " WHERE destination_id = ? AND path_key = ?)");
+        auto taken = path_taken(db, intent.destination_id, key, intent.task_id);
         if (!taken) {
             return std::move(taken).error();
         }
-        taken->bind(1, intent.destination_id).bind(2, key).bind(3, intent.destination_id).bind(4, key);
-        auto row = taken->step();
-        if (!row) {
-            return std::move(row).error();
-        }
-        if (taken->integer(0) != 0) {
-            return domain::Error{domain::ErrorCode::conflict, "target path is already reserved",
-                                 true, {}};
+        if (taken.value()) {
+            return path_reserved();
         }
         auto insert = db.prepare(
             "INSERT INTO finalization_intents (task_id, execution_id, destination_id,"
@@ -871,6 +884,42 @@ domain::Result<void> SqlitePublicationRepository::set_stage(const std::string& t
             return version_conflict();
         }
         return domain::ok();
+    });
+}
+
+domain::Result<void> SqlitePublicationRepository::relocate(const std::string& task_id,
+                                                           const std::string& execution_id,
+                                                           const std::string& reserved_path) {
+    const auto now = to_millis(ctx_.clock->now());
+    const auto key = path_key(reserved_path);
+    return ctx_.database->write([&](Connection& db) -> domain::Result<void> {
+        auto current = db.prepare("SELECT destination_id FROM finalization_intents WHERE task_id = ?"
+                                  " AND execution_id = ?");
+        if (!current) {
+            return std::move(current).error();
+        }
+        current->bind(1, task_id).bind(2, execution_id);
+        auto destination = first<std::string>(*current, [](const Statement& st) { return st.text(0); });
+        if (!destination) {
+            return std::move(destination).error();
+        }
+        if (!destination.value()) {
+            return version_conflict();
+        }
+        auto taken = path_taken(db, *destination.value(), key, task_id);
+        if (!taken) {
+            return std::move(taken).error();
+        }
+        if (taken.value()) {
+            return path_reserved();
+        }
+        auto s = db.prepare("UPDATE finalization_intents SET reserved_path = ?, path_key = ?,"
+                            " stage = 'reserved', updated_at = ? WHERE task_id = ? AND execution_id = ?");
+        if (!s) {
+            return std::move(s).error();
+        }
+        s->bind(1, reserved_path).bind(2, key).bind(3, now).bind(4, task_id).bind(5, execution_id);
+        return s->run();
     });
 }
 
@@ -955,9 +1004,14 @@ SqlitePublicationRepository::complete(const std::string& task_id, const std::str
         if (auto done = relation->run(); !done) {
             return done.error();
         }
+        auto result = nlohmann::json::parse(result_json, nullptr, false);
+        if (!result.is_object()) {
+            return domain::Error::validation("result", "must be a JSON object");
+        }
+        result["file_id"] = file_id;
         Update update;
         update.to = TaskStatus::completed;
-        update.result_json = result_json;
+        update.result_json = result.dump();
         auto completed = apply(db, task_id, update, now);
         if (!completed) {
             return std::move(completed).error();
@@ -1006,18 +1060,42 @@ SqlitePublicationRepository::abandon(const std::string& task_id, const std::stri
     });
 }
 
-domain::Result<std::vector<ports::PublicationIntent>> SqlitePublicationRepository::pending() {
-    return ctx_.database->read([&](Connection& db) -> domain::Result<std::vector<ports::PublicationIntent>> {
+domain::Result<std::vector<ports::PendingPublication>> SqlitePublicationRepository::pending() {
+    return ctx_.database->read([&](Connection& db) -> domain::Result<std::vector<ports::PendingPublication>> {
         auto s = db.prepare("SELECT task_id, execution_id, destination_id, workspace_file,"
                             " reserved_path, evidence, stage FROM finalization_intents"
                             " ORDER BY created_at, task_id");
         if (!s) {
             return std::move(s).error();
         }
-        return collect<ports::PublicationIntent>(*s, [](const Statement& st) {
+        auto intents = collect<ports::PublicationIntent>(*s, [](const Statement& st) {
             return ports::PublicationIntent{st.text(0), st.text(1), st.text(2), st.text(3),
                                             st.text(4), st.text(5), st.text(6)};
         });
+        if (!intents) {
+            return std::move(intents).error();
+        }
+        std::vector<ports::PendingPublication> pending;
+        for (auto& intent : intents.value()) {
+            auto task = require_task(db, intent.task_id);
+            if (!task) {
+                return std::move(task).error();
+            }
+            pending.push_back({std::move(intent), std::move(task).value()});
+        }
+        return pending;
+    });
+}
+
+domain::Result<std::vector<ports::TaskRecord>> SqlitePublicationRepository::in_status(TaskStatus status) {
+    return ctx_.database->read([&](Connection& db) -> domain::Result<std::vector<ports::TaskRecord>> {
+        auto s = db.prepare("SELECT " + std::string{task_columns} +
+                            " FROM download_tasks WHERE status = ? ORDER BY created_at, id");
+        if (!s) {
+            return std::move(s).error();
+        }
+        s->bind(1, std::string{domain::to_string(status)});
+        return collect<ports::TaskRecord>(*s, read_task);
     });
 }
 
