@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-21。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T16、T18 **已完成**，S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-21。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T16、T18 **已完成**，T17 **待验收**（Linux CI 待运行），S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,7 +262,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-下一项为 **T17**（持久调度与最小下载执行），T19（已完成文件访问与票据）的前置 T16 已满足，可并行推进；两者完成后进入 T20 的 S1 酷我端到端关口。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+下一项为 **T19**（已完成文件访问与票据），T17 在 Linux CI 通过后转为已完成；两者完成后进入 T20 的 S1 酷我端到端关口。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
@@ -447,6 +447,18 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 | Windows 证据（2026-10-21） | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 205/205 通过（3 项在线用例按设计跳过）；GCC 16.2 在 -O2 严格警告下检查改动的源码与测试 0 条警告 |
 | Linux 证据（CI 运行 39525823045、39526810353） | ubuntu-24.04，GCC 13.3.0：205/205 通过，Windows 与容器任务同时通过。首次运行在测试替身 mock_providers.hpp 中有 4 条 -Wmissing-field-initializers（ResolvedAudio 新字段未初始化），由 23c2271 修复后复跑 0 条项目警告 |
 | 已知限制 | 只验证 MP3（酷我标准品质的实际容器）；FLAC／M4A／Ogg／WAV／ADTS 的结构验证、标签写入与解密归 T30 及具体平台；不做完整解码证明；整曲判定依赖平台声明时长；处理器由 T17 的 Runner 在 processing 阶段调用，结果写入任务记录后才参与已完成结果复用的证据复核 |
+
+### T17 持久调度与最小下载执行：待验收（2026-10-21，Windows 通过，Linux CI 待运行）
+
+| 项目 | 记录 |
+| --- | --- |
+| 交付 | `downloads/scheduler`：DownloadScheduler（单个派发线程，按 downloads.workers 的执行槽领取；principal 轮转、同 principal 内最早到期优先；领取前查询入场账本的 readiness，跳过来源受限的任务；wake 与 1 秒周期扫描兜底；paused 只停止领取；停机 stop_claiming → wait_idle → stop_running）。`downloads/runner`：DownloadRunner 按执行阶段运行一次领取：固定绑定租用最新有效版本 → begin_attempt → 同源解析（手动目标按持久目标，auto 仍为 CAPABILITY_UNSUPPORTED）→ 详情取名（失败则用 source-id）→ downloading 流式写入 `.music-service-work/<task_id>/input.part` → processing 池中运行 AudioProcessor → Finalizer 发布。新端口 WorkFiles（工作文件追加、刷写、截断，LocalDestinationFiles 实现，基于新的 AppendFile 原语）与 DownloadQueue（wake、request_stop），DownloadService 提交后唤醒、取消进入 canceling 后通知 Runner。TaskRepository 新增 runnable、claim、begin_attempt、defer、checkpoint、requeue_interrupted，transition 可写进度、执行事实与错误；schema v2 增加 execution（公开执行事实）、checkpoint（私有续传证据）、attempt_used_ms。ProcessHost 组装下载与 processing 池，恢复后 requeue_interrupted、ready 后启动调度，停机先停领取再按 shutdown.soft 等待；`GET/PATCH /api/v1/admin/download-policy`，admin/status 增加 downloads（workers、running、paused、claimed），info 声明 downloads=true；任务快照返回 actual_track、actual_quality 与资源警告 |
+| 规则落实 | 领取只换 execution_id、不计尝试；Runner 开始第一个上游操作前 begin_attempt，此时固定绝对 deadline，此后入场暂停、重新领取与重启都不延长。请求不能入场（含重定向下一跳、processing 池满）时先结束 I/O，再带执行世代与版本保存 waiting_retry（admission）、恢复阶段、未关闭的尝试与其已用运行时间、检查点，提交后才归还执行槽；尝试预算不含暂停时间。429／408／5xx 与 403／404／410（地址失效，下次重新解析）结束本次尝试为 upstream_retry（退避 retry.initial_backoff × multiplier^(n−1) 加至多 20% 抖动），尝试或截止耗尽则 failed；传输中断在尝试内按 downloads.transport_retries 重试。续传仅在 decide_resume 认可（同曲目品质、总长、强 ETag／Last-Modified）时发送 Range＋If-Range，206 的起点、总长或校验器不符则从零重下，200 覆盖旧前缀；检查点在刷写之后才记录 durable_bytes。进度按 event_stream.progress_interval 节流提交，未知长度时 total_bytes／eta_ms／stage_progress 为 null，速度为 byte/s、ETA 为毫秒。验证失败可重试（截断、非音频）时清除检查点重下，否则 failed。取消：request_cancel 提交 canceling 后通知 Runner，Runner 停止 I/O、删除工作目录并转 canceled；任何写入遇到版本冲突时重新读取，若为本执行的 canceling 则完成取消，否则放手。停机：未在软预算内结束的执行以 service_shutdown 停止，保存检查点并转为立即到期的 waiting_retry（admission）。启动时 resolving／probing 从 resolving、downloading／processing 从 downloading（检查点显示传输完成时直接重新处理）恢复。领域迁移新增 processing → waiting_retry（重下或中断）。暂停策略只在内存，重启后恢复领取 |
+| 覆盖的验收 | A04（真实服务：HTTP 创建后客户端断开，后台完成并可单独查询）；A22（旧执行的检查点在新领取后被拒）；A25（无 Content-Length 时进度不伪造总量）；A26（尝试耗尽为 failed；暂停计入绝对截止，到期为 REQUEST_DEADLINE_EXCEEDED；deadline 在暂停、重新领取与重试后不变）；A27（停机时停止领取、等待后要求停止，检查点保留 16 KiB 已刷写字节，下次以 Range 续传得到完整文件）；A43（来源达到下载额度时持久延后并归还执行槽，账本无残留租约；冷却来源的任务不被领取、其他来源照常推进）；A44（两次 admission 延后 attempt 保持 1、execution_id 改变，随后真实 503 结束尝试，下一次为 attempt 2）。另覆盖完整下载与发布、同名换候选名、传输中断续传、200 覆盖部分文件、HTML 正文不发布、principal 轮转、暂停不领取、取消停止传输并清理、崩溃遗留的运行中任务按阶段重新排队，以及 admin/download-policy 的权限、校验与 admin/status |
+| 真实样本（2026-10-21，Windows，匿名） | 调试构建的 music-service serve：`POST /api/v1/downloads` 酷我 rid 78932517 标准品质后不保持连接，约 1.1 秒后 completed（attempt 1），文件「蓝心羽 - 晴天.mp3」2,829,338 字节，audio.verify 实测 176,796 ms、completeness=full，仅 METADATA_NOT_WRITTEN；PATCH 暂停后 admin/status 显示 paused=true。样本与数据目录只在本机临时目录 |
+| Windows 证据（2026-10-21） | MSVC 19.51 /W4：0 条项目警告；`ctest` 254 项中 251 通过、3 项在线用例按设计跳过；GCC 16.2 在 -O2 严格警告下检查新增的调度、Runner、仓储、文件原语与测试源码 0 条警告 |
+| Linux 证据 | 待 CI 运行；通过后补记运行号并改为已完成 |
+| 已知限制 | 文件名规则 naming-v1 为「歌手 - 标题.扩展名」（无详情时为 source-id），尚无配置模板；探测阶段被跳过（解析结果与处理验证已足够）；默认账号凭证的固定绑定沿用 CredentialService.lease，本任务未另做凭证切换的执行用例（T20 复验 A39）；暂停策略不持久化；数据库在有限重试后仍不可写时，执行保持运行阶段并交给下次启动的 requeue；没有孤立工作目录清理与失败工作文件的保留期清理（T31）；Retry-After 只经入场账本冷却生效，任务级退避不读取它（T29）；auto 换源与匹配仍不支持 |
 
 ### T18 事件、SSE 与 HTTP 同步：已完成（2026-10-21，提交 c20ca47）
 

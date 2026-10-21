@@ -91,10 +91,16 @@ DownloadService::DownloadService(std::shared_ptr<ports::TaskRepository> tasks,
                                  std::vector<DestinationRule> destinations,
                                  std::function<bool(const DestinationRule&)> destination_available,
                                  std::function<bool(const std::string&, const std::string&)> file_exists,
-                                 std::uint32_t max_batch_items)
+                                 std::uint32_t max_batch_items, std::shared_ptr<ports::DownloadQueue> queue)
     : tasks_(std::move(tasks)), providers_(std::move(providers)), credentials_(std::move(credentials)),
       destinations_(std::move(destinations)), destination_available_(std::move(destination_available)),
-      file_exists_(std::move(file_exists)), max_batch_items_(max_batch_items) {}
+      file_exists_(std::move(file_exists)), max_batch_items_(max_batch_items), queue_(std::move(queue)) {}
+
+void DownloadService::wake() const {
+    if (queue_) {
+        queue_->wake();
+    }
+}
 
 domain::Result<void> DownloadService::check_idempotency_key(std::string_view key) {
     const bool printable = std::all_of(key.begin(), key.end(), [](char c) { return c > 0x20 && c < 0x7F; });
@@ -251,6 +257,9 @@ domain::Result<CreateResult> DownloadService::create(const std::string& owner_id
     }
     const bool reused = outcome->reused;
     const bool replayed = outcome->replayed;
+    if (!reused && !replayed) {
+        wake(); // committed: the scheduler may claim it now
+    }
     auto view = view_of(std::move(outcome->task));
     if (!view) {
         return std::move(view).error();
@@ -351,6 +360,9 @@ domain::Result<BatchResult> DownloadService::create_batch(const std::string& own
     if (!outcome) {
         return std::move(outcome).error();
     }
+    if (!outcome->replayed) {
+        wake();
+    }
     return to_result(std::move(outcome).value());
 }
 
@@ -397,6 +409,9 @@ domain::Result<CreateResult> DownloadService::retry(const std::string& owner_id,
                                    std::nullopt});
     if (!outcome) {
         return std::move(outcome).error();
+    }
+    if (!outcome->replayed) {
+        wake();
     }
     auto view = view_of(std::move(outcome->task));
     if (!view) {
@@ -468,6 +483,9 @@ domain::Result<CancelResult> DownloadService::cancel(const std::string& owner_id
         return std::move(after).error();
     }
     const bool asynchronous = after->status == domain::TaskStatus::canceling;
+    if (asynchronous && queue_) {
+        queue_->request_stop(task_id); // committed first; the runner finishes the cancel
+    }
     auto view = view_of(std::move(after).value());
     if (!view) {
         return std::move(view).error();

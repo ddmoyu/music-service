@@ -180,7 +180,7 @@ auto 来源顺序有语义，保留首次出现顺序去重并移除原曲来源
 | `credentials` | id、owner_id、source、label、kind、auth_profile、secret_ref、version、status、scope_summary、expires_at、last_verified_at、last_verify_result、revoked_at；与 CredentialDescriptor 字段对应，秘密由 SecretStore 管理 |
 | `credential_defaults` | owner_id + source 为主键，credential_id 可空、selection_version；清除后保留版本行，不回收默认选择世代 |
 | `destinations` | id、canonical_root；持久保存不可变位置绑定，名称、ACL 与是否接受新任务按启动配置校验应用 |
-| `download_tasks` | id、owner_id、status、version、execution_id、指纹及 schema、normalized_intent、请求／执行快照、租约、next_retry_at、wait_reason、resume_stage、attempt_open；索引 owner/status/created_at/id 与 status/next_retry_at |
+| `download_tasks` | id、owner_id、status、version、execution_id、指纹及 schema、normalized_intent、请求／执行快照、租约、next_retry_at、wait_reason、resume_stage、attempt_open；schema v2 增加 execution（公开执行事实：actual_track、actual_quality、容器、警告）、checkpoint（私有续传证据：已刷写字节、总长、校验器、传输是否完整）与 attempt_used_ms（未关闭尝试的已用运行时间，不含入场暂停）；索引 owner/status/created_at/id 与 status/next_retry_at |
 | `download_batches`、`batch_items` | 批次信息与有序 task_id，支持一批里复用既有任务 |
 | `task_attempts` | task_id、attempt_no、last_execution_id、起止时刻、错误、资源证据；每逻辑尝试一条，入场暂停后的领取更新最后执行世代，不新增尝试或保存敏感 URL |
 | `file_assets` | file_id、owner_id、destination_id、相对路径、属性、ETag、状态、version；destination_id 外键指向不可变位置绑定，路径预留唯一约束 |

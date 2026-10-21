@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <fstream>
 #include <system_error>
+#include <utility>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -351,5 +352,143 @@ domain::Result<void> remove_file(const fs::path& path) {
     }
     return domain::ok();
 }
+
+#ifdef _WIN32
+
+namespace {
+HANDLE as_handle(std::intptr_t value) { return reinterpret_cast<HANDLE>(value); }
+} // namespace
+
+domain::Result<AppendFile> AppendFile::open(const fs::path& path) {
+    const HANDLE file = ::CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+                                      OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return file_error("open file", path, last_error());
+    }
+    LARGE_INTEGER size{};
+    LARGE_INTEGER end{};
+    if (!::GetFileSizeEx(file, &size) || !::SetFilePointerEx(file, LARGE_INTEGER{}, &end, FILE_END)) {
+        const auto ec = last_error();
+        ::CloseHandle(file);
+        return file_error("open file", path, ec);
+    }
+    return AppendFile{reinterpret_cast<std::intptr_t>(file), path, static_cast<std::uint64_t>(size.QuadPart)};
+}
+
+void AppendFile::close() noexcept {
+    if (handle_ != -1) {
+        ::CloseHandle(as_handle(handle_));
+        handle_ = -1;
+    }
+}
+
+domain::Result<void> AppendFile::write(std::string_view bytes) {
+    std::size_t written = 0;
+    while (written < bytes.size()) {
+        const auto chunk = static_cast<DWORD>(std::min<std::size_t>(bytes.size() - written, std::size_t{1} << 20U));
+        DWORD done = 0;
+        if (!::WriteFile(as_handle(handle_), bytes.data() + written, chunk, &done, nullptr) || done == 0) {
+            return file_error("write file", path_, last_error());
+        }
+        written += done;
+        size_ += done;
+    }
+    return domain::ok();
+}
+
+domain::Result<void> AppendFile::flush() {
+    if (!::FlushFileBuffers(as_handle(handle_))) {
+        return file_error("flush file", path_, last_error());
+    }
+    return domain::ok();
+}
+
+domain::Result<void> AppendFile::truncate(std::uint64_t length) {
+    if (length >= size_) {
+        return domain::ok();
+    }
+    LARGE_INTEGER at{};
+    at.QuadPart = static_cast<LONGLONG>(length);
+    if (!::SetFilePointerEx(as_handle(handle_), at, nullptr, FILE_BEGIN) || !::SetEndOfFile(as_handle(handle_))) {
+        return file_error("truncate file", path_, last_error());
+    }
+    size_ = length;
+    return domain::ok();
+}
+
+#else
+
+domain::Result<AppendFile> AppendFile::open(const fs::path& path) {
+    const int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0644);
+    if (fd < 0) {
+        return file_error("open file", path, last_error());
+    }
+    struct stat info {};
+    if (::fstat(fd, &info) != 0 || !S_ISREG(info.st_mode) || ::lseek(fd, 0, SEEK_END) < 0) {
+        const auto ec = S_ISREG(info.st_mode) ? last_error() : std::make_error_code(std::errc::invalid_argument);
+        ::close(fd);
+        return file_error("open file", path, ec);
+    }
+    return AppendFile{fd, path, static_cast<std::uint64_t>(info.st_size)};
+}
+
+void AppendFile::close() noexcept {
+    if (handle_ >= 0) {
+        ::close(static_cast<int>(handle_));
+        handle_ = -1;
+    }
+}
+
+domain::Result<void> AppendFile::write(std::string_view bytes) {
+    std::size_t written = 0;
+    while (written < bytes.size()) {
+        const auto done = ::write(static_cast<int>(handle_), bytes.data() + written, bytes.size() - written);
+        if (done < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return file_error("write file", path_, last_error());
+        }
+        written += static_cast<std::size_t>(done);
+        size_ += static_cast<std::uint64_t>(done);
+    }
+    return domain::ok();
+}
+
+domain::Result<void> AppendFile::flush() {
+    if (::fsync(static_cast<int>(handle_)) != 0) {
+        return file_error("flush file", path_, last_error());
+    }
+    return domain::ok();
+}
+
+domain::Result<void> AppendFile::truncate(std::uint64_t length) {
+    if (length >= size_) {
+        return domain::ok();
+    }
+    if (::ftruncate(static_cast<int>(handle_), static_cast<off_t>(length)) != 0 ||
+        ::lseek(static_cast<int>(handle_), 0, SEEK_END) < 0) {
+        return file_error("truncate file", path_, last_error());
+    }
+    size_ = length;
+    return domain::ok();
+}
+
+#endif
+
+AppendFile::AppendFile(AppendFile&& other) noexcept
+    : handle_(std::exchange(other.handle_, -1)), path_(std::move(other.path_)), size_(other.size_) {}
+
+AppendFile& AppendFile::operator=(AppendFile&& other) noexcept {
+    if (this != &other) {
+        close();
+        handle_ = std::exchange(other.handle_, -1);
+        path_ = std::move(other.path_);
+        size_ = other.size_;
+    }
+    return *this;
+}
+
+AppendFile::~AppendFile() { close(); }
 
 } // namespace music_service::infrastructure::filesystem

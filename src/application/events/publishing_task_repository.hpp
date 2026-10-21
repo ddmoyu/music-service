@@ -10,7 +10,8 @@ namespace music_service::application::events {
 TaskEvent event_of(const ports::TaskRecord& task);
 
 // Publishes every task version a write commits, after the commit returns (feature-
-// modules.md 12): creation, batch items, cancellation, claims and runner transitions.
+// modules.md 12): creation, batch items, cancellation, claims, attempts, checkpoints,
+// deferrals and runner transitions.
 // Replays, reuses and failed writes commit no new version and publish nothing. A
 // publication can only close subscriptions; it never undoes the commit.
 class PublishingTaskRepository final : public ports::TaskRepository {
@@ -28,7 +29,15 @@ public:
     domain::Result<std::vector<ports::TaskRecord>> list(const ports::TaskQuery& query) override;
     domain::Result<domain::NormalizedDownloadIntent> get_intent(const std::string& task_id) override;
     domain::Result<std::optional<ports::TaskRecord>> claim_next(std::chrono::system_clock::time_point now) override;
+    domain::Result<std::vector<ports::RunnableTask>> runnable(std::chrono::system_clock::time_point now,
+                                                             std::uint32_t per_owner, std::uint32_t limit) override;
+    domain::Result<std::optional<ports::TaskRecord>> claim(const std::string& task_id,
+                                                           std::chrono::system_clock::time_point now) override;
+    domain::Result<ports::TaskRecord> begin_attempt(const ports::BeginAttemptCommand& command) override;
+    domain::Result<ports::TaskRecord> defer(const ports::DeferCommand& command) override;
+    domain::Result<ports::TaskRecord> checkpoint(const ports::CheckpointCommand& command) override;
     domain::Result<ports::TaskRecord> transition(const ports::TransitionCommand& command) override;
+    domain::Result<std::vector<ports::TaskRecord>> requeue_interrupted(std::chrono::system_clock::time_point now) override;
     domain::Result<ports::TaskRecord> request_cancel(const std::string& owner_id, const std::string& task_id) override;
 
 private:

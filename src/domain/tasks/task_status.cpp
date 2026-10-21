@@ -87,7 +87,9 @@ bool is_transition_allowed(TaskStatus from, TaskStatus to) noexcept {
     case downloading:
         return to == processing || to == waiting_retry || to == failed || to == canceling;
     case processing:
-        return to == finalizing || to == failed || to == canceling;
+        // waiting_retry: an invalid (e.g. cut-off) download is fetched again, or a
+        // shutdown or crash interrupted processing; the transfer-complete file stays.
+        return to == finalizing || to == waiting_retry || to == failed || to == canceling;
     case finalizing:
         return to == completed || to == failed || to == waiting_retry;
     case waiting_retry:

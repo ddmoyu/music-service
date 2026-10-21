@@ -158,7 +158,8 @@ TEST_CASE("the service serves the control API and stops in order", "[server]") {
         CHECK(info_body["meta"]["request_id"] == "client.req-1");
         CHECK(info_body["data"]["service"] == "music-service");
         CHECK(info_body["data"]["instance_id"] == service.report.instance_id);
-        CHECK(info_body["data"]["features"]["downloads"] == false); // nothing undelivered is declared
+        CHECK(info_body["data"]["features"]["downloads"] == true);    // executed since T17
+        CHECK(info_body["data"]["features"]["file_access"] == false); // nothing undelivered is declared
         CHECK(admin.Get("/api/v1/info", httplib::Headers{{"X-Request-Id", "bad id!"}})->get_header_value("X-Request-Id").rfind("req_", 0) == 0);
 
         // Scopes.
@@ -168,6 +169,7 @@ TEST_CASE("the service serves the control API and stops in order", "[server]") {
         CHECK(forbidden->status == 403);
         CHECK(error_code(forbidden) == "FORBIDDEN");
         CHECK(reader_client.Get("/api/v1/admin/status")->status == 403);
+        CHECK(reader_client.Get("/api/v1/admin/download-policy")->status == 403);
         CHECK(service.client("mst_not-a-token").Get("/api/v1/info")->status == 401);
 
         // Providers: paged, with the caller's credential summary and no probing.
@@ -306,6 +308,21 @@ TEST_CASE("the service serves the control API and stops in order", "[server]") {
         CHECK(status["state"] == "ready");
         CHECK(status["providers"]["registered"] == 2);
         CHECK(status["storage"]["available"] == true);
+        CHECK(status["downloads"]["workers"] == 3);
+        CHECK(status["downloads"]["paused"] == false);
+
+        // Pausing only stops claiming; the policy reads back and resumes.
+        CHECK(body(admin.Get("/api/v1/admin/download-policy"))["data"]["paused"] == false);
+        const auto paused = admin.Patch("/api/v1/admin/download-policy", R"({"paused":true})", "application/json");
+        CHECK(paused->status == 200);
+        CHECK(body(paused)["data"]["paused"] == true);
+        CHECK(body(admin.Get("/api/v1/admin/status"))["data"]["downloads"]["paused"] == true);
+        CHECK(error_code(admin.Patch("/api/v1/admin/download-policy", R"({"paused":"yes"})", "application/json")) ==
+              "VALIDATION_FAILED");
+        CHECK(error_code(admin.Patch("/api/v1/admin/download-policy", R"({"paused":false,"x":1})",
+                                     "application/json")) == "VALIDATION_FAILED");
+        CHECK(body(admin.Patch("/api/v1/admin/download-policy", R"({"paused":false})", "application/json"))["data"]
+                  ["paused"] == false);
 
         CHECK(service.stop().code == server::exit_ok);
     }
@@ -313,10 +330,12 @@ TEST_CASE("the service serves the control API and stops in order", "[server]") {
     // Shutdown order: listeners, services, database, then the lock.
     const auto names = events(*sink);
     const auto listeners = index_of(names, "shutdown.listeners_stopped");
+    const auto downloads = index_of(names, "shutdown.downloads_stopped");
     const auto database = index_of(names, "shutdown.database_closed");
     const auto lock = index_of(names, "shutdown.lock_released");
     CHECK(listeners >= 0);
-    CHECK(listeners < database);
+    CHECK(listeners < downloads); // nothing new is claimed or accepted, then executions stop
+    CHECK(downloads < database);
     CHECK(database < lock);
     for (const auto& record : sink->records()) {
         for (const auto& field : record.fields) {
@@ -414,8 +433,9 @@ TEST_CASE("downloads are accepted, queried, canceled and retried over HTTP", "[s
     Deployment d{"downloads"};
     REQUIRE(d.run({"init"}).code == server::exit_ok);
     const auto token = d.read(d.bootstrap());
+    // Paused: the task commands are checked on queued tasks; runs are covered in runner_test.
     RunningService service{d, std::make_shared<infrastructure::observability::MemorySink>(),
-                           std::vector<ports::ProviderBundle>{mock_combo("both")}};
+                           std::vector<ports::ProviderBundle>{mock_combo("both")}, true};
     auto client = service.client(token);
     const auto key = [](std::string value) { return httplib::Headers{{"Idempotency-Key", std::move(value)}}; };
     const std::string request_body = R"({"track":{"source":"both","id":"1"},"quality":"standard","metadata_policy":"skip"})";

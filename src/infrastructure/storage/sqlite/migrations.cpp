@@ -178,7 +178,17 @@ CREATE TABLE finalization_intents (
 ) STRICT;
 )sql";
 
-constexpr std::array<Migration, 1> migrations{{{1, schema_v1}}};
+// Version 2 (T17): what the runner keeps between executions. execution holds the public
+// facts of the run (actual track and quality), checkpoint the private resume evidence of
+// the work file, attempt_used_ms the running time of the open attempt without its
+// admission pauses.
+constexpr std::string_view schema_v2 = R"sql(
+ALTER TABLE download_tasks ADD COLUMN execution TEXT;
+ALTER TABLE download_tasks ADD COLUMN checkpoint TEXT;
+ALTER TABLE download_tasks ADD COLUMN attempt_used_ms INTEGER NOT NULL DEFAULT 0;
+)sql";
+
+constexpr std::array<Migration, 2> migrations{{{1, schema_v1}, {2, schema_v2}}};
 
 std::string checksum(std::string_view text) {
     std::uint64_t hash = 14695981039346656037ULL;

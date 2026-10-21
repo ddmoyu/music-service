@@ -233,7 +233,7 @@ TEST_CASE("SSE streams committed task versions to their owner only", "[events][s
     const auto other = issue(d, other_principal, "downloads:read,downloads:write", "other.txt");
 
     RunningService service{d, std::make_shared<infrastructure::observability::MemorySink>(),
-                           std::vector<ports::ProviderBundle>{mock_combo("both")}};
+                           std::vector<ports::ProviderBundle>{mock_combo("both")}, true}; // tasks stay queued
     auto api = service.client(owner);
     const auto info = body(api.Get("/api/v1/info"))["data"];
     CHECK(info["features"]["progress_sse"] == true);
@@ -323,7 +323,7 @@ TEST_CASE("SSE requests are checked before the stream and limits keep control us
     const auto owner = d.read(d.bootstrap());
     const auto catalog_only = issue(d, "prn_local", "catalog:read", "catalog.txt");
     RunningService service{d, std::make_shared<infrastructure::observability::MemorySink>(),
-                           std::vector<ports::ProviderBundle>{mock_combo("both")}};
+                           std::vector<ports::ProviderBundle>{mock_combo("both")}, true}; // tasks stay queued
     const auto port = events_port(service);
     httplib::Client raw("127.0.0.1", port);
     raw.set_read_timeout(5s);
@@ -398,7 +398,7 @@ TEST_CASE("SSE ends on revocation and stop, and clients resync over HTTP", "[eve
     std::string first_instance;
     {
         RunningService service{d, std::make_shared<infrastructure::observability::MemorySink>(),
-                               std::vector<ports::ProviderBundle>{mock_combo("both")}};
+                               std::vector<ports::ProviderBundle>{mock_combo("both")}, true}; // tasks stay queued
         first_instance = service.report.instance_id;
         const auto port = events_port(service);
         auto api = service.client(owner);
@@ -437,7 +437,7 @@ TEST_CASE("SSE ends on revocation and stop, and clients resync over HTTP", "[eve
 
     // After a restart the instance id changes and the committed state is there to sync.
     RunningService restarted{d, std::make_shared<infrastructure::observability::MemorySink>(),
-                             std::vector<ports::ProviderBundle>{mock_combo("both")}};
+                             std::vector<ports::ProviderBundle>{mock_combo("both")}, true}; // tasks stay queued
     SseClient fresh{events_port(restarted), owner};
     const auto ready = fresh.next_event();
     REQUIRE(ready);
@@ -455,7 +455,7 @@ TEST_CASE("SSE connections end at their maximum lifetime", "[events][server]") {
     REQUIRE(d.run({"init"}).code == server::exit_ok);
     const auto owner = d.read(d.bootstrap());
     RunningService service{d, std::make_shared<infrastructure::observability::MemorySink>(),
-                           std::vector<ports::ProviderBundle>{mock_combo("both")}};
+                           std::vector<ports::ProviderBundle>{mock_combo("both")}, true}; // tasks stay queued
     SseClient stream{events_port(service), owner};
     REQUIRE(stream.status() == 200);
     REQUIRE(stream.next_event());
@@ -472,7 +472,7 @@ TEST_CASE("without SSE every download operation works over HTTP", "[events][serv
     REQUIRE(d.run({"init"}).code == server::exit_ok);
     const auto owner = d.read(d.bootstrap());
     RunningService service{d, std::make_shared<infrastructure::observability::MemorySink>(),
-                           std::vector<ports::ProviderBundle>{mock_combo("both")}};
+                           std::vector<ports::ProviderBundle>{mock_combo("both")}, true}; // tasks stay queued
     CHECK_FALSE(service.report.events_base_url);
     auto api = service.client(owner);
     const auto info = body(api.Get("/api/v1/info"))["data"];

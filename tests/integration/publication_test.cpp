@@ -485,7 +485,7 @@ TEST_CASE("a restarted service completes an interrupted publication", "[publicat
     std::string task_id;
     {
         RunningService service{d, std::make_shared<infrastructure::observability::MemorySink>(),
-                               std::vector<ports::ProviderBundle>{mock_combo("both")}};
+                               std::vector<ports::ProviderBundle>{mock_combo("both")}, true};
         auto api = service.client(token);
         const auto created = api.Post("/api/v1/downloads", {{"Idempotency-Key", "publication-restart-1"}},
                                       R"({"track":{"source":"both","id":"1"},"metadata_policy":"skip"})",

@@ -82,12 +82,14 @@ add_executable(music_service_integration_tests
     integration/downloads_test.cpp
     integration/events_test.cpp
     integration/publication_test.cpp
+    integration/runner_test.cpp
     integration/server_test.cpp
     integration/storage_test.cpp
     integration/transport_test.cpp
 )
 target_link_libraries(music_service_integration_tests PRIVATE
     music_service::application
+    music_service::audio_processing
     music_service::downloads
     music_service::infrastructure
     music_service::providers

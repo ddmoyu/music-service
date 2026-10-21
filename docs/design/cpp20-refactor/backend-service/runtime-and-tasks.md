@@ -108,6 +108,7 @@ queued → resolving → probing → downloading → processing → finalizing �
    └→ canceled
 
 resolving / probing / downloading / processing → canceling → canceled
+processing → waiting_retry（可重试的验证失败重下，或停机／重启中断后从传输完成的文件重新处理）
 waiting_retry → canceled
 queued / waiting_retry → failed（领取前发现预算耗尽或能力已移除）
 ```

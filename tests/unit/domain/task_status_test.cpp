@@ -38,13 +38,13 @@ TEST_CASE("the happy path is allowed in order", "[domain][tasks]") {
     CHECK(is_transition_allowed(resolving, downloading)); // probing may be skipped
     CHECK(is_transition_allowed(downloading, processing));
     CHECK(is_transition_allowed(processing, finalizing));
+    CHECK(is_transition_allowed(processing, waiting_retry)); // fetched again or interrupted
     CHECK(is_transition_allowed(finalizing, completed));
 }
 
 TEST_CASE("illegal transitions are rejected", "[domain][tasks]") {
     CHECK_FALSE(is_transition_allowed(queued, completed));
     CHECK_FALSE(is_transition_allowed(downloading, completed)); // must publish first
-    CHECK_FALSE(is_transition_allowed(processing, waiting_retry));
     CHECK_FALSE(is_transition_allowed(finalizing, canceling)); // finalizing wins the race
     CHECK_FALSE(is_transition_allowed(canceling, failed));
     CHECK_FALSE(is_transition_allowed(waiting_retry, canceling)); // cancels immediately instead

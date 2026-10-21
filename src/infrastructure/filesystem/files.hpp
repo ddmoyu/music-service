@@ -2,6 +2,7 @@
 
 #include "domain/result.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -38,5 +39,34 @@ domain::Result<void> rename_no_replace(const std::filesystem::path& from,
 
 // Removes a file; a missing file is not an error.
 domain::Result<void> remove_file(const std::filesystem::path& path);
+
+// A file written at its end and flushed on request (download work files). Opening creates
+// it when missing and never replaces another file system object. Move-only.
+class AppendFile {
+public:
+    static domain::Result<AppendFile> open(const std::filesystem::path& path);
+
+    AppendFile(AppendFile&& other) noexcept;
+    AppendFile& operator=(AppendFile&& other) noexcept;
+    AppendFile(const AppendFile&) = delete;
+    AppendFile& operator=(const AppendFile&) = delete;
+    ~AppendFile();
+
+    domain::Result<void> write(std::string_view bytes);
+    // Data and size reach the device before it returns (FlushFileBuffers / fsync).
+    domain::Result<void> flush();
+    // Shortens the file; a length beyond the end is ignored.
+    domain::Result<void> truncate(std::uint64_t length);
+    [[nodiscard]] std::uint64_t size() const noexcept { return size_; }
+
+private:
+    AppendFile(std::intptr_t handle, std::filesystem::path path, std::uint64_t size)
+        : handle_(handle), path_(std::move(path)), size_(size) {}
+    void close() noexcept;
+
+    std::intptr_t handle_{-1}; // HANDLE on Windows, file descriptor elsewhere
+    std::filesystem::path path_;
+    std::uint64_t size_{0};
+};
 
 } // namespace music_service::infrastructure::filesystem

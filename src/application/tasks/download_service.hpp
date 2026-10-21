@@ -2,6 +2,7 @@
 
 #include "application/accounts/credential_service.hpp"
 #include "application/ports/providers/directory.hpp"
+#include "application/ports/runtime/download_queue.hpp"
 #include "application/ports/storage/task_repository.hpp"
 #include "domain/result.hpp"
 #include "domain/tasks/download_intent.hpp"
@@ -91,7 +92,8 @@ struct BatchCancelResult {
 // write transaction: idempotent replays are answered first, then the account binding
 // is fixed, the destination checked and defaults filled; the repository re-checks
 // idempotency, active duplicates, quotas and any completed result in one transaction.
-// Matching and automatic fallback are not available yet (CAPABILITY_UNSUPPORTED).
+// Matching and automatic fallback are not available yet (CAPABILITY_UNSUPPORTED). After a
+// commit the download queue is woken, and a cancel of a running task signals its runner.
 class DownloadService {
 public:
     static constexpr std::string_view create_route = "/api/v1/downloads";
@@ -102,7 +104,7 @@ public:
                     std::shared_ptr<accounts::CredentialService> credentials, std::vector<DestinationRule> destinations,
                     std::function<bool(const DestinationRule&)> destination_available,
                     std::function<bool(const std::string& destination_id, const std::string& relative_path)> file_exists,
-                    std::uint32_t max_batch_items);
+                    std::uint32_t max_batch_items, std::shared_ptr<ports::DownloadQueue> queue = {});
 
     // Idempotency-Key: 16 to 128 printable ASCII characters without spaces.
     static domain::Result<void> check_idempotency_key(std::string_view key);
@@ -133,6 +135,7 @@ private:
     domain::Result<domain::NormalizedDownloadIntent> prepare(const std::string& owner_id, const DownloadRequest& request);
     std::optional<ports::ReuseCandidate> reusable(const domain::NormalizedDownloadIntent& intent);
     domain::Result<TaskView> view_of(ports::TaskRecord task);
+    void wake() const;
 
     std::shared_ptr<ports::TaskRepository> tasks_;
     std::shared_ptr<const ports::ProviderDirectory> providers_;
@@ -141,6 +144,7 @@ private:
     std::function<bool(const DestinationRule&)> destination_available_;
     std::function<bool(const std::string&, const std::string&)> file_exists_;
     std::uint32_t max_batch_items_;
+    std::shared_ptr<ports::DownloadQueue> queue_; // empty: tasks only queue
 };
 
 } // namespace music_service::application::tasks

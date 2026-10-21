@@ -57,6 +57,18 @@ struct AdminStatus {
     std::uint32_t control_workers{0};
     std::uint32_t upstream_connections_in_use{0};
     std::size_t upstream_cooldowns{0};
+    std::uint32_t download_workers{0};
+    std::uint32_t downloads_running{0};
+    bool downloads_paused{false};
+    std::uint64_t downloads_claimed{0}; // since start
+};
+
+// admin/download-policy: whether the scheduler claims new tasks.
+class DownloadPolicy {
+public:
+    virtual ~DownloadPolicy() = default;
+    [[nodiscard]] virtual bool paused() const = 0;
+    virtual void set_paused(bool paused) = 0;
 };
 
 struct ControlApiOptions {
@@ -85,13 +97,15 @@ struct ControlApiServices {
     std::function<void(const std::string& request_id, const std::string& method, const std::string& path,
                        int status, std::chrono::milliseconds elapsed)>
         on_request;
+    // Empty when downloads are not executed: the policy routes are not mounted.
+    std::shared_ptr<DownloadPolicy> download_policy{};
 };
 
 // The control HTTP entry (/health, /api/v1) on cpp-httplib: Bearer authentication with
 // scopes, the JSON envelope, request ids, CORS, body and content-type limits, and the
 // system, provider, destination, credential, default-selection, search, track
-// detail, link parsing, asset resolve/probe, download task and batch, and
-// admin/status routes. Routes of later
+// detail, link parsing, asset resolve/probe, download task and batch, admin/status and
+// admin/download-policy routes. Routes of later
 // tasks are not mounted, so they answer 404 instead of a fake success. Owns its listener and worker pool; no GUI or desktop dependency.
 class ControlApi {
 public:

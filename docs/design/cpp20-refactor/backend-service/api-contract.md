@@ -505,7 +505,7 @@ kind 支持 cookie、oauth2、api_key，只有平台声明并已实现的 kind�
 
 | 方法与路径 | 权限 | 内容 |
 | --- | --- | --- |
-| `GET /api/v1/admin/status` | admin | 工作池占用、排队、任务统计、存储与启动状态；无秘密 |
+| `GET /api/v1/admin/status` | admin | 工作池占用、排队、任务统计、存储与启动状态；downloads 给出 workers、running、paused 与启动以来的 claimed；无秘密 |
 | `GET /api/v1/admin/download-policy` | admin | 当前是否暂停启动新任务 |
 | `PATCH /api/v1/admin/download-policy` | admin | body `{paused: true/false}`，200 返回新策略 |
 

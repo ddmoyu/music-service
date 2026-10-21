@@ -104,7 +104,8 @@ struct Deployment {
 // Runs "serve" on a thread until stop().
 struct RunningService {
     RunningService(Deployment& deployment, std::shared_ptr<infrastructure::observability::MemorySink> sink,
-                   std::optional<std::vector<ports::ProviderBundle>> bundles = std::nullopt)
+                   std::optional<std::vector<ports::ProviderBundle>> bundles = std::nullopt,
+                   bool downloads_paused = false)
         : deployment_(deployment) {
         std::promise<server::StartupReport> ready;
         auto started = ready.get_future();
@@ -113,6 +114,7 @@ struct RunningService {
         hooks.on_ready = [&ready](const server::StartupReport& started_report) { ready.set_value(started_report); };
         hooks.host.log_sink = std::move(sink);
         hooks.host.bundles = std::move(bundles);
+        hooks.host.downloads_paused = downloads_paused;
         thread_ = std::thread([this, hooks = std::move(hooks)]() mutable {
             result_ = deployment_.run({"serve"}, std::move(hooks));
         });

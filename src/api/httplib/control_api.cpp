@@ -356,6 +356,30 @@ json parsed_or_null(const std::optional<std::string>& text) {
     return parsed.is_discarded() ? json(nullptr) : parsed;
 }
 
+// The public facts a runner recorded: actual track, quality and warnings (codes).
+json execution_field(const ports::TaskRecord& task, const char* key) {
+    const auto execution = parsed_or_null(task.execution_json);
+    return execution.is_object() && execution.contains(key) ? execution[key] : json(nullptr);
+}
+
+json task_warnings(const ports::TaskRecord& task) {
+    json out = json::array();
+    const auto codes = execution_field(task, "warnings");
+    if (codes.is_array()) {
+        for (const auto& code : codes) {
+            const auto text = code.is_string() ? code.get<std::string>() : std::string{};
+            for (const auto warning :
+                 {domain::ResourceWarning::full_length_unverified, domain::ResourceWarning::quality_unverified,
+                  domain::ResourceWarning::quality_lowered, domain::ResourceWarning::preview_resource}) {
+                if (text == domain::to_string(warning)) {
+                    out.push_back(warnings_json({warning})[0]);
+                }
+            }
+        }
+    }
+    return out;
+}
+
 json task_json(const application::tasks::TaskView& view) {
     const auto& t = view.task;
     const auto& intent = view.intent;
@@ -365,11 +389,11 @@ json task_json(const application::tasks::TaskView& view) {
                 {"status", domain::to_string(t.status)},
                 {"stage", nullptr},
                 {"original_track", ref_json(intent.original_track())},
-                {"actual_track", nullptr},
+                {"actual_track", execution_field(t, "actual_track")},
                 {"requested_quality", domain::to_string(requirement.requested)},
                 {"quality_policy", domain::to_string(requirement.policy)},
                 {"allow_preview", requirement.allow_preview},
-                {"actual_quality", nullptr},
+                {"actual_quality", execution_field(t, "actual_quality")},
                 {"fallback", {{"mode", "disabled"}, {"sources", json::array()}}},
                 {"metadata_policy", domain::to_string(intent.metadata_policy())},
                 {"attempt", t.attempt},
@@ -384,7 +408,7 @@ json task_json(const application::tasks::TaskView& view) {
                 {"retry_of", optional_string(t.retry_of)},
                 {"result", parsed_or_null(t.result_json)},
                 {"error", parsed_or_null(t.error_json)},
-                {"warnings", json::array()},
+                {"warnings", task_warnings(t)},
                 {"links", {{"self", "/api/v1/downloads/" + t.task_id}}}};
 }
 
@@ -844,6 +868,12 @@ struct ControlApi::Impl {
 
         server.Get("/api/v1/admin/status",
                    guard(Access::scoped, accounts::scope::admin, [this](Call& call) { admin_status(call); }));
+        if (services.download_policy) {
+            server.Get("/api/v1/admin/download-policy",
+                       guard(Access::scoped, accounts::scope::admin, [this](Call& call) { get_download_policy(call); }));
+            server.Patch("/api/v1/admin/download-policy", guard(Access::scoped, accounts::scope::admin,
+                                                                [this](Call& call) { set_download_policy(call); }));
+        }
     }
 
     // ------------------------------------------------------------ system
@@ -964,7 +994,37 @@ struct ControlApi::Impl {
                  {"providers", {{"registered", s.providers_registered}}},
                  {"destinations", {{"configured", s.destinations}}},
                  {"control", {{"workers", s.control_workers}}},
-                 {"upstream", {{"connections_in_use", s.upstream_connections_in_use}, {"cooldowns", s.upstream_cooldowns}}}});
+                 {"upstream", {{"connections_in_use", s.upstream_connections_in_use}, {"cooldowns", s.upstream_cooldowns}}},
+                 {"downloads",
+                  {{"workers", s.download_workers},
+                   {"running", s.downloads_running},
+                   {"paused", s.downloads_paused},
+                   {"claimed", s.downloads_claimed}}}});
+    }
+
+    void get_download_policy(Call& call) {
+        if (!only_params(call, {})) {
+            return;
+        }
+        call.ok({{"paused", services.download_policy->paused()}});
+    }
+
+    // paused only stops claiming; running downloads go on, canceling stays a task command.
+    void set_download_policy(Call& call) {
+        if (!only_params(call, {})) {
+            return;
+        }
+        auto body = body_object(call, {"paused"});
+        if (!body) {
+            return;
+        }
+        const auto paused = body->find("paused");
+        if (paused == body->end() || !paused->is_boolean()) {
+            call.fail(bad_request("paused", "must be true or false"));
+            return;
+        }
+        services.download_policy->set_paused(paused->get<bool>());
+        call.ok({{"paused", services.download_policy->paused()}});
     }
 
     // ----------------------------------------------------------- catalog

@@ -5,10 +5,14 @@
 #include "application/accounts/identity_admin.hpp"
 #include "application/catalog/asset_service.hpp"
 #include "application/catalog/catalog_service.hpp"
+#include "application/events/publishing_publication_repository.hpp"
 #include "application/events/publishing_task_repository.hpp"
 #include "application/events/task_event_hub.hpp"
 #include "application/tasks/download_service.hpp"
+#include "audio_processing/verifying_processor.hpp"
 #include "downloads/recovery.hpp"
+#include "downloads/runner.hpp"
+#include "downloads/scheduler.hpp"
 #include "application/transport/upstream_client.hpp"
 #include "event_server/httplib/event_server.hpp"
 #include "infrastructure/auth/access_tokens.hpp"
@@ -62,6 +66,18 @@ runtime::AdmissionLimits admission_limits(const cfg::ServiceConfig& config) {
     return limits;
 }
 
+// admin/download-policy on the scheduler.
+class SchedulerPolicy final : public api::DownloadPolicy {
+public:
+    explicit SchedulerPolicy(std::shared_ptr<downloads::DownloadScheduler> scheduler)
+        : scheduler_(std::move(scheduler)) {}
+    [[nodiscard]] bool paused() const override { return scheduler_->paused(); }
+    void set_paused(bool paused) override { scheduler_->set_paused(paused); }
+
+private:
+    std::shared_ptr<downloads::DownloadScheduler> scheduler_;
+};
+
 } // namespace
 
 struct ProcessHost::State {
@@ -84,12 +100,16 @@ struct ProcessHost::State {
     std::shared_ptr<application::catalog::AssetService> assets;
     std::shared_ptr<application::events::TaskEventHub> events_hub;
     std::shared_ptr<application::tasks::DownloadService> downloads;
+    std::shared_ptr<runtime::BoundedExecutor> processing_executor;
+    std::shared_ptr<runtime::BoundedExecutor> download_executor;
+    std::shared_ptr<downloads::DownloadScheduler> scheduler;
     std::unique_ptr<event_server::EventServer> events;
     std::unique_ptr<api::ControlApi> control;
 
     StartupReport report;
     std::chrono::system_clock::time_point started_at;
     std::uint32_t control_workers{0};
+    std::chrono::seconds soft_shutdown{15};
     std::atomic<bool> ready{false};
     std::atomic<bool> stopping{false};
     std::once_flag stopped;
@@ -110,6 +130,13 @@ struct ProcessHost::State {
             const auto usage = admission->usage();
             s.upstream_connections_in_use = usage.total;
             s.upstream_cooldowns = usage.cooldowns.size();
+        }
+        if (scheduler) {
+            const auto d = scheduler->stats();
+            s.download_workers = d.workers;
+            s.downloads_running = d.running;
+            s.downloads_paused = d.paused;
+            s.downloads_claimed = d.claimed;
         }
         return s;
     }
@@ -133,6 +160,9 @@ struct ProcessHost::State {
             stopping = true;
             ready = false;
             log.info("shutdown.started");
+            if (scheduler) {
+                scheduler->stop_claiming(); // no new executions from here on
+            }
             if (events) {
                 events->stop(); // every stream ends; clients resynchronize after restart
                 events.reset();
@@ -142,6 +172,23 @@ struct ProcessHost::State {
                 control.reset();
             }
             log.info("shutdown.listeners_stopped");
+            if (scheduler) {
+                // Running downloads may finish within the soft budget; the others save their
+                // checkpoint and wait to be claimed again after the restart (service_shutdown).
+                if (!scheduler->wait_idle(soft_shutdown)) {
+                    log.info("shutdown.downloads_paused",
+                             {{"running", static_cast<std::uint64_t>(scheduler->stats().running)}});
+                    scheduler->stop_running();
+                }
+                download_executor->stop_accepting();
+                download_executor->request_stop();
+                download_executor->join();
+                processing_executor->stop_accepting();
+                processing_executor->request_stop();
+                processing_executor->join();
+                scheduler->join();
+                log.info("shutdown.downloads_stopped");
+            }
             if (catalog_executor) {
                 // Platform calls still running finish or see the stop signal before the
                 // services they use are released.
@@ -150,6 +197,9 @@ struct ProcessHost::State {
                 catalog_executor->join();
             }
             downloads.reset();
+            scheduler.reset();
+            download_executor.reset();
+            processing_executor.reset();
             events_hub.reset();
             assets.reset();
             catalog.reset();
@@ -287,6 +337,18 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
                          {"canceled", static_cast<std::uint64_t>(recovered->count(downloads::RecoveryAction::canceled))}});
     }
 
+    // Executions the last process left in a running stage are due again at once, at the
+    // stage their evidence allows; attempts and deadlines are kept.
+    auto requeued = inst.tasks->requeue_interrupted(clock->now());
+    if (!requeued) {
+        return fail(std::move(requeued).error(), "recovery");
+    }
+    for (const auto& task : requeued.value()) {
+        const auto resume = task.resume_stage.value_or(domain::TaskStatus::resolving);
+        state->log.info("startup.task_requeued",
+                        {{"task_id", task.task_id}, {"resume_stage", std::string{domain::to_string(resume)}}});
+    }
+
     state->admission = std::make_shared<runtime::AdmissionLedger>(admission_limits(config), clock);
     infrastructure::transport::HttplibTransportOptions transport_options;
     transport_options.connect_timeout = config.upstream.connect_timeout;
@@ -329,11 +391,58 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
 
     // With SSE enabled, every committed task version is published to the owner's streams.
     std::shared_ptr<application::ports::TaskRepository> tasks = inst.tasks;
+    std::shared_ptr<application::ports::PublicationRepository> publications = inst.publications;
     if (config.events.enabled) {
         state->events_hub =
             std::make_shared<application::events::TaskEventHub>(config.event_limits, event_server::encode_task_event);
         tasks = std::make_shared<application::events::PublishingTaskRepository>(inst.tasks, state->events_hub);
+        publications =
+            std::make_shared<application::events::PublishingPublicationRepository>(inst.publications, state->events_hub);
     }
+
+    // Download execution (T17): runners in downloads.workers slots, processing in its own pool.
+    state->processing_executor = std::make_shared<runtime::BoundedExecutor>(
+        "processing", std::max<std::uint32_t>(1, config.processing.workers), config.processing.queue);
+    const auto download_slots = std::max<std::uint32_t>(1, config.downloads.workers);
+    state->download_executor = std::make_shared<runtime::BoundedExecutor>("downloads", download_slots, download_slots);
+    auto processors =
+        std::make_shared<audio_processing::ProcessorCatalog>(audio_processing::ProcessorCatalog::builtin());
+    downloads::RunnerOptions runner_options;
+    runner_options.max_attempts = config.downloads.max_attempts;
+    runner_options.transport_retries = config.downloads.transport_retries;
+    runner_options.max_file_bytes = config.downloads.max_file_bytes;
+    runner_options.initial_backoff = config.retry.initial_backoff;
+    runner_options.backoff_multiplier = config.retry.multiplier;
+    runner_options.attempt_budget = config.download_timeouts.attempt;
+    runner_options.absolute_budget = config.download_timeouts.absolute;
+    runner_options.progress_interval = config.event_stream.progress_interval;
+    downloads::RunnerServices runner_services;
+    runner_services.tasks = tasks;
+    runner_services.providers = state->registry;
+    runner_services.credentials = state->credentials;
+    runner_services.upstream = state->upstream;
+    runner_services.work_files = state->files;
+    runner_services.files = state->files;
+    runner_services.finalizer = std::make_shared<downloads::Finalizer>(publications, state->files);
+    runner_services.processors = [processors](const application::ports::ProcessingPlan& plan) {
+        return processors->find(plan);
+    };
+    runner_services.processing = state->processing_executor;
+    runner_services.clock = clock;
+    runner_services.file_name = [](std::string_view text) {
+        return infrastructure::filesystem::sanitize_file_name(text);
+    };
+    auto runner = std::make_shared<downloads::DownloadRunner>(runner_options, std::move(runner_services));
+    State* host = state.get();
+    state->scheduler = std::make_shared<downloads::DownloadScheduler>(
+        downloads::SchedulerOptions{download_slots}, tasks, state->admission, runner, state->download_executor, clock,
+        [host](const application::ports::TaskRecord& claimed, const downloads::RunReport& report) {
+            host->log.info("download.run", {{"task_id", claimed.task_id},
+                                            {"outcome", std::string{downloads::to_string(report.outcome)}},
+                                            {"detail", report.detail}});
+        });
+    state->scheduler->set_paused(options.downloads_paused);
+    state->soft_shutdown = config.shutdown.soft;
     std::vector<application::tasks::DestinationRule> rules;
     for (const auto& d : state->destinations) {
         rules.push_back({d.config.id, infrastructure::filesystem::path_to_utf8(d.root), d.config.principals,
@@ -356,7 +465,7 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
             }
             return false;
         },
-        config.download_limits.max_batch_items);
+        config.download_limits.max_batch_items, state->scheduler);
 
     if (config.events.enabled) {
         state->events = std::make_unique<event_server::EventServer>(
@@ -383,9 +492,10 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
                                        config.download_limits, config.media_limits, {}};
     api_options.info.version = std::string{service_version};
     api_options.info.instance_id = state->report.instance_id;
-    // Search (T13), task queries (T14) and SSE (T18) are served; downloads, files and media
-    // are declared once delivered.
+    // Search (T13), task queries (T14), SSE (T18) and download execution (T17) are served;
+    // files and media are declared once delivered.
     api_options.info.features.search = true;
+    api_options.info.features.downloads = true;
     api_options.info.features.progress_polling = true;
     api_options.info.features.progress_sse = state->events != nullptr;
     api_options.info.events_base_url = state->report.events_base_url;
@@ -408,7 +518,8 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
                                            {"path", path},
                                            {"status", status},
                                            {"elapsed_ms", static_cast<std::int64_t>(elapsed.count())}});
-        }};
+        },
+        std::make_shared<SchedulerPolicy>(state->scheduler)};
     state->control = std::make_unique<api::ControlApi>(std::move(api_options), std::move(services));
     state->control_workers = config.control.workers;
     auto port = state->control->bind();
@@ -419,6 +530,8 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
     state->report.api_base_url = base_url(config.control, port.value(), config.public_urls.api_base);
 
     state->ready = true;
+    // Ready first, then the queue (configuration-and-deployment.md, 启动与退出).
+    state->scheduler->start();
     state->log.info("startup.ready", {{"instance_id", state->report.instance_id},
                                       {"api_base_url", state->report.api_base_url},
                                       {"events_base_url", state->report.events_base_url.value_or("")}});

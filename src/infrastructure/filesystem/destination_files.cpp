@@ -185,4 +185,53 @@ domain::Result<void> LocalDestinationFiles::remove_workspace(const std::string& 
     return domain::ok();
 }
 
+namespace {
+
+class LocalWorkFile final : public ports::WorkFile {
+public:
+    explicit LocalWorkFile(AppendFile file) : file_(std::move(file)) {}
+
+    domain::Result<void> write(std::span<const char> bytes) override {
+        return file_.write(std::string_view{bytes.data(), bytes.size()});
+    }
+    domain::Result<void> flush() override { return file_.flush(); }
+    domain::Result<void> truncate(std::uint64_t length) override { return file_.truncate(length); }
+    [[nodiscard]] std::uint64_t size() const noexcept override { return file_.size(); }
+
+private:
+    AppendFile file_;
+};
+
+} // namespace
+
+std::string LocalDestinationFiles::relative_path(const std::string& task_id, const std::string& name) const {
+    return std::string{workspace_directory_name} + "/" + task_id + "/" + name;
+}
+
+domain::Result<std::unique_ptr<ports::WorkFile>> LocalDestinationFiles::open(const std::string& destination_id,
+                                                                             const std::string& task_id,
+                                                                             const std::string& name,
+                                                                             std::uint64_t keep_bytes) {
+    auto path = resolve(destination_id, relative_path(task_id, name));
+    if (!path) {
+        return std::move(path).error();
+    }
+    if (auto made = create_directories(path->parent_path(), Privacy::normal); !made) {
+        return made.error();
+    }
+    auto file = AppendFile::open(path.value());
+    if (!file) {
+        return std::move(file).error();
+    }
+    if (auto cut = file->truncate(keep_bytes); !cut) {
+        return cut.error();
+    }
+    return std::unique_ptr<ports::WorkFile>{std::make_unique<LocalWorkFile>(std::move(file).value())};
+}
+
+domain::Result<fs::path> LocalDestinationFiles::local_path(const std::string& destination_id,
+                                                           const std::string& relative_path) {
+    return resolve(destination_id, relative_path);
+}
+
 } // namespace music_service::infrastructure::filesystem

@@ -199,6 +199,20 @@ public:
         }
         return std::optional<ports::TaskRecord>{next_task.value()};
     }
+    domain::Result<std::vector<ports::RunnableTask>> runnable(std::chrono::system_clock::time_point, std::uint32_t,
+                                                             std::uint32_t) override {
+        return std::vector<ports::RunnableTask>{};
+    }
+    domain::Result<std::optional<ports::TaskRecord>> claim(const std::string&,
+                                                           std::chrono::system_clock::time_point) override {
+        return claim_next({});
+    }
+    domain::Result<ports::TaskRecord> begin_attempt(const ports::BeginAttemptCommand&) override { return next_task; }
+    domain::Result<ports::TaskRecord> defer(const ports::DeferCommand&) override { return next_task; }
+    domain::Result<ports::TaskRecord> checkpoint(const ports::CheckpointCommand&) override { return next_task; }
+    domain::Result<std::vector<ports::TaskRecord>> requeue_interrupted(std::chrono::system_clock::time_point) override {
+        return std::vector<ports::TaskRecord>{};
+    }
     domain::Result<ports::TaskRecord> transition(const ports::TransitionCommand&) override { return next_task; }
     domain::Result<ports::TaskRecord> request_cancel(const std::string&, const std::string&) override {
         return next_task;

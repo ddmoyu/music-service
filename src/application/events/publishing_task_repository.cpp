@@ -74,6 +74,51 @@ PublishingTaskRepository::claim_next(std::chrono::system_clock::time_point now) 
     return claimed;
 }
 
+domain::Result<std::vector<ports::RunnableTask>>
+PublishingTaskRepository::runnable(std::chrono::system_clock::time_point now, std::uint32_t per_owner,
+                                   std::uint32_t limit) {
+    return inner_->runnable(now, per_owner, limit);
+}
+
+domain::Result<std::optional<ports::TaskRecord>>
+PublishingTaskRepository::claim(const std::string& task_id, std::chrono::system_clock::time_point now) {
+    auto claimed = inner_->claim(task_id, now);
+    if (claimed && *claimed) {
+        hub_->publish(event_of(**claimed));
+    }
+    return claimed;
+}
+
+domain::Result<ports::TaskRecord> PublishingTaskRepository::begin_attempt(const ports::BeginAttemptCommand& command) {
+    auto task = inner_->begin_attempt(command);
+    if (task && task->version != command.expected_version) {
+        hub_->publish(event_of(*task)); // an open attempt that only got a new execution commits nothing
+    }
+    return task;
+}
+
+domain::Result<ports::TaskRecord> PublishingTaskRepository::defer(const ports::DeferCommand& command) {
+    auto task = inner_->defer(command);
+    if (task) {
+        hub_->publish(event_of(*task));
+    }
+    return task;
+}
+
+domain::Result<ports::TaskRecord> PublishingTaskRepository::checkpoint(const ports::CheckpointCommand& command) {
+    auto task = inner_->checkpoint(command);
+    if (task) {
+        hub_->publish(event_of(*task));
+    }
+    return task;
+}
+
+domain::Result<std::vector<ports::TaskRecord>>
+PublishingTaskRepository::requeue_interrupted(std::chrono::system_clock::time_point now) {
+    // Startup only: nobody is subscribed yet.
+    return inner_->requeue_interrupted(now);
+}
+
 domain::Result<ports::TaskRecord> PublishingTaskRepository::transition(const ports::TransitionCommand& command) {
     auto task = inner_->transition(command);
     if (task) {

@@ -23,7 +23,10 @@ constexpr std::string_view create_route = "/api/v1/downloads";
 constexpr std::string_view task_columns =
     "id, owner_id, status, version, execution_id, attempt, wait_reason, next_retry_at, "
     "resume_stage, destination_id, fingerprint_schema, fingerprint_digest, fingerprint, "
-    "created_at, updated_at, retry_of, started_at, finished_at, cancel_requested_at, progress, result, error";
+    "created_at, updated_at, retry_of, started_at, finished_at, cancel_requested_at, progress, result, error, "
+    "execution, checkpoint, attempt_open, deadline_at, attempt_used_ms";
+
+constexpr std::string_view running_list = "('resolving', 'probing', 'downloading', 'processing')";
 
 constexpr std::string_view terminal_list = "('completed', 'failed', 'canceled')";
 
@@ -66,6 +69,11 @@ ports::TaskRecord read_task(const Statement& s) {
     record.progress_json = s.optional_text(19);
     record.result_json = s.optional_text(20);
     record.error_json = s.optional_text(21);
+    record.execution_json = s.optional_text(22);
+    record.checkpoint_json = s.optional_text(23);
+    record.attempt_open = s.integer(24) != 0;
+    record.deadline_at = from_millis(s.optional_integer(25));
+    record.attempt_used = std::chrono::milliseconds{s.integer(26)};
     return record;
 }
 
@@ -122,20 +130,51 @@ struct Update {
     bool cancel_requested{false};
     std::optional<std::string> result_json;
     std::optional<std::string> error_json;
+    std::optional<std::string> progress_json;
+    std::optional<std::string> execution_json;
+    std::optional<std::string> checkpoint_json;
+    bool clear_checkpoint{false};
+    std::optional<bool> attempt_open;
+    std::optional<std::int64_t> attempt_used_ms;
+    std::optional<std::string> attempt_error; // recorded when the attempt closes
 };
+
+// Ends the task's current attempt record, if any is still running.
+domain::Result<void> close_attempt(Connection& db, const std::string& id, const std::optional<std::string>& error,
+                                   std::int64_t now) {
+    auto s = db.prepare("UPDATE task_attempts SET finished_at = ?, error = COALESCE(?, error)"
+                        " WHERE task_id = ? AND finished_at IS NULL"
+                        " AND attempt_no = (SELECT attempt FROM download_tasks WHERE id = ?)");
+    if (!s) {
+        return std::move(s).error();
+    }
+    s->bind(1, now).bind(2, error).bind(3, id).bind(4, id);
+    return s->run();
+}
 
 domain::Result<ports::TaskRecord> apply(Connection& db, const std::string& id, const Update& u,
                                         std::int64_t now) {
+    const auto terminal = domain::is_terminal(u.to);
+    // A finished task, or one waiting after an upstream failure, has no open attempt.
+    const auto open = terminal ? std::optional<bool>{false} : u.attempt_open;
+    if (open && !*open) {
+        if (auto closed = close_attempt(db, id, u.attempt_error, now); !closed) {
+            return closed.error();
+        }
+    }
     auto s = db.prepare(
         "UPDATE download_tasks SET status = ?, version = version + 1, execution_id = ?,"
         " wait_reason = ?, next_retry_at = ?, resume_stage = ?, updated_at = ?,"
         " started_at = COALESCE(started_at, ?), finished_at = ?,"
         " cancel_requested_at = COALESCE(cancel_requested_at, ?),"
-        " result = COALESCE(?, result), error = COALESCE(?, error) WHERE id = ?");
+        " result = COALESCE(?, result), error = COALESCE(?, error),"
+        " progress = COALESCE(?, progress), execution = COALESCE(?, execution),"
+        " checkpoint = CASE WHEN ? THEN NULL ELSE COALESCE(?, checkpoint) END,"
+        " attempt_open = COALESCE(?, attempt_open), attempt_used_ms = COALESCE(?, attempt_used_ms)"
+        " WHERE id = ?");
     if (!s) {
         return std::move(s).error();
     }
-    const auto terminal = domain::is_terminal(u.to);
     s->bind(1, domain::to_string(u.to))
         .bind(2, u.execution_id)
         .bind(3, u.wait_reason ? std::optional<std::string>{std::string{domain::to_string(*u.wait_reason)}}
@@ -149,7 +188,13 @@ domain::Result<ports::TaskRecord> apply(Connection& db, const std::string& id, c
         .bind(9, u.cancel_requested ? std::optional<std::int64_t>{now} : std::nullopt)
         .bind(10, u.result_json)
         .bind(11, u.error_json)
-        .bind(12, id);
+        .bind(12, u.progress_json)
+        .bind(13, u.execution_json)
+        .bind(14, std::int64_t{u.clear_checkpoint ? 1 : 0})
+        .bind(15, u.checkpoint_json)
+        .bind(16, open ? std::optional<std::int64_t>{*open ? 1 : 0} : std::nullopt)
+        .bind(17, u.attempt_used_ms)
+        .bind(18, id);
     if (auto done = s->run(); !done) {
         return done.error();
     }
@@ -728,6 +773,43 @@ SqliteTaskRepository::get_intent(const std::string& task_id) {
     });
 }
 
+namespace {
+
+// queued, or waiting_retry whose time has come.
+bool claimable(const ports::TaskRecord& task, std::int64_t now) {
+    return task.status == TaskStatus::queued ||
+           (task.status == TaskStatus::waiting_retry && task.next_retry_at && to_millis(*task.next_retry_at) <= now);
+}
+
+// Hands the task to a new execution at the stage it resumes from. Attempts are unchanged.
+domain::Result<ports::TaskRecord> claim_row(Connection& db, const ports::TaskRecord& task,
+                                            const std::string& execution_id, std::int64_t now) {
+    const auto to = task.status == TaskStatus::waiting_retry ? task.resume_stage.value_or(TaskStatus::resolving)
+                                                             : TaskStatus::resolving;
+    if (auto legal = domain::check_transition(task.status, to); !legal) {
+        return legal.error();
+    }
+    Update update;
+    update.to = to;
+    update.execution_id = execution_id;
+    update.started = true;
+    auto claimed = apply(db, task.task_id, update, now);
+    if (claimed && claimed->attempt_open) {
+        // The open attempt continues under this execution.
+        auto link = db.prepare("UPDATE task_attempts SET last_execution_id = ? WHERE task_id = ? AND attempt_no = ?");
+        if (!link) {
+            return std::move(link).error();
+        }
+        link->bind(1, execution_id).bind(2, task.task_id).bind(3, static_cast<std::int64_t>(claimed->attempt));
+        if (auto done = link->run(); !done) {
+            return done.error();
+        }
+    }
+    return claimed;
+}
+
+} // namespace
+
 domain::Result<std::optional<ports::TaskRecord>>
 SqliteTaskRepository::claim_next(std::chrono::system_clock::time_point now) {
     const auto now_ms = to_millis(now);
@@ -748,22 +830,149 @@ SqliteTaskRepository::claim_next(std::chrono::system_clock::time_point now) {
         if (!candidate.value()) {
             return std::optional<ports::TaskRecord>{};
         }
-        const auto& task = *candidate.value();
-        const auto to = task.status == TaskStatus::waiting_retry
-                            ? task.resume_stage.value_or(TaskStatus::resolving)
-                            : TaskStatus::resolving;
-        if (auto legal = domain::check_transition(task.status, to); !legal) {
-            return legal.error();
-        }
-        Update update;
-        update.to = to;
-        update.execution_id = execution_id;
-        update.started = true;
-        auto claimed = apply(db, task.task_id, update, now_ms);
+        auto claimed = claim_row(db, *candidate.value(), execution_id, now_ms);
         if (!claimed) {
             return std::move(claimed).error();
         }
         return std::optional<ports::TaskRecord>{std::move(claimed).value()};
+    });
+}
+
+domain::Result<std::vector<ports::RunnableTask>>
+SqliteTaskRepository::runnable(std::chrono::system_clock::time_point now, std::uint32_t per_owner,
+                               std::uint32_t limit) {
+    const auto now_ms = to_millis(now);
+    return ctx_.database->read([&](Connection& db) -> domain::Result<std::vector<ports::RunnableTask>> {
+        auto s = db.prepare(
+            "SELECT id, owner_id, original_source, due FROM ("
+            " SELECT id, owner_id, original_source, created_at, COALESCE(next_retry_at, created_at) AS due,"
+            "  ROW_NUMBER() OVER (PARTITION BY owner_id"
+            "   ORDER BY COALESCE(next_retry_at, created_at), created_at, id) AS rank"
+            " FROM download_tasks"
+            " WHERE status = 'queued' OR (status = 'waiting_retry' AND next_retry_at <= ?))"
+            " WHERE rank <= ? ORDER BY due, created_at, id LIMIT ?");
+        if (!s) {
+            return std::move(s).error();
+        }
+        s->bind(1, now_ms).bind(2, static_cast<std::int64_t>(per_owner)).bind(3, static_cast<std::int64_t>(limit));
+        return collect<ports::RunnableTask>(*s, [](const Statement& st) {
+            return ports::RunnableTask{st.text(0), st.text(1), st.text(2), from_millis(st.integer(3))};
+        });
+    });
+}
+
+domain::Result<std::optional<ports::TaskRecord>> SqliteTaskRepository::claim(const std::string& task_id,
+                                                                             std::chrono::system_clock::time_point now) {
+    const auto now_ms = to_millis(now);
+    const auto execution_id = ctx_.ids->next("exe_");
+    return ctx_.database->write([&](Connection& db) -> domain::Result<std::optional<ports::TaskRecord>> {
+        auto task = load_task(db, task_id);
+        if (!task) {
+            return std::move(task).error();
+        }
+        if (!task.value() || !claimable(*task.value(), now_ms)) {
+            return std::optional<ports::TaskRecord>{};
+        }
+        auto claimed = claim_row(db, *task.value(), execution_id, now_ms);
+        if (!claimed) {
+            return std::move(claimed).error();
+        }
+        return std::optional<ports::TaskRecord>{std::move(claimed).value()};
+    });
+}
+
+domain::Result<ports::TaskRecord> SqliteTaskRepository::begin_attempt(const ports::BeginAttemptCommand& command) {
+    const auto now = to_millis(ctx_.clock->now());
+    return ctx_.database->write([&](Connection& db) -> domain::Result<ports::TaskRecord> {
+        auto task = require_runner(db, command.task_id, command.execution_id, command.expected_version);
+        if (!task) {
+            return task;
+        }
+        if (!domain::is_running(task->status)) {
+            return domain::Error{domain::ErrorCode::invalid_transition, "an attempt starts only while running",
+                                 false, {}};
+        }
+        if (task->attempt_open) {
+            return task; // the claim already linked the open attempt to this execution
+        }
+        const auto deadline =
+            now + std::chrono::duration_cast<std::chrono::milliseconds>(command.absolute_budget).count();
+        auto s = db.prepare("UPDATE download_tasks SET attempt = attempt + 1, attempt_open = 1, attempt_used_ms = 0,"
+                            " deadline_at = COALESCE(deadline_at, ?), version = version + 1, updated_at = ?"
+                            " WHERE id = ?");
+        if (!s) {
+            return std::move(s).error();
+        }
+        s->bind(1, deadline).bind(2, now).bind(3, command.task_id);
+        if (auto done = s->run(); !done) {
+            return done.error();
+        }
+        auto record = db.prepare("INSERT INTO task_attempts (task_id, attempt_no, last_execution_id, started_at)"
+                                 " VALUES (?, ?, ?, ?)");
+        if (!record) {
+            return std::move(record).error();
+        }
+        record->bind(1, command.task_id)
+            .bind(2, static_cast<std::int64_t>(task->attempt + 1))
+            .bind(3, command.execution_id)
+            .bind(4, now);
+        if (auto done = record->run(); !done) {
+            return done.error();
+        }
+        return require_task(db, command.task_id);
+    });
+}
+
+domain::Result<ports::TaskRecord> SqliteTaskRepository::defer(const ports::DeferCommand& command) {
+    const auto now = to_millis(ctx_.clock->now());
+    return ctx_.database->write([&](Connection& db) -> domain::Result<ports::TaskRecord> {
+        auto task = require_runner(db, command.task_id, command.execution_id, command.expected_version);
+        if (!task) {
+            return task;
+        }
+        if (!domain::is_running(task->status)) {
+            return version_conflict(); // canceling: the cancel is finished, not paused
+        }
+        if (auto legal = domain::check_transition(task->status, TaskStatus::waiting_retry); !legal) {
+            return legal.error();
+        }
+        const auto resume = command.resume_stage;
+        if (resume != TaskStatus::resolving && resume != TaskStatus::probing && resume != TaskStatus::downloading) {
+            return domain::Error::validation("resume_stage", "must be resolving, probing or downloading");
+        }
+        const bool admission = command.reason == domain::WaitReason::admission;
+        Update update;
+        update.to = TaskStatus::waiting_retry;
+        update.wait_reason = command.reason;
+        update.next_retry_at = to_millis(command.next_retry_at);
+        update.resume_stage = resume;
+        update.attempt_open = admission ? task->attempt_open : false;
+        update.attempt_used_ms = admission ? command.attempt_used.count() : 0;
+        update.checkpoint_json = command.checkpoint_json;
+        update.clear_checkpoint = command.clear_checkpoint;
+        update.progress_json = command.progress_json;
+        update.attempt_error = command.error_json;
+        return apply(db, command.task_id, update, now);
+    });
+}
+
+domain::Result<ports::TaskRecord> SqliteTaskRepository::checkpoint(const ports::CheckpointCommand& command) {
+    const auto now = to_millis(ctx_.clock->now());
+    return ctx_.database->write([&](Connection& db) -> domain::Result<ports::TaskRecord> {
+        auto task = require_runner(db, command.task_id, command.execution_id, command.expected_version);
+        if (!task) {
+            return task;
+        }
+        if (!domain::is_running(task->status)) {
+            return version_conflict(); // canceling or finished: nothing more to record
+        }
+        Update update;
+        update.to = task->status;
+        update.execution_id = task->execution_id;
+        update.progress_json = command.progress_json;
+        update.execution_json = command.execution_json;
+        update.checkpoint_json = command.checkpoint_json;
+        return apply(db, command.task_id, update, now);
     });
 }
 
@@ -781,6 +990,10 @@ SqliteTaskRepository::transition(const ports::TransitionCommand& command) {
         }
         Update update;
         update.to = command.to;
+        update.progress_json = command.progress_json;
+        update.execution_json = command.execution_json;
+        update.error_json = command.error_json;
+        update.attempt_error = command.error_json;
         if (command.to == TaskStatus::waiting_retry) {
             if (!command.wait_reason) {
                 return domain::Error::validation("wait_reason", "is required for waiting_retry");
@@ -799,12 +1012,48 @@ SqliteTaskRepository::transition(const ports::TransitionCommand& command) {
             update.wait_reason = command.wait_reason;
             update.next_retry_at = detail::to_millis(*command.next_retry_at);
             update.resume_stage = resume;
+            if (*command.wait_reason == domain::WaitReason::upstream_retry) {
+                update.attempt_open = false;
+            }
         }
         // Waiting or finished tasks belong to no execution; a later claim issues a new one.
         if (command.to != TaskStatus::waiting_retry && !domain::is_terminal(command.to)) {
             update.execution_id = command.execution_id;
         }
         return apply(db, command.task_id, update, now);
+    });
+}
+
+domain::Result<std::vector<ports::TaskRecord>>
+SqliteTaskRepository::requeue_interrupted(std::chrono::system_clock::time_point now) {
+    const auto now_ms = to_millis(now);
+    return ctx_.database->write([&](Connection& db) -> domain::Result<std::vector<ports::TaskRecord>> {
+        auto s = db.prepare("SELECT " + std::string{task_columns} + " FROM download_tasks WHERE status IN " +
+                            std::string{running_list} + " ORDER BY created_at, id");
+        if (!s) {
+            return std::move(s).error();
+        }
+        auto found = collect<ports::TaskRecord>(*s, read_task);
+        if (!found) {
+            return std::move(found).error();
+        }
+        std::vector<ports::TaskRecord> requeued;
+        for (const auto& task : found.value()) {
+            Update update;
+            update.to = TaskStatus::waiting_retry;
+            update.wait_reason = domain::WaitReason::admission;
+            update.next_retry_at = now_ms;
+            // A transfer-complete file is found again through the downloading checkpoint.
+            update.resume_stage = task.status == TaskStatus::downloading || task.status == TaskStatus::processing
+                                      ? TaskStatus::downloading
+                                      : TaskStatus::resolving;
+            auto done = apply(db, task.task_id, update, now_ms);
+            if (!done) {
+                return std::move(done).error();
+            }
+            requeued.push_back(std::move(done).value());
+        }
+        return requeued;
     });
 }
 
@@ -1077,7 +1326,10 @@ SqlitePublicationRepository::abandon(const std::string& task_id, const std::stri
             update.wait_reason = domain::WaitReason::upstream_retry;
             update.next_retry_at = now;
             update.resume_stage = TaskStatus::resolving;
+            update.attempt_open = false;
+            update.clear_checkpoint = true; // the produced file is gone; download again
         }
+        update.attempt_error = error_json;
         return apply(db, task_id, update, now);
     });
 }

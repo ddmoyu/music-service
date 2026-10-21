@@ -38,8 +38,19 @@ public:
     domain::Result<domain::NormalizedDownloadIntent> get_intent(const std::string& task_id) override;
     domain::Result<std::optional<application::ports::TaskRecord>>
     claim_next(std::chrono::system_clock::time_point now) override;
+    domain::Result<std::vector<application::ports::RunnableTask>>
+    runnable(std::chrono::system_clock::time_point now, std::uint32_t per_owner, std::uint32_t limit) override;
+    domain::Result<std::optional<application::ports::TaskRecord>>
+    claim(const std::string& task_id, std::chrono::system_clock::time_point now) override;
+    domain::Result<application::ports::TaskRecord>
+    begin_attempt(const application::ports::BeginAttemptCommand& command) override;
+    domain::Result<application::ports::TaskRecord> defer(const application::ports::DeferCommand& command) override;
+    domain::Result<application::ports::TaskRecord>
+    checkpoint(const application::ports::CheckpointCommand& command) override;
     domain::Result<application::ports::TaskRecord>
     transition(const application::ports::TransitionCommand& command) override;
+    domain::Result<std::vector<application::ports::TaskRecord>>
+    requeue_interrupted(std::chrono::system_clock::time_point now) override;
     domain::Result<application::ports::TaskRecord> request_cancel(const std::string& owner_id,
                                                                   const std::string& task_id) override;
 

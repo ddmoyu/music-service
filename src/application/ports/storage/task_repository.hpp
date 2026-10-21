@@ -37,6 +37,16 @@ struct TaskRecord {
     std::optional<std::string> progress_json;
     std::optional<std::string> result_json;
     std::optional<std::string> error_json;
+    // Public facts of the execution: actual track, quality, container, warnings.
+    std::optional<std::string> execution_json;
+    // Private resume evidence of the work file (never returned by the API).
+    std::optional<std::string> checkpoint_json;
+    // Whether the current logical attempt is still open (an admission pause keeps it).
+    bool attempt_open{false};
+    // Absolute deadline, fixed by the first begin_attempt and never extended.
+    std::optional<std::chrono::system_clock::time_point> deadline_at;
+    // Running time the open attempt has used, without its admission pauses.
+    std::chrono::milliseconds attempt_used{0};
 };
 
 // A completed task whose file was checked outside the transaction. The create
@@ -91,6 +101,53 @@ struct TransitionCommand {
     std::optional<std::chrono::system_clock::time_point> next_retry_at;
     // Where a waiting_retry task resumes when claimed again (resolving by default).
     std::optional<domain::TaskStatus> resume_stage;
+    // Replace the stored values when set.
+    std::optional<std::string> progress_json{};
+    std::optional<std::string> execution_json{};
+    std::optional<std::string> error_json{};
+};
+
+// A task the scheduler may claim now: queued, or waiting_retry and due.
+struct RunnableTask {
+    std::string task_id;
+    std::string owner_id;
+    std::string source; // original track source, for the admission readiness hint
+    std::chrono::system_clock::time_point due;
+};
+
+struct BeginAttemptCommand {
+    std::string task_id;
+    std::string execution_id;
+    std::uint64_t expected_version{0};
+    // From the first attempt on the task must end within this budget.
+    std::chrono::seconds absolute_budget{1800};
+};
+
+// The execution stops without finishing: its I/O has ended. admission keeps the attempt
+// open and does not count; upstream_retry closes it, so the next claim starts a new one.
+struct DeferCommand {
+    std::string task_id;
+    std::string execution_id;
+    std::uint64_t expected_version{0};
+    domain::WaitReason reason{domain::WaitReason::admission};
+    std::chrono::system_clock::time_point next_retry_at;
+    domain::TaskStatus resume_stage{domain::TaskStatus::resolving}; // resolving | probing | downloading
+    std::chrono::milliseconds attempt_used{0};
+    std::optional<std::string> checkpoint_json{}; // replaces the stored evidence when set
+    bool clear_checkpoint{false};                  // the partial file must not be resumed
+    std::optional<std::string> progress_json{};
+    std::optional<std::string> error_json{}; // the failure an upstream_retry waits after
+};
+
+// Progress and resume evidence of the running execution; refused once it was canceled or
+// changed (VERSION_CONFLICT), so a late checkpoint cannot revive anything.
+struct CheckpointCommand {
+    std::string task_id;
+    std::string execution_id;
+    std::uint64_t expected_version{0};
+    std::optional<std::string> progress_json{};
+    std::optional<std::string> execution_json{};
+    std::optional<std::string> checkpoint_json{};
 };
 
 // Newest first: created_at, then task_id, both descending.
@@ -175,7 +232,33 @@ public:
     virtual domain::Result<std::optional<TaskRecord>>
     claim_next(std::chrono::system_clock::time_point now) = 0;
 
+    // Runnable tasks for fair dispatch: per owner at most per_owner of them, earliest due
+    // first, owners in no particular order; at most limit in total.
+    virtual domain::Result<std::vector<RunnableTask>>
+    runnable(std::chrono::system_clock::time_point now, std::uint32_t per_owner, std::uint32_t limit) = 0;
+
+    // Claims this task if it is still runnable (nullopt otherwise), as claim_next does.
+    virtual domain::Result<std::optional<TaskRecord>> claim(const std::string& task_id,
+                                                            std::chrono::system_clock::time_point now) = 0;
+
+    // Starts a new logical attempt unless the claimed one is still open: increments the
+    // attempt, records it in task_attempts and fixes the absolute deadline the first time.
+    // A still open attempt is only linked to the new execution.
+    virtual domain::Result<TaskRecord> begin_attempt(const BeginAttemptCommand& command) = 0;
+
+    // Running (resolving .. processing) -> waiting_retry, see DeferCommand.
+    virtual domain::Result<TaskRecord> defer(const DeferCommand& command) = 0;
+
+    virtual domain::Result<TaskRecord> checkpoint(const CheckpointCommand& command) = 0;
+
+    // Leaving failed closes the open attempt.
     virtual domain::Result<TaskRecord> transition(const TransitionCommand& command) = 0;
+
+    // Startup only, before any runner: tasks left in a running stage by the previous
+    // process become due waiting_retry (admission) at the stage they can resume from
+    // (processing resumes from its transfer-complete file through downloading). Keeps
+    // attempts, deadlines and evidence. Returns them.
+    virtual domain::Result<std::vector<TaskRecord>> requeue_interrupted(std::chrono::system_clock::time_point now) = 0;
 
     // Applies domain::decide_cancel atomically against the current status.
     virtual domain::Result<TaskRecord> request_cancel(const std::string& owner_id,

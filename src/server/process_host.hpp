@@ -27,6 +27,9 @@ struct HostOptions {
     std::shared_ptr<infrastructure::observability::LogSink> log_sink; // stderr JSON lines when empty
     // The platform packages to register; the build's built-in manifest when empty.
     std::optional<std::vector<application::ports::ProviderBundle>> bundles;
+    // Start with claiming paused, as admin/download-policy would set it right away; tasks
+    // are accepted and queued but not run until the policy is resumed.
+    bool downloads_paused{false};
 };
 
 // The serving process (configuration-and-deployment.md, 启动与退出). start() runs the
