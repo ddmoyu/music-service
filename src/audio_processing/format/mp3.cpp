@@ -12,7 +12,8 @@ using domain::Error;
 using domain::ErrorCode;
 
 constexpr std::int64_t search_window = 64 * 1024; // how far to look for the next frame
-constexpr std::uint64_t check_every = 256;         // frames between cancellation checks
+constexpr std::uint64_t check_every = 256;         // frames or tags between cancellation checks
+constexpr std::int64_t check_bytes = 4096;         // search positions between cancellation checks
 
 Error invalid(std::string reason, std::string message, bool retryable) {
     Error error{ErrorCode::audio_invalid, std::move(message), retryable, {}};
@@ -113,6 +114,9 @@ public:
         : reader_(reader), context_(context) {}
 
     domain::Result<Mp3Structure> run() {
+        if (auto stopped = interrupted()) {
+            return std::move(*stopped);
+        }
         auto start = skip_leading_tags();
         if (!start) {
             return std::move(start).error();
@@ -150,8 +154,8 @@ public:
         const FrameHeader reference = header;
         std::optional<std::int32_t> first_bitrate;
         std::uint64_t samples = 0;
-        while (position < end_) {
-            if (result.frames % check_every == 0) {
+        for (std::uint64_t step = 0; position < end_; ++step) {
+            if (step % check_every == 0) {
                 if (auto stopped = interrupted()) {
                     return std::move(*stopped);
                 }
@@ -229,7 +233,12 @@ private:
     // ID3v2 tags in front, possibly several; returns where the audio region starts.
     domain::Result<std::int64_t> skip_leading_tags() {
         std::int64_t position = 0;
-        for (;;) {
+        for (std::uint64_t count = 1;; ++count) {
+            if (count % check_every == 0) {
+                if (auto stopped = interrupted()) {
+                    return std::move(*stopped);
+                }
+            }
             auto bytes = reader_.read(position, 10);
             if (!bytes) {
                 return std::move(bytes).error();
@@ -256,11 +265,18 @@ private:
         }
     }
 
-    // Removes ID3v1, APEv2 and Lyrics3v2 tags from the end; returns where audio ends.
+    // Removes ID3v1, ID3v2 (with a footer), APEv2 and Lyrics3v2 tags from the end;
+    // returns where audio ends.
     domain::Result<std::int64_t> audio_end(std::int64_t start) {
         std::int64_t end = reader_.size();
-        for (bool changed = true; changed;) {
+        std::uint64_t count = 1;
+        for (bool changed = true; changed; ++count) {
             changed = false;
+            if (count % check_every == 0) {
+                if (auto stopped = interrupted()) {
+                    return std::move(*stopped);
+                }
+            }
             if (end - start >= 128) {
                 auto tag = reader_.read(end - 128, 3);
                 if (!tag) {
@@ -268,6 +284,17 @@ private:
                 }
                 if (*tag == "TAG") {
                     end -= 128;
+                    changed = true;
+                    continue;
+                }
+            }
+            if (end - start >= 20) {
+                auto tag = trailing_id3v2(start, end);
+                if (!tag) {
+                    return std::move(tag).error();
+                }
+                if (*tag > 0) {
+                    end -= *tag;
                     changed = true;
                     continue;
                 }
@@ -311,13 +338,53 @@ private:
         return end;
     }
 
+    // The size of an ID3v2.4 tag that ends at end, found by its "3DI" footer and checked
+    // against its header; 0 if there is none.
+    domain::Result<std::int64_t> trailing_id3v2(std::int64_t start, std::int64_t end) {
+        auto footer = reader_.read(end - 10, 10);
+        if (!footer) {
+            return std::move(footer).error();
+        }
+        if (footer->size() < 10 || footer->substr(0, 3) != "3DI" || (byte_at(*footer, 5) & 0x10) == 0) {
+            return std::int64_t{0};
+        }
+        std::int64_t size = 0;
+        for (std::size_t i = 6; i < 10; ++i) {
+            if (byte_at(*footer, i) >= 0x80) {
+                return std::int64_t{0};
+            }
+            size = (size << 7) | byte_at(*footer, i);
+        }
+        const auto total = size + 20;
+        if (total > end - start) {
+            return std::int64_t{0};
+        }
+        auto header = reader_.read(end - total, 10);
+        if (!header) {
+            return std::move(header).error();
+        }
+        // The header repeats the footer apart from the identifier.
+        if (header->size() < 10 || header->substr(0, 3) != "ID3" || header->substr(3) != footer->substr(3)) {
+            return std::int64_t{0};
+        }
+        return total;
+    }
+
     // The first frame at or after from (within the search window) that starts a chain:
     // its successor is also a frame of the same stream, or it ends exactly at the end.
-    // Without a reference the first frame needs two consistent successors.
+    // Without a reference the first frame needs two consistent successors; a chain that
+    // runs past the end there (from the start of the audio, or after a confirmed
+    // successor) is a cut-off file.
     using Found = std::optional<std::pair<std::int64_t, FrameHeader>>;
     domain::Result<Found> find_frame(std::int64_t from, const FrameHeader* reference) {
         const auto limit = std::min(end_, from + search_window);
+        bool cut_off = false;
         for (auto position = from; position + 4 <= limit; ++position) {
+            if ((position - from) % check_bytes == check_bytes - 1) {
+                if (auto stopped = interrupted()) {
+                    return std::move(*stopped);
+                }
+            }
             auto bytes = reader_.read(position, 4);
             if (!bytes) {
                 return std::move(bytes).error();
@@ -333,30 +400,47 @@ private:
             if (!chained) {
                 return std::move(chained).error();
             }
-            if (*chained) {
+            if (*chained == Link::linked) {
                 return Found{std::pair{position, *header}};
             }
+            if (!reference && (*chained == Link::cut_later || (*chained == Link::cut_first && position == from))) {
+                cut_off = true;
+            }
+        }
+        if (cut_off) {
+            return invalid("truncated", "the first audio frames are cut off", true);
         }
         return Found{};
     }
 
-    domain::Result<bool> chain(std::int64_t position, FrameHeader header, int successors) {
+    // cut_first: the frame itself runs past the end; cut_later: a successor does.
+    enum class Link { broken, linked, cut_first, cut_later };
+
+    domain::Result<Link> chain(std::int64_t position, FrameHeader header, int successors) {
         for (int i = 0; i < successors; ++i) {
             position += header.length;
             if (position == end_) {
-                return true;
+                return Link::linked;
+            }
+            const auto cut = i == 0 ? Link::cut_first : Link::cut_later;
+            if (position > end_) {
+                return cut;
             }
             auto bytes = reader_.read(position, 4);
             if (!bytes) {
                 return std::move(bytes).error();
             }
+            if (end_ - position < 4) {
+                // The next header is cut off at the end.
+                return parsed_prefix(*bytes) ? cut : Link::broken;
+            }
             const auto next = parse_header(*bytes);
             if (!next || !next->same_stream(header)) {
-                return false;
+                return Link::broken;
             }
             header = *next;
         }
-        return true;
+        return Link::linked;
     }
 
     struct InfoFrame {

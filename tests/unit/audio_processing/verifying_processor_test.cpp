@@ -78,6 +78,13 @@ std::string id3v2(std::size_t payload) {
     return tag + std::string(payload, '\0');
 }
 
+// An ID3v2.4 tag with a footer, as allowed at the end of the file.
+std::string id3v24_appended(std::size_t payload) {
+    auto tag = id3v2(payload);
+    tag[5] = '\x10'; // footer present
+    return tag + "3DI" + tag.substr(3, 7);
+}
+
 std::string id3v1() { return "TAG" + std::string(125, ' '); }
 
 // A first frame carrying a Xing header that declares frame_count frames.
@@ -228,6 +235,15 @@ TEST_CASE("cut-off files are detected as truncated", "[audio][truncated]") {
         CHECK(reason(result.error()) == "truncated");
         CHECK(result.error().retryable);
     }
+    SECTION("the first or second frame is cut") {
+        for (const auto& cut : {frame().substr(0, 200), frame() + frame().substr(0, 200), frame() + frame().substr(0, 2),
+                                id3v2(512) + frame().substr(0, 300)}) {
+            auto result = processor.process(request(dir.file("start.mp3", cut)), context());
+            REQUIRE_FALSE(result);
+            CHECK(reason(result.error()) == "truncated");
+            CHECK(result.error().retryable);
+        }
+    }
     SECTION("the ID3v2 tag is cut") {
         auto result = processor.process(request(dir.file("tag.mp3", full.substr(0, 300))), context());
         REQUIRE_FALSE(result);
@@ -258,6 +274,22 @@ TEST_CASE("cut-off files are detected as truncated", "[audio][truncated]") {
         REQUIRE(whole);
         CHECK(whole->facts.frames == 400); // the header frame is not audio
     }
+}
+
+TEST_CASE("an ID3v2.4 tag at the end is not damage", "[audio][mp3]") {
+    TempDir dir{"appended"};
+    VerifyingProcessor processor;
+    auto report = processor.process(request(dir.file("tail.mp3", frames(500) + id3v24_appended(8000))), context());
+    REQUIRE(report);
+    CHECK(report->facts.frames == 500);
+    CHECK_FALSE(has_warning(*report, ports::processing_warning::damaged_data_skipped));
+
+    // A footer whose header does not match is not a tag.
+    auto forged = id3v24_appended(8000);
+    forged[9] = '\x01';
+    auto result = processor.process(request(dir.file("forged.mp3", frames(500) + forged)), context());
+    REQUIRE_FALSE(result);
+    CHECK(reason(result.error()) == "damaged");
 }
 
 TEST_CASE("damaged data is skipped only while it stays small", "[audio][damaged]") {
@@ -334,6 +366,19 @@ TEST_CASE("validation stops on cancellation and the deadline", "[audio][cancel]"
     CHECK(canceled.error().code == domain::ErrorCode::canceled);
 
     auto late = processor.process(request(path), {std::chrono::steady_clock::now() - std::chrono::seconds(1), {}});
+    REQUIRE_FALSE(late);
+    CHECK(late.error().code == domain::ErrorCode::deadline_exceeded);
+
+    // Long runs of tags are checked too: no frame loop is reached to notice it later.
+    std::string tags;
+    for (int i = 0; i < 100'000; ++i) {
+        tags += id3v2(0);
+    }
+    const auto tagged = dir.file("tags.mp3", tags + std::string(5000, '\0'));
+    canceled = processor.process(request(tagged), {std::chrono::steady_clock::now() + std::chrono::minutes(1), stop.get_token()});
+    REQUIRE_FALSE(canceled);
+    CHECK(canceled.error().code == domain::ErrorCode::canceled);
+    late = processor.process(request(tagged), {std::chrono::steady_clock::now() - std::chrono::seconds(1), {}});
     REQUIRE_FALSE(late);
     CHECK(late.error().code == domain::ErrorCode::deadline_exceeded);
 }
