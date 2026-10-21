@@ -36,7 +36,6 @@
 using namespace music_service;
 using namespace music_service::test;
 using namespace std::chrono_literals;
-using json = nlohmann::json;
 namespace fs = std::filesystem;
 using infrastructure::filesystem::path_from_utf8;
 using infrastructure::filesystem::path_to_utf8;

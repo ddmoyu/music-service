@@ -354,9 +354,12 @@ domain::Result<AudioEvidence> parse_audio(std::string_view body, std::string_vie
         evidence.duration_seconds = as_int((*data)["duration"]);
     }
     const auto returned_rid = data->contains("rid") ? as_int((*data)["rid"]) : std::nullopt;
+    // Read through value_or: GCC's release build misreads the optional's comparisons.
     const auto type = data->contains("type") ? as_int((*data)["type"]) : std::nullopt;
-    evidence.substitute = !returned_rid || std::to_string(*returned_rid) != requested_rid || (type && *type != 0);
-    evidence.regular = !evidence.substitute && type == 0;
+    const bool typed = type.has_value();
+    const auto type_value = type.value_or(0);
+    evidence.substitute = !returned_rid || std::to_string(*returned_rid) != requested_rid || (typed && type_value != 0);
+    evidence.regular = !evidence.substitute && typed && type_value == 0;
     return evidence;
 }
 

@@ -18,7 +18,6 @@ using domain::TaskStatus;
 namespace {
 
 constexpr std::string_view create_method = "POST";
-constexpr std::string_view create_route = "/api/v1/downloads";
 
 constexpr std::string_view task_columns =
     "id, owner_id, status, version, execution_id, attempt, wait_reason, next_retry_at, "
