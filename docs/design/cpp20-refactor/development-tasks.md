@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-21。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T19 **已完成**，T20 **受阻**（仅容器内的在线下载闭环，见实施记录），T29 **已完成**，T30 **已完成**（侧文件拆为子任务 T30.s，未开始），T21 **待验收**（Linux CI 待运行），S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-21。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T19 **已完成**，T20 **受阻**（仅容器内的在线下载闭环，见实施记录），T29 **已完成**，T30 **已完成**（侧文件拆为子任务 T30.s，未开始），T21 **已完成**，S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -448,7 +448,7 @@ T20（S1 酷我端到端关口）除容器内的在线下载闭环外均已通�
 | Linux 证据（CI 运行 39525823045、39526810353） | ubuntu-24.04，GCC 13.3.0：205/205 通过，Windows 与容器任务同时通过。首次运行在测试替身 mock_providers.hpp 中有 4 条 -Wmissing-field-initializers（ResolvedAudio 新字段未初始化），由 23c2271 修复后复跑 0 条项目警告 |
 | 已知限制 | 只验证 MP3（酷我标准品质的实际容器）；FLAC／M4A／Ogg／WAV／ADTS 的结构验证、标签写入与解密归 T30 及具体平台；不做完整解码证明；整曲判定依赖平台声明时长；处理器由 T17 的 Runner 在 processing 阶段调用，结果写入任务记录后才参与已完成结果复用的证据复核 |
 
-### T21 多源、集合、发现与歌词用例：待验收（2026-10-22，Windows 通过，Linux CI 待运行）
+### T21 多源、集合、发现与歌词用例：已完成（2026-10-22，提交 b27d061）
 
 | 项目 | 记录 |
 | --- | --- |
@@ -456,7 +456,7 @@ T20（S1 酷我端到端关口）除容器内的在线下载闭环外均已通�
 | 规则落实 | 按能力路由：没有该能力为 422 CAPABILITY_UNSUPPORTED，来源停用为 PROVIDER_DISABLED，未知来源为 UNKNOWN_PROVIDER；多源搜索中分别标为 unsupported、disabled 与 failed。列表只取请求的那一页，不在后台枚举整张歌单；集合的 track_count 是平台声明，与当前页大小无关。列表 limit：曲目类 1～100（缺省 50），artist_albums、category_playlists、recommendations 1～50（缺省 20）。游标换列表、实体或 limit 为 CURSOR_MISMATCH，换 owner、账号、实现或未知为 CURSOR_EXPIRED。失败不缓存。分类与榜单目录返回能力声明的 catalog_kind（live／built_in／search_derived）。歌词：一首歌没有歌词为 200、lrc 为 null、unavailable=true；平台不支持歌词为 422。目录型来源（无 resolve_audio）的集合与歌词照常可用 |
 | 覆盖的验收 | A05（四个来源：一个正常、一个 3 秒慢源在 300 ms 单源预算内被判 UPSTREAM_TIMEOUT、一个不支持、一个停用，整体约在预算内返回 partial，只有正常来源的条目）；单源超时保留其他结果；来源数与并发沿用 T13 的上限与扇出；unsupported／disabled 明确区分；目录型替身无音源仍可用；分页不串源（播放列表游标不能继续曲目或专辑搜索，列表游标不能用于另一实体、另一列表或另一 limit）；缓存命中不再调用平台；HTTP 层的条目形状、page 对象、422／404／400、未知参数与 401 |
 | Windows 证据（2026-10-22） | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 278 项中 275 通过、3 项在线用例按设计跳过；`[collections]`、`[catalog]` 连续 5 次通过；GCC 16.2 在 -O2 严格警告下检查改动的源码与测试 0 条项目警告 |
-| Linux 证据 | 待 CI 运行；通过后补记运行号并改为已完成 |
+| Linux／macOS 与容器证据（CI 运行 39642143812） | ubuntu-24.04，GCC 13.3.0：278/278 通过；Windows（windows-2025）与 macOS（macos-15）各 278/278；容器构建与冒烟通过；项目警告均为 0 |
 | 已知限制 | 尚无真实平台实现这些能力（酷我只有曲目搜索、详情、链接与音源），实际能力由 T23 与各平台任务交付，本任务只用模拟来源验证公共边界；短链展开未实现（ILinkParser 仍只做离线识别，需要网络的短链展开另加能力并限制在平台声明的域名内）；context_ref 参数被接受但未使用；歌单／专辑／歌手的单源 page 跳页与搜索一样不支持；封面只透传公开 URL，需要秘密头的封面没有图片代理；歌词与封面尚未接入 T30 的标签写入 |
 
 ### T30 容器、标签与解密处理扩展：已完成（2026-10-22，提交 cc3dbf4；侧文件为子任务 T30.s，未开始）
