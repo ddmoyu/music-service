@@ -191,7 +191,11 @@ private:
 };
 
 void send_text(socket_t sock, std::string_view text) {
+#ifdef _WIN32
     (void)::send(sock, text.data(), static_cast<int>(text.size()), 0);
+#else
+    (void)::send(sock, text.data(), text.size(), 0);
+#endif
 }
 
 // Waits without reading, so the request stays unanswered.

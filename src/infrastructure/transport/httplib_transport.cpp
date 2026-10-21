@@ -183,7 +183,9 @@ domain::Result<ports::HttpResponseHead> HttplibTransport::perform(const ports::H
         if (context.expired(now)) {
             return domain::Error{domain::ErrorCode::deadline_exceeded, "the operation deadline passed", false, {}};
         }
-        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(context.deadline - now);
+        // Rounded up: a budget that ends even a fraction of a millisecond before the
+        // deadline would report the cut-off as an upstream failure, not the deadline.
+        const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(context.deadline - now);
 
         httplib::Client client(url->origin());
         client.set_follow_location(false);
