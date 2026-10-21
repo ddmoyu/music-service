@@ -19,6 +19,7 @@ target_link_libraries(music_service_server_core
         music_service::downloads
         music_service::event_server
         music_service::http_api
+        music_service::media_server
         music_service::providers
         music_service::runtime
         music_service::third_party_httplib

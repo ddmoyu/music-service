@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-21。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T16、T18 **已完成**，T17 **待验收**（Linux CI 待运行），S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-21。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T16、T18 **已完成**，T17、T19 **待验收**（Linux CI 待运行），S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,7 +262,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-下一项为 **T19**（已完成文件访问与票据），T17 在 Linux CI 通过后转为已完成；两者完成后进入 T20 的 S1 酷我端到端关口。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+下一项为 **T20**（S1 酷我端到端关口），T17、T19 在 Linux CI 通过后转为已完成。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
@@ -447,6 +447,18 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 | Windows 证据（2026-10-21） | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 205/205 通过（3 项在线用例按设计跳过）；GCC 16.2 在 -O2 严格警告下检查改动的源码与测试 0 条警告 |
 | Linux 证据（CI 运行 39525823045、39526810353） | ubuntu-24.04，GCC 13.3.0：205/205 通过，Windows 与容器任务同时通过。首次运行在测试替身 mock_providers.hpp 中有 4 条 -Wmissing-field-initializers（ResolvedAudio 新字段未初始化），由 23c2271 修复后复跑 0 条项目警告 |
 | 已知限制 | 只验证 MP3（酷我标准品质的实际容器）；FLAC／M4A／Ogg／WAV／ADTS 的结构验证、标签写入与解密归 T30 及具体平台；不做完整解码证明；整曲判定依赖平台声明时长；处理器由 T17 的 Runner 在 processing 阶段调用，结果写入任务记录后才参与已完成结果复用的证据复核 |
+
+### T19 已完成文件访问与票据：待验收（2026-10-21，Windows 通过，Linux CI 待运行）
+
+| 项目 | 记录 |
+| --- | --- |
+| 交付 | `application/media`：FileAccessService（按 owner、目标目录当前 ACL 与发布大小打开已发布文件，被移走或改写即标记 missing）、MediaTicketService（media-access 内部签发、只存 token 哈希、绑定一个目标与签发它的 access token、有界内存 handles.media_tickets 与每 owner 份额、过期哈希保留以区分 MEDIA_TICKET_EXPIRED 与 NOT_FOUND）、MediaAccessService（file 访问描述、ticket／bearer 两种 URL；asset 仅核验归属与有效期）。新端口 PublishedFiles（按偏移只读，LocalDestinationFiles 实现）；AssetService.describe；新错误码 FILE_MISSING、MEDIA_TICKET_EXPIRED（410）、DELIVERY_UNAVAILABLE（422）、FEATURE_UNAVAILABLE（501）、MULTIPLE_RANGES_UNSUPPORTED（400）。`media_server`（由 INTERFACE 改为静态库）：独立 cpp-httplib 监听与线程池上的 `GET/HEAD /media/v1/files/{file_id}`（files:read Bearer）、`/media/v1/tickets/{token}`、`/media/v1/assets/{asset_id}`（media:read，在线代理前为 501），CORS 预检与暴露头。控制入口新增 `GET /api/v1/files/{file_id}` 与 `POST /api/v1/media-access`，completed 任务的 result 带 links.file；admin/status 增加 media（listening、responses）。Finalizer 把 metadata_status 写入资产属性。ProcessHost 在 media.enabled 时于控制入口前启动媒体监听，info 声明 file_access 与 media_base_url，构建声明 media_server |
+| 规则落实 | 只开放已发布文件，不读取工作目录；元数据与媒体响应都不含服务器路径。完整 GET 为 200（Content-Length、强 ETag、Accept-Ranges），单段 `a-b`／`a-`／`-n` 为 206 与 Content-Range，与文件无交集为 416 且 `Content-Range: bytes */总长`、无 JSON 体，多段为 400 MULTIPLE_RANGES_UNSUPPORTED，If-Range 不匹配返回完整 200，If-None-Match 命中 304，HEAD 忽略 Range；Bearer 文件为 attachment、`private, no-cache`，票据为 inline、`no-store` 与 no-referrer；Content-Disposition 给出 ASCII 回退名与 RFC 8187 编码的 UTF-8 名。每个响应在发头前取得 media_limits 的全局、本地文件与每 principal 额度，不足时以 JSON 429 CALLER_LIMIT_EXCEEDED／503 SERVICE_BUSY 拒绝，额度在内容提供结束、失败或客户端断开时归还；单流受 media_stream.max_stream 与写空闲限制，停机时在下一块结束。media-access：file 需要 files:read，asset 需要 media:read，他人或未知目标 404；file 的 direct 为 422 DELIVERY_UNAVAILABLE；ticket 期限为 ttl_seconds（15～300，缺省 lifetimes.media_access），bearer URL 的 expires_at 为 null；asset 先核验归属与有效期，再因在线代理／直链未启用返回 501。票据在每次请求开始时核验到期、principal 仍启用且签发它的 token 未撤销；路径中的票据在访问日志中写为 `<redacted>`。file_access 需要媒体监听，与 media_proxy 分开 |
+| 覆盖的验收 | A23（其他 principal 的 file_id 在元数据、media-access 与媒体路由均为 404；未知与过期票据分别为 404 与 410 MEDIA_TICKET_EXPIRED（单元用例）；响应与日志不含路径和票据）；A24 的本地文件部分（206／416／多段／If-Range／If-None-Match／HEAD；同一 principal 额度为 1 时第二个请求 429，客户端中途断开后额度归还、随后请求成功）；A32 的票据部分（票据过期只需重新 media-access，期限不超过申请值；票据只读其目标文件）；A33（media_proxy 关闭时 asset 访问为 501，已完成文件照常读取）。另覆盖文件被移走或改写转 FILE_MISSING 且复制回去不复活、completed 任务的 links.file、ticket 的总量与每 owner 上限 |
+| 真实样本（2026-10-21，Windows，匿名） | 调试构建的 music-service（media 与 file_access 启用）：下载酷我 rid 78932517 后，`GET /api/v1/files/{id}` 返回 2,829,338 字节、audio/mpeg、无路径；media-access 签发的票据 URL 以 `Range: bytes=0-15` 返回 206 与 `Content-Range: bytes 0-15/2829338`（ID3 头），完整读取与发布文件逐字节一致；服务日志中不出现票据 |
+| Windows 证据（2026-10-21） | MSVC 19.51 /W4：0 条项目警告；`ctest` 260 项中 257 通过、3 项在线用例按设计跳过；媒体用例连续 5 次通过；GCC 16.2 在 -O2 严格警告下检查新增与改动的源码（含媒体与控制入口）0 条项目警告 |
+| Linux 证据 | 待 CI 运行；通过后补记运行号并改为已完成 |
+| 已知限制 | 未知 Range 单位或语法错误的 Range 由 cpp-httplib 在路由前以 416 拒绝，与 API「忽略未知单位」不同，尚无法在入口内覆盖；media 监听与 file_access 仍默认关闭，T20 随下载闭环启用；在线 asset 代理与直链（T34）未实现，asset 访问返回 501；token 撤销与 principal 停用只能离线执行，运行中的票据撤销路径只有代码检查、没有端到端用例；票据只在内存中，重启后需重新 media-access；资产 missing 只在读取时懒检查，没有后台扫描 |
 
 ### T17 持久调度与最小下载执行：待验收（2026-10-21，Windows 通过，Linux CI 待运行）
 

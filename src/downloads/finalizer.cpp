@@ -231,12 +231,17 @@ domain::Result<ports::CompletedPublication> Finalizer::publish(const FinalizeReq
     if (request.target_path.empty()) {
         return domain::Error::validation("target_path", "must not be empty");
     }
-    if (!json::parse(request.properties_json, nullptr, false).is_object()) {
+    auto properties = json::parse(request.properties_json, nullptr, false);
+    if (!properties.is_object()) {
         return domain::Error::validation("properties", "must be a JSON object");
     }
+    // The file's own record says whether its tags were written (api-contract.md 10.1).
+    if (!properties.contains("metadata_status")) {
+        properties["metadata_status"] = metadata_status(request.report);
+    }
 
-    const PublicationEvidence evidence{file, request.target_path, request.report.facts.container,
-                                       request.properties_json, result_of(request.report)};
+    const PublicationEvidence evidence{file, request.target_path, request.report.facts.container, properties.dump(),
+                                       result_of(request.report)};
     ports::PublicationIntent intent{task.task_id, *task.execution_id, task.destination_id, request.workspace_file,
                                     {}, encode_evidence(evidence), "reserved"};
     std::optional<ports::TaskRecord> finalizing;

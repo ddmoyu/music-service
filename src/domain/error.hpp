@@ -44,6 +44,11 @@ enum class ErrorCode {
     file_system,
     audio_invalid, // required decryption or validation of a downloaded file failed
     finalization_failed, // a verified file could not be published to its destination
+    file_missing,        // a published file is no longer where it was published
+    media_ticket_expired,
+    delivery_unavailable, // the requested media delivery mode cannot serve this target
+    feature_unavailable,  // a service feature is not enabled
+    multiple_ranges_unsupported,
     internal,
 };
 

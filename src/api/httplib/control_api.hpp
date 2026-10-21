@@ -5,6 +5,7 @@
 #include "application/catalog/asset_service.hpp"
 #include "application/catalog/catalog_service.hpp"
 #include "application/config/service_config.hpp"
+#include "application/media/media_access.hpp"
 #include "application/tasks/download_service.hpp"
 #include "application/ports/providers/directory.hpp"
 #include "domain/result.hpp"
@@ -61,6 +62,8 @@ struct AdminStatus {
     std::uint32_t downloads_running{0};
     bool downloads_paused{false};
     std::uint64_t downloads_claimed{0}; // since start
+    bool media_listening{false};
+    std::uint32_t media_responses{0}; // file responses holding a slot
 };
 
 // admin/download-policy: whether the scheduler claims new tasks.
@@ -99,13 +102,16 @@ struct ControlApiServices {
         on_request;
     // Empty when downloads are not executed: the policy routes are not mounted.
     std::shared_ptr<DownloadPolicy> download_policy{};
+    // File metadata and media-access (T19); empty or with file_access off they answer 501.
+    std::shared_ptr<application::media::FileAccessService> files{};
+    std::shared_ptr<application::media::MediaAccessService> media{};
 };
 
 // The control HTTP entry (/health, /api/v1) on cpp-httplib: Bearer authentication with
 // scopes, the JSON envelope, request ids, CORS, body and content-type limits, and the
 // system, provider, destination, credential, default-selection, search, track
-// detail, link parsing, asset resolve/probe, download task and batch, admin/status and
-// admin/download-policy routes. Routes of later
+// detail, link parsing, asset resolve/probe, download task and batch, file metadata,
+// media-access, admin/status and admin/download-policy routes. Routes of later
 // tasks are not mounted, so they answer 404 instead of a fake success. Owns its listener and worker pool; no GUI or desktop dependency.
 class ControlApi {
 public:

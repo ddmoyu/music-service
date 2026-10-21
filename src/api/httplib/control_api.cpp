@@ -83,6 +83,7 @@ int status_for(ErrorCode code) {
     case ErrorCode::validation_failed:
     case ErrorCode::unknown_provider:
     case ErrorCode::cursor_mismatch:
+    case ErrorCode::multiple_ranges_unsupported:
         return 400;
     case ErrorCode::not_found:
         return 404;
@@ -96,6 +97,8 @@ int status_for(ErrorCode code) {
         return 409;
     case ErrorCode::cursor_expired:
     case ErrorCode::resource_expired:
+    case ErrorCode::file_missing:
+    case ErrorCode::media_ticket_expired:
         return 410;
     case ErrorCode::capability_unsupported:
     case ErrorCode::provider_disabled:
@@ -104,6 +107,7 @@ int status_for(ErrorCode code) {
     case ErrorCode::preview_rejected:
     case ErrorCode::credentials_required:
     case ErrorCode::destination_unavailable:
+    case ErrorCode::delivery_unavailable:
         return 422;
     case ErrorCode::queue_limit_exceeded:
     case ErrorCode::caller_limit_exceeded:
@@ -119,6 +123,8 @@ int status_for(ErrorCode code) {
     case ErrorCode::upstream_timeout:
     case ErrorCode::deadline_exceeded:
         return 504;
+    case ErrorCode::feature_unavailable:
+        return 501;
     case ErrorCode::canceled:
     case ErrorCode::destination_root_changed:
     case ErrorCode::destination_in_use:
@@ -380,6 +386,15 @@ json task_warnings(const ports::TaskRecord& task) {
     return out;
 }
 
+// The stored result, with the link to the published file (api-contract.md 10.1).
+json result_json(const ports::TaskRecord& task) {
+    auto result = parsed_or_null(task.result_json);
+    if (result.is_object() && result.contains("file_id") && result["file_id"].is_string()) {
+        result["links"] = {{"file", "/api/v1/files/" + result["file_id"].get<std::string>()}};
+    }
+    return result;
+}
+
 json task_json(const application::tasks::TaskView& view) {
     const auto& t = view.task;
     const auto& intent = view.intent;
@@ -406,7 +421,7 @@ json task_json(const application::tasks::TaskView& view) {
                 {"next_retry_at", optional_time(t.next_retry_at)},
                 {"wait_reason", t.wait_reason ? json(domain::to_string(*t.wait_reason)) : json(nullptr)},
                 {"retry_of", optional_string(t.retry_of)},
-                {"result", parsed_or_null(t.result_json)},
+                {"result", result_json(t)},
                 {"error", parsed_or_null(t.error_json)},
                 {"warnings", task_warnings(t)},
                 {"links", {{"self", "/api/v1/downloads/" + t.task_id}}}};
@@ -866,6 +881,11 @@ struct ControlApi::Impl {
         server.Post(R"(/api/v1/download-batches/(bat_[A-Za-z0-9]+)/cancel)",
                     guard(Access::scoped, write, [this](Call& call) { cancel_batch(call); }));
 
+        server.Get(R"(/api/v1/files/(fil_[A-Za-z0-9]+))",
+                   guard(Access::scoped, accounts::scope::files_read, [this](Call& call) { get_file(call); }));
+        // The scope depends on the target kind: checked in the route.
+        server.Post("/api/v1/media-access", guard(Access::any_scope, "", [this](Call& call) { media_access(call); }));
+
         server.Get("/api/v1/admin/status",
                    guard(Access::scoped, accounts::scope::admin, [this](Call& call) { admin_status(call); }));
         if (services.download_policy) {
@@ -999,7 +1019,142 @@ struct ControlApi::Impl {
                   {{"workers", s.download_workers},
                    {"running", s.downloads_running},
                    {"paused", s.downloads_paused},
-                   {"claimed", s.downloads_claimed}}}});
+                   {"claimed", s.downloads_claimed}}},
+                 {"media", {{"listening", s.media_listening}, {"responses", s.media_responses}}}});
+    }
+
+    // ------------------------------------------------------------- files
+
+    [[nodiscard]] bool file_access_enabled() const { return services.files && options.info.features.file_access; }
+
+    static json properties_of(const std::string& properties) {
+        auto parsed = json::parse(properties, nullptr, false);
+        return parsed.is_object() ? parsed : json::object();
+    }
+
+    void get_file(Call& call) {
+        if (!only_params(call, {})) {
+            return;
+        }
+        if (!file_access_enabled()) {
+            call.fail(api_error(501, "FEATURE_UNAVAILABLE", "file access is not enabled"));
+            return;
+        }
+        const std::string file_id = call.req.matches[1];
+        auto asset = services.files->describe(call.principal(), file_id);
+        if (!asset) {
+            call.fail(asset.error());
+            return;
+        }
+        const auto etag = "W/\"file-" + asset->id + "-v" + std::to_string(asset->version) + "\"";
+        call.res.set_header("ETag", etag);
+        if (call.req.get_header_value("If-None-Match") == etag) {
+            call.res.status = 304;
+            return;
+        }
+        const auto properties = properties_of(asset->properties_json);
+        const auto field = [&](const char* key) { return properties.contains(key) ? properties[key] : json(nullptr); };
+        call.ok({{"file_id", asset->id},
+                 {"display_name", application::media::display_name(*asset)},
+                 {"size_bytes", asset->size_bytes},
+                 {"container", optional_string(asset->container)},
+                 {"content_type", application::media::content_type_of(asset->container.value_or(""))},
+                 {"actual_track", field("actual_track")},
+                 {"quality", field("actual_quality")},
+                 {"metadata_status", field("metadata_status")},
+                 {"etag", asset->etag},
+                 {"status", "available"},
+                 {"created_at", utc(asset->created_at)},
+                 {"media_url", options.info.media_base_url ? json(*options.info.media_base_url + "/media/v1/files/" +
+                                                                  asset->id)
+                                                           : json(nullptr)},
+                 {"links", {{"self", "/api/v1/files/" + asset->id}}}});
+    }
+
+    void media_access(Call& call) {
+        if (!only_params(call, {})) {
+            return;
+        }
+        auto body = body_object(call, {"target", "mode", "auth", "ttl_seconds"});
+        if (!body) {
+            return;
+        }
+        const auto target = body->find("target");
+        if (target == body->end() || !target->is_object() || target->size() != 2 || !target->contains("kind") ||
+            !target->contains("id") || !(*target)["kind"].is_string() || !(*target)["id"].is_string()) {
+            call.fail(bad_request("target", "must be {kind, id}"));
+            return;
+        }
+        application::media::AccessRequest request;
+        request.owner_id = call.principal();
+        request.token_id = call.session->token.id;
+        const auto kind = (*target)["kind"].get<std::string>();
+        if (kind == "file") {
+            request.kind = application::media::TargetKind::file;
+        } else if (kind == "asset") {
+            request.kind = application::media::TargetKind::asset;
+        } else {
+            call.fail(bad_request("target.kind", "must be file or asset"));
+            return;
+        }
+        request.target_id = (*target)["id"].get<std::string>();
+        std::optional<std::string> mode;
+        std::optional<std::string> auth;
+        if (!read_string(call, *body, "mode", mode) || !read_string(call, *body, "auth", auth)) {
+            return;
+        }
+        if (!mode || *mode == "auto") {
+            request.mode = application::media::DeliveryMode::automatic;
+        } else if (*mode == "direct") {
+            request.mode = application::media::DeliveryMode::direct;
+        } else if (*mode == "proxy") {
+            request.mode = application::media::DeliveryMode::proxy;
+        } else {
+            call.fail(bad_request("mode", "must be auto, direct or proxy"));
+            return;
+        }
+        if (!auth || *auth == "ticket") {
+            request.auth = application::media::MediaAuth::ticket;
+        } else if (*auth == "bearer") {
+            request.auth = application::media::MediaAuth::bearer;
+        } else {
+            call.fail(bad_request("auth", "must be ticket or bearer"));
+            return;
+        }
+        if (const auto ttl = body->find("ttl_seconds"); ttl != body->end()) {
+            if (!ttl->is_number_integer() || ttl->get<std::int64_t>() < 15 || ttl->get<std::int64_t>() > 300) {
+                call.fail(bad_request("ttl_seconds", "must be an integer from 15 to 300"));
+                return;
+            }
+            request.ttl = std::chrono::seconds{ttl->get<std::int64_t>()};
+        }
+        const auto scope = request.kind == application::media::TargetKind::file ? accounts::scope::files_read
+                                                                                : accounts::scope::media_read;
+        if (!accounts::has_scope(call.session->token.scopes, scope)) {
+            call.fail(api_error(403, "FORBIDDEN", "the token lacks the " + std::string{scope} + " scope"));
+            return;
+        }
+        if (!services.media) {
+            call.fail(api_error(501, "FEATURE_UNAVAILABLE", "media access is not enabled"));
+            return;
+        }
+        auto described = services.media->describe(request);
+        if (!described) {
+            call.fail(described.error());
+            return;
+        }
+        const auto& d = described.value();
+        const auto properties = properties_of(d.properties_json);
+        const auto field = [&](const char* key) { return properties.contains(key) ? properties[key] : json(nullptr); };
+        call.ok({{"target", {{"kind", application::media::to_string(d.kind)}, {"id", d.target_id}}},
+                 {"delivery", d.delivery},
+                 {"url", d.url},
+                 {"auth", d.auth},
+                 {"expires_at", optional_time(d.expires_at)},
+                 {"content_type", d.content_type},
+                 {"range_supported", d.range_supported ? json(*d.range_supported) : json(nullptr)},
+                 {"actual_track", field("actual_track")},
+                 {"actual_quality", field("actual_quality")}});
     }
 
     void get_download_policy(Call& call) {

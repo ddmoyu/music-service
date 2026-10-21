@@ -76,6 +76,10 @@ public:
     // for unknown or foreign ids. Reads at most probe_bytes of the audio.
     domain::Result<ProbeReport> probe(const std::string& owner_id, const std::string& asset_id);
 
+    // The caller's asset while it is valid: NOT_FOUND for unknown or foreign ids,
+    // RESOURCE_EXPIRED once it expired. Touches no account and no network.
+    domain::Result<AssetDescriptor> describe(const std::string& owner_id, const std::string& asset_id);
+
 private:
     struct Asset;
 

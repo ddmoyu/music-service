@@ -8,6 +8,7 @@
 
 #include <mbedtls/sha256.h>
 
+#include <algorithm>
 #include <array>
 #include <fstream>
 #include <utility>
@@ -187,6 +188,33 @@ domain::Result<void> LocalDestinationFiles::remove_workspace(const std::string& 
 
 namespace {
 
+class LocalReadableFile final : public ports::ReadableFile {
+public:
+    LocalReadableFile(std::ifstream in, fs::path path, std::uint64_t size)
+        : in_(std::move(in)), path_(std::move(path)), size_(size) {}
+
+    [[nodiscard]] std::uint64_t size() const noexcept override { return size_; }
+
+    domain::Result<std::size_t> read(std::uint64_t offset, std::span<char> buffer) override {
+        if (offset >= size_ || buffer.empty()) {
+            return std::size_t{0};
+        }
+        in_.clear();
+        in_.seekg(static_cast<std::streamoff>(offset));
+        const auto wanted = static_cast<std::streamsize>(std::min<std::uint64_t>(buffer.size(), size_ - offset));
+        in_.read(buffer.data(), wanted);
+        if (in_.gcount() <= 0) {
+            return file_error("read file", path_, std::make_error_code(std::errc::io_error));
+        }
+        return static_cast<std::size_t>(in_.gcount());
+    }
+
+private:
+    std::ifstream in_;
+    fs::path path_;
+    std::uint64_t size_;
+};
+
 class LocalWorkFile final : public ports::WorkFile {
 public:
     explicit LocalWorkFile(AppendFile file) : file_(std::move(file)) {}
@@ -227,6 +255,32 @@ domain::Result<std::unique_ptr<ports::WorkFile>> LocalDestinationFiles::open(con
         return cut.error();
     }
     return std::unique_ptr<ports::WorkFile>{std::make_unique<LocalWorkFile>(std::move(file).value())};
+}
+
+domain::Result<std::unique_ptr<ports::ReadableFile>>
+LocalDestinationFiles::open_read(const std::string& destination_id, const std::string& relative_path) {
+    auto path = resolve(destination_id, relative_path);
+    if (!path) {
+        return std::move(path).error();
+    }
+    std::error_code ec;
+    const auto status = fs::status(path.value(), ec);
+    if ((ec && absent(ec)) || (!ec && !fs::is_regular_file(status))) {
+        return domain::Error{domain::ErrorCode::not_found, "no published file at this path", false, {}};
+    }
+    if (ec) {
+        return file_error("inspect", path.value(), ec);
+    }
+    const auto size = fs::file_size(path.value(), ec);
+    if (ec) {
+        return file_error("inspect", path.value(), ec);
+    }
+    std::ifstream in{path.value(), std::ios::binary};
+    if (!in) {
+        return file_error("open file", path.value(), std::make_error_code(std::errc::io_error));
+    }
+    return std::unique_ptr<ports::ReadableFile>{
+        std::make_unique<LocalReadableFile>(std::move(in), path.value(), static_cast<std::uint64_t>(size))};
 }
 
 domain::Result<fs::path> LocalDestinationFiles::local_path(const std::string& destination_id,

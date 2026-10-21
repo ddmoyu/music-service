@@ -109,6 +109,7 @@ domain::Result<cfg::ServiceConfig> load_config(const Arguments& args, const Host
     options.working_directory = fs::current_path();
     options.build.providers = provider_sources(host);
     options.build.event_server = true;
+    options.build.media_server = true;
     return infrastructure::config::load_service_config(options);
 }
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "application/ports/storage/destination_files.hpp"
+#include "application/ports/storage/published_files.hpp"
 #include "application/ports/storage/work_files.hpp"
 
 #include <filesystem>
@@ -9,12 +10,13 @@
 
 namespace music_service::infrastructure::filesystem {
 
-// DestinationFiles and WorkFiles on the local file system. Every path is checked as a
+// DestinationFiles, WorkFiles and PublishedFiles on the local file system. Every path is checked as a
 // portable relative path and resolved inside the bound root (symlinks and reparse points
 // included) before it is touched; moves use rename_no_replace, so an existing file is
 // never replaced.
 class LocalDestinationFiles final : public application::ports::DestinationFiles,
-                                    public application::ports::WorkFiles {
+                                    public application::ports::WorkFiles,
+                                    public application::ports::PublishedFiles {
 public:
     // Destination id -> canonical root, as bound at startup. A root that is offline stays
     // listed and is reported unavailable while it is missing.
@@ -34,6 +36,9 @@ public:
                                                                        std::uint64_t keep_bytes) override;
     domain::Result<std::filesystem::path> local_path(const std::string& destination_id,
                                                      const std::string& relative_path) override;
+
+    domain::Result<std::unique_ptr<application::ports::ReadableFile>>
+    open_read(const std::string& destination_id, const std::string& relative_path) override;
 
 private:
     domain::Result<std::filesystem::path> root(const std::string& destination_id) const;

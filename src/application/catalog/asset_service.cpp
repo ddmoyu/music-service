@@ -133,6 +133,16 @@ domain::Result<AssetDescriptor> AssetService::resolve(const ResolveRequest& requ
     return descriptor;
 }
 
+domain::Result<AssetDescriptor> AssetService::describe(const std::string& owner_id, const std::string& asset_id) {
+    auto found = assets_->get(owner_id, asset_id, clock_->now());
+    if (!found) {
+        return std::move(found).error();
+    }
+    auto descriptor = found->first.descriptor;
+    descriptor.asset_id = asset_id;
+    return descriptor;
+}
+
 domain::Result<ProbeReport> AssetService::probe(const std::string& owner_id, const std::string& asset_id) {
     auto found = assets_->get(owner_id, asset_id, clock_->now());
     if (!found) {

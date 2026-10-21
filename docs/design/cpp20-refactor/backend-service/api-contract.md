@@ -401,7 +401,7 @@ progress 使用任务快照相同字段和未知值规则；消息是进度投�
 
 ### 10.1 文件元数据与下载结果
 
-`GET /api/v1/files/{file_id}`，files:read，返回 file_id、display_name、size_bytes、container、actual_track、quality、metadata_status、ETag、media_url。无服务器绝对路径；文件缺失返回 410 FILE_MISSING。
+`GET /api/v1/files/{file_id}`，files:read，返回 file_id、display_name、size_bytes、container、content_type、actual_track、quality、metadata_status、etag（内容强校验器）、status、created_at、media_url（Bearer 媒体地址），响应头为描述的弱 ETag 并支持 If-None-Match。无服务器绝对路径；文件缺失返回 410 FILE_MISSING。file_access 未启用时返回 501 FEATURE_UNAVAILABLE。
 
 completed 任务的 result 至少为：
 
@@ -505,7 +505,7 @@ kind 支持 cookie、oauth2、api_key，只有平台声明并已实现的 kind�
 
 | 方法与路径 | 权限 | 内容 |
 | --- | --- | --- |
-| `GET /api/v1/admin/status` | admin | 工作池占用、排队、任务统计、存储与启动状态；downloads 给出 workers、running、paused 与启动以来的 claimed；无秘密 |
+| `GET /api/v1/admin/status` | admin | 工作池占用、排队、任务统计、存储与启动状态；downloads 给出 workers、running、paused 与启动以来的 claimed，media 给出 listening 与占用额度的文件响应数；无秘密 |
 | `GET /api/v1/admin/download-policy` | admin | 当前是否暂停启动新任务 |
 | `PATCH /api/v1/admin/download-policy` | admin | body `{paused: true/false}`，200 返回新策略 |
 

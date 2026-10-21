@@ -18,7 +18,7 @@
 | --- | --- |
 | 顶层 | `config_version`（只能为 1）、`data_dir`、`destinations`、`providers`、`app_profiles`（当前只接受空对象，T24 启用） |
 | `control` | `host`、`port`、`workers`、`connection_queue` |
-| `media`、`events` | `enabled`、`host`、`port`、`workers`、`connection_queue`（events 当前默认关闭，启用后 info 声明 progress_sse 与 events_base_url） |
+| `media`、`events` | `enabled`、`host`、`port`、`workers`、`connection_queue`（events 当前默认关闭，启用后 info 声明 progress_sse 与 events_base_url；media 当前默认关闭，启用并开启 features.file_access 后 info 声明 file_access 与 media_base_url） |
 | `event_limits` | `global_subscriptions`、`per_principal_subscriptions`、`max_queued_events`、`max_queued_bytes`、`max_event_bytes` |
 | `event_stream` | `progress_interval_ms`、`heartbeat_seconds`、`write_idle_seconds`、`max_connection_seconds` |
 | `public_urls` | `api_base`、`media_base`、`events_base` |

@@ -76,6 +76,16 @@ std::string_view to_string(ErrorCode code) noexcept {
         return "AUDIO_INVALID";
     case ErrorCode::finalization_failed:
         return "FINALIZATION_FAILED";
+    case ErrorCode::file_missing:
+        return "FILE_MISSING";
+    case ErrorCode::media_ticket_expired:
+        return "MEDIA_TICKET_EXPIRED";
+    case ErrorCode::delivery_unavailable:
+        return "DELIVERY_UNAVAILABLE";
+    case ErrorCode::feature_unavailable:
+        return "FEATURE_UNAVAILABLE";
+    case ErrorCode::multiple_ranges_unsupported:
+        return "MULTIPLE_RANGES_UNSUPPORTED";
     case ErrorCode::internal:
         return "INTERNAL_ERROR";
     }

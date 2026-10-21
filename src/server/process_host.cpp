@@ -14,7 +14,11 @@
 #include "downloads/runner.hpp"
 #include "downloads/scheduler.hpp"
 #include "application/transport/upstream_client.hpp"
+#include "application/media/file_access.hpp"
+#include "application/media/media_access.hpp"
+#include "application/media/media_tickets.hpp"
 #include "event_server/httplib/event_server.hpp"
+#include "media_server/httplib/media_server.hpp"
 #include "infrastructure/auth/access_tokens.hpp"
 #include "infrastructure/filesystem/destination_files.hpp"
 #include "infrastructure/filesystem/paths.hpp"
@@ -104,6 +108,10 @@ struct ProcessHost::State {
     std::shared_ptr<runtime::BoundedExecutor> download_executor;
     std::shared_ptr<downloads::DownloadScheduler> scheduler;
     std::unique_ptr<event_server::EventServer> events;
+    std::shared_ptr<application::media::FileAccessService> file_access;
+    std::shared_ptr<application::media::MediaTicketService> tickets;
+    std::shared_ptr<application::media::MediaAccessService> media_access;
+    std::unique_ptr<media_server::MediaServer> media;
     std::unique_ptr<api::ControlApi> control;
 
     StartupReport report;
@@ -138,6 +146,10 @@ struct ProcessHost::State {
             s.downloads_paused = d.paused;
             s.downloads_claimed = d.claimed;
         }
+        if (media) {
+            s.media_listening = true;
+            s.media_responses = media->active();
+        }
         return s;
     }
 
@@ -166,6 +178,10 @@ struct ProcessHost::State {
             if (events) {
                 events->stop(); // every stream ends; clients resynchronize after restart
                 events.reset();
+            }
+            if (media) {
+                media->stop(); // responses in flight end at their next chunk
+                media.reset();
             }
             if (control) {
                 control->stop(); // no new requests; those in flight finish
@@ -197,6 +213,9 @@ struct ProcessHost::State {
                 catalog_executor->join();
             }
             downloads.reset();
+            media_access.reset();
+            tickets.reset();
+            file_access.reset();
             scheduler.reset();
             download_executor.reset();
             processing_executor.reset();
@@ -488,13 +507,67 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
         state->report.events_base_url = base_url(config.events, events_port.value(), config.public_urls.events_base);
     }
 
+    // Published files and their tickets (T19). The online proxy (media_proxy) is not built yet.
+    state->file_access = std::make_shared<application::media::FileAccessService>(
+        inst.publications, state->files, [raw = state.get()](const std::string& principal, const std::string& destination) {
+            for (const auto& d : raw->destinations) {
+                if (d.config.id == destination) {
+                    const auto& allowed = d.config.principals;
+                    return std::find(allowed.begin(), allowed.end(), principal) != allowed.end();
+                }
+            }
+            return false;
+        });
+    const auto per_owner_share = std::max<std::uint32_t>(1, config.handles.media_tickets / 4);
+    state->tickets = std::make_shared<application::media::MediaTicketService>(state->codec, clock,
+                                                                              config.handles.media_tickets, per_owner_share);
+    if (config.media.enabled) {
+        state->media = std::make_unique<media_server::MediaServer>(
+            media_server::MediaServerOptions{config.media, config.media_limits, config.media_stream, config.cors,
+                                             config.features.media_proxy},
+            media_server::MediaServerServices{
+                state->authenticator, state->file_access, state->tickets,
+                [identities = inst.identities](const std::string& owner, const std::string& token_id) {
+                    // Revoking the token or disabling the principal ends its tickets too.
+                    auto principal = identities->get_principal(owner);
+                    if (!principal || !principal->enabled) {
+                        return false;
+                    }
+                    auto tokens = identities->list_tokens(owner);
+                    return tokens && std::any_of(tokens->begin(), tokens->end(), [&](const auto& token) {
+                               return token.id == token_id && !token.revoked_at;
+                           });
+                },
+                [ids = inst.ids] { return ids->next("req_"); },
+                [raw = state.get()](const std::string& request_id, const std::string& method, const std::string& path,
+                                    int status, std::chrono::milliseconds elapsed) {
+                    raw->log.info("media.request", {{"request_id", request_id},
+                                                    {"method", method},
+                                                    {"path", path},
+                                                    {"status", status},
+                                                    {"elapsed_ms", static_cast<std::int64_t>(elapsed.count())}});
+                }});
+        auto media_port = state->media->bind();
+        if (!media_port) {
+            return fail(std::move(media_port).error(), "media_listener");
+        }
+        state->media->start();
+        state->report.media_base_url = base_url(config.media, media_port.value(), config.public_urls.media_base);
+    }
+    const bool file_access = state->media != nullptr && config.features.file_access;
+    state->media_access = std::make_shared<application::media::MediaAccessService>(
+        application::media::MediaFeatures{file_access, false, false}, state->report.media_base_url.value_or(""),
+        config.lifetimes.media_access, state->file_access, state->tickets, state->assets, clock);
+
     api::ControlApiOptions api_options{config.control, config.http, config.cors, config.catalog,
                                        config.download_limits, config.media_limits, {}};
     api_options.info.version = std::string{service_version};
     api_options.info.instance_id = state->report.instance_id;
-    // Search (T13), task queries (T14), SSE (T18) and download execution (T17) are served;
-    // files and media are declared once delivered.
+    // Search (T13), task queries (T14), SSE (T18), download execution (T17) and published
+    // files (T19) are served; the online media proxy and direct URLs are declared once delivered.
     api_options.info.features.search = true;
+    api_options.info.features.file_access = file_access;
+    api_options.info.media_base_url = state->report.media_base_url;
     api_options.info.features.downloads = true;
     api_options.info.features.progress_polling = true;
     api_options.info.features.progress_sse = state->events != nullptr;
@@ -519,7 +592,9 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
                                            {"status", status},
                                            {"elapsed_ms", static_cast<std::int64_t>(elapsed.count())}});
         },
-        std::make_shared<SchedulerPolicy>(state->scheduler)};
+        std::make_shared<SchedulerPolicy>(state->scheduler),
+        state->file_access,
+        state->media_access};
     state->control = std::make_unique<api::ControlApi>(std::move(api_options), std::move(services));
     state->control_workers = config.control.workers;
     auto port = state->control->bind();
@@ -534,7 +609,8 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
     state->scheduler->start();
     state->log.info("startup.ready", {{"instance_id", state->report.instance_id},
                                       {"api_base_url", state->report.api_base_url},
-                                      {"events_base_url", state->report.events_base_url.value_or("")}});
+                                      {"events_base_url", state->report.events_base_url.value_or("")},
+                                      {"media_base_url", state->report.media_base_url.value_or("")}});
     undo.state = nullptr;
     return std::unique_ptr<ProcessHost>{new ProcessHost(std::move(state))};
 }
