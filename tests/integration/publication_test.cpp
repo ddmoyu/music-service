@@ -227,10 +227,11 @@ TEST_CASE("publication never overwrites an unknown file or another reservation",
     CHECK(a.asset.relative_path == "歌手/Song (2).mp3");
     CHECK(read_bytes(p.at("歌手/Song.mp3")) == "someone else's file");
 
-    // Names held by assets count without regard to letter case, on every system.
+    // Names held by assets count without regard to letter case, on every system; files on
+    // disk follow the file system, so only an asset decides it here.
     const auto second = p.processing("2");
-    const auto b = test::unwrap(p.publish(second, "歌手/SONG.mp3", p.processed(second, "second")));
-    CHECK(b.asset.relative_path == "歌手/SONG (3).mp3");
+    const auto b = test::unwrap(p.publish(second, "歌手/SONG (2).mp3", p.processed(second, "second")));
+    CHECK(b.asset.relative_path == "歌手/SONG (2) (2).mp3");
     CHECK(read_bytes(p.at("歌手/Song (2).mp3")) == "first");
 
     // A file that appears after the reservation is not replaced either.

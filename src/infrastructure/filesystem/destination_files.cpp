@@ -25,6 +25,11 @@ domain::Error unavailable(const std::string& destination_id) {
                          "destination '" + destination_id + "' is not available", true, {}};
 }
 
+// A parent that is a file means the path cannot exist; Windows reports it as not found.
+bool absent(const std::error_code& ec) {
+    return ec == std::errc::no_such_file_or_directory || ec == std::errc::not_a_directory;
+}
+
 std::string hex(const unsigned char* data, std::size_t size) {
     static constexpr char digits[] = "0123456789abcdef";
     std::string out;
@@ -66,10 +71,10 @@ domain::Result<bool> LocalDestinationFiles::exists(const std::string& destinatio
     }
     std::error_code ec;
     const auto status = fs::symlink_status(path.value(), ec);
-    if (ec && ec != std::errc::no_such_file_or_directory) {
+    if (ec && !absent(ec)) {
         return file_error("inspect", path.value(), ec);
     }
-    return fs::exists(status);
+    return !ec && fs::exists(status);
 }
 
 domain::Result<std::optional<ports::FileFingerprint>>
@@ -80,7 +85,7 @@ LocalDestinationFiles::fingerprint(const std::string& destination_id, const std:
     }
     std::error_code ec;
     const auto status = fs::symlink_status(path.value(), ec);
-    if (ec == std::errc::no_such_file_or_directory || (!ec && !fs::exists(status))) {
+    if (absent(ec) || (!ec && !fs::exists(status))) {
         return std::optional<ports::FileFingerprint>{};
     }
     if (ec) {
