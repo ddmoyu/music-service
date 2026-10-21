@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <optional>
 #include <set>
 #include <utility>
 
@@ -35,6 +36,38 @@ constexpr std::string_view metadata_version = "metadata-v1";
 domain::Result<CreateResult> replay(ports::TaskRepository& tasks, const std::string& owner_id,
                                     const ports::StoredResponse& stored, const std::string& request_hash,
                                     const std::function<domain::Result<TaskView>(ports::TaskRecord)>& view_of);
+
+// The string value of "name": "..." in a stored response, if present.
+std::optional<std::string> string_field(const std::string& text, std::string_view name) {
+    const auto key = "\"" + std::string{name} + "\":\"";
+    const auto at = text.find(key);
+    const auto end = at == std::string::npos ? at : text.find('"', at + key.size());
+    if (end == std::string::npos) {
+        return std::nullopt;
+    }
+    return text.substr(at + key.size(), end - at - key.size());
+}
+
+// The strings of "name": ["...", ...] in a stored response, empty if absent.
+std::vector<std::string> string_list(const std::string& text, std::string_view name) {
+    std::vector<std::string> out;
+    const auto key = "\"" + std::string{name} + "\":[";
+    const auto at = text.find(key);
+    if (at == std::string::npos) {
+        return out;
+    }
+    const auto close = text.find(']', at + key.size());
+    auto open = text.find('"', at + key.size());
+    while (open < close) {
+        const auto end = text.find('"', open + 1);
+        if (end >= close) {
+            break;
+        }
+        out.push_back(text.substr(open + 1, end - open - 1));
+        open = text.find('"', end + 1);
+    }
+    return out;
+}
 
 // "lc1.<created_at ms>.<filter digest>.<task_id>": the position after the last item.
 std::string make_cursor(const ports::TaskRecord& last, std::string_view filter_digest) {
@@ -165,17 +198,21 @@ domain::Result<CreateResult> replay(ports::TaskRepository& tasks, const std::str
     if (stored.request_hash != request_hash) {
         return Error{ErrorCode::idempotency_conflict, "Idempotency-Key was used for a different request", false, {}};
     }
-    // {"task_id":"...","reused":bool}
+    // {"task_id":"...","reused":bool,"status":"..."}
     const auto& text = stored.response_json;
-    const auto key = std::string{"\"task_id\":\""};
-    const auto at = text.find(key);
-    const auto end = at == std::string::npos ? std::string::npos : text.find('"', at + key.size());
-    if (end == std::string::npos) {
+    const auto task_id = string_field(text, "task_id");
+    if (!task_id) {
         return Error{ErrorCode::internal, "stored response is invalid", false, {}};
     }
-    auto task = tasks.get(owner_id, text.substr(at + key.size(), end - at - key.size()));
+    auto task = tasks.get(owner_id, *task_id);
     if (!task) {
         return std::move(task).error();
+    }
+    // The first response stands; the current state is read with GET.
+    if (const auto status = string_field(text, "status")) {
+        if (auto first = domain::parse_task_status(*status); first) {
+            task->status = first.value();
+        }
     }
     auto view = view_of(std::move(task).value());
     if (!view) {
@@ -228,9 +265,6 @@ domain::Result<BatchResult> DownloadService::create_batch(const std::string& own
     if (auto valid = check_idempotency_key(idempotency_key); !valid) {
         return valid.error();
     }
-    if (items.empty() || items.size() > max_batch_items_) {
-        return Error::validation("items", "must hold 1 to " + std::to_string(max_batch_items_) + " downloads");
-    }
     const auto to_result = [this](ports::BatchOutcome outcome) -> domain::Result<BatchResult> {
         BatchResult result;
         result.batch_id = outcome.batch.batch_id;
@@ -258,17 +292,15 @@ domain::Result<BatchResult> DownloadService::create_batch(const std::string& own
     }
 
     if (stored.value()) {
-        // The first outcome stands, even if today's checks would refuse an item:
-        // {"batch_id":"...","reused":[true,false,...]}.
+        // The first outcome stands, even if today's checks or limits would refuse it:
+        // {"batch_id":"...","reused":[true,false,...],"status":["queued",...]}.
         const auto& text = stored.value()->response_json;
-        const std::string id_key = "\"batch_id\":\"";
-        const auto at = text.find(id_key);
-        const auto end_at = at == std::string::npos ? at : text.find('"', at + id_key.size());
+        const auto batch_id = string_field(text, "batch_id");
         const auto list_at = text.find("\"reused\":[");
-        if (end_at == std::string::npos || list_at == std::string::npos) {
+        if (!batch_id || list_at == std::string::npos) {
             return Error{ErrorCode::internal, "stored response is invalid", false, {}};
         }
-        auto batch = tasks_->get_batch(owner_id, text.substr(at + id_key.size(), end_at - at - id_key.size()));
+        auto batch = tasks_->get_batch(owner_id, *batch_id);
         if (!batch) {
             return std::move(batch).error();
         }
@@ -277,7 +309,20 @@ domain::Result<BatchResult> DownloadService::create_batch(const std::string& own
              i = text.find_first_of("tf", i + 4)) {
             reused.push_back(text[i] == 't');
         }
+        // Records written before the statuses were kept show the current ones.
+        if (const auto statuses = string_list(text, "status"); statuses.size() == batch->items.size()) {
+            for (std::size_t i = 0; i < statuses.size(); ++i) {
+                if (auto first = domain::parse_task_status(statuses[i]); first) {
+                    batch->items[i].status = first.value();
+                }
+            }
+        }
         return to_result(ports::BatchOutcome{std::move(batch).value(), std::move(reused), true});
+    }
+
+    // Only a new request is held to today's batch limit.
+    if (items.empty() || items.size() > max_batch_items_) {
+        return Error::validation("items", "must hold 1 to " + std::to_string(max_batch_items_) + " downloads");
     }
 
     // All items are checked; the first failure decides the status, all are listed.

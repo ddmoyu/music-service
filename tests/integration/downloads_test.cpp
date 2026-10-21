@@ -168,6 +168,13 @@ TEST_CASE("idempotency keys replay the first outcome without redoing the checks"
     CHECK(replay.status_code == 202);
     CHECK(replay.view.task.task_id == first.view.task.task_id);
     CHECK(total_tasks(d, d.owner) == 1);
+    // The replay is the first response: queued, though the task is canceled by now.
+    REQUIRE(d.service->cancel(d.owner, first.view.task.task_id));
+    const auto after_cancel = d.create(request, 1);
+    CHECK(after_cancel.replayed);
+    CHECK(after_cancel.status_code == 202);
+    CHECK(after_cancel.view.task.status == TaskStatus::queued);
+    CHECK(unwrap(d.service->get(d.owner, first.view.task.task_id)).task.status == TaskStatus::canceled);
 
     // A02: the same key with another request is a conflict with no side effect.
     CHECK(d.create_error(request, 1, "other").code == ErrorCode::idempotency_conflict);
@@ -380,12 +387,16 @@ TEST_CASE("retry creates a new task from the stored intent", "[downloads]") {
     const auto replay = unwrap(d.service->retry(d.owner, original.view.task.task_id, d.key(2), "retry"));
     CHECK(replay.replayed);
     CHECK(replay.view.task.task_id == retried.view.task.task_id);
+    CHECK(replay.view.task.status == TaskStatus::queued);
     // The retried intent is active: a second retry is a duplicate.
     CHECK(d.service->retry(d.owner, original.view.task.task_id, d.key(3), "retry").error().code ==
           ErrorCode::active_duplicate);
 
     // Retrying needs the bound account to still be usable; no other account is chosen.
     REQUIRE(d.service->cancel(d.owner, retried.view.task.task_id));
+    const auto canceled_replay = unwrap(d.service->retry(d.owner, original.view.task.task_id, d.key(2), "retry"));
+    CHECK(canceled_replay.replayed);
+    CHECK(canceled_replay.view.task.status == TaskStatus::queued);
     REQUIRE(d.credentials->revoke(d.owner, cookie));
     CHECK(d.service->retry(d.owner, original.view.task.task_id, d.key(4), "retry").error().code ==
           ErrorCode::credentials_required);
@@ -492,6 +503,34 @@ TEST_CASE("batches are all or nothing and keep their items", "[downloads]") {
     for (const auto& item : canceled.accepted) {
         CHECK(item.task.status == TaskStatus::canceled);
     }
+    // The replay still answers with the first statuses.
+    const auto replay_after_cancel = unwrap(d.service->create_batch(d.owner, items, d.key(2), "batch"));
+    CHECK(replay_after_cancel.replayed);
+    CHECK(replay_after_cancel.status_code == 202);
+    REQUIRE(replay_after_cancel.items.size() == 3);
+    for (std::size_t i = 0; i < 3; ++i) {
+        CHECK(replay_after_cancel.items[i].task.status == batch.items[i].task.status);
+    }
+    CHECK(replay_after_cancel.items[0].task.status == TaskStatus::queued);
+}
+
+TEST_CASE("a lowered batch limit still replays committed batches", "[downloads]") {
+    Downloads d{"batch-limit"};
+    const std::vector<DownloadRequest> items{d.request("both", "1"), d.request("both", "2")};
+    const auto batch = unwrap(d.service->create_batch(d.owner, items, d.key(1), "two"));
+    CHECK(batch.created_count == 2);
+
+    // download_limits.max_batch_items lowered from 3 to 1 after the commit.
+    DownloadService narrow{d.tasks, d.registry, d.credentials, {{"dst_main", "/music/dst_main", {d.owner}, true}},
+                           {}, {}, 1};
+    const auto replay = unwrap(narrow.create_batch(d.owner, items, d.key(1), "two"));
+    CHECK(replay.replayed);
+    CHECK(replay.batch_id == batch.batch_id);
+    CHECK(replay.status_code == 202);
+    CHECK(narrow.create_batch(d.owner, items, d.key(1), "other").error().code == ErrorCode::idempotency_conflict);
+    // A new request is held to today's limit.
+    CHECK(narrow.create_batch(d.owner, items, d.key(2), "two").error().code == ErrorCode::validation_failed);
+    CHECK(total_tasks(d, d.owner) == 2);
 }
 
 TEST_CASE("a batch over the quota stores nothing", "[downloads]") {

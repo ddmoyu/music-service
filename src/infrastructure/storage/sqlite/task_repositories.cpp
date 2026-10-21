@@ -245,6 +245,19 @@ namespace {
 
 constexpr std::string_view batch_route = "/api/v1/download-batches";
 
+// A replayed batch shows each item as first answered; records written before the
+// statuses were kept show the current ones.
+void restore_statuses(ports::BatchRecord& batch, const std::vector<std::string>& statuses) {
+    if (statuses.size() != batch.items.size()) {
+        return;
+    }
+    for (std::size_t i = 0; i < statuses.size(); ++i) {
+        if (auto first = domain::parse_task_status(statuses[i]); first) {
+            batch.items[i].status = first.value();
+        }
+    }
+}
+
 domain::Result<std::optional<ports::StoredResponse>>
 lookup_idempotency(Connection& db, const std::string& owner, std::string_view route, const std::string& key,
                    std::int64_t now) {
@@ -518,6 +531,10 @@ SqliteTaskRepository::create(const ports::CreateTaskCommand& command) {
             if (!task) {
                 return std::move(task).error();
             }
+            // The first response stands; the current state is read with GET.
+            if (auto first = domain::parse_task_status(response.value("status", std::string{})); first) {
+                task->status = first.value();
+            }
             return ports::CreateTaskOutcome{std::move(task).value(), response.value("reused", false), true};
         }
 
@@ -525,7 +542,9 @@ SqliteTaskRepository::create(const ports::CreateTaskCommand& command) {
         if (!outcome) {
             return outcome;
         }
-        const nlohmann::json response{{"task_id", outcome->task.task_id}, {"reused", outcome->reused}};
+        const nlohmann::json response{{"task_id", outcome->task.task_id},
+                                      {"reused", outcome->reused},
+                                      {"status", domain::to_string(outcome->task.status)}};
         if (auto remembered = remember_response(db, owner, command.route, command.idempotency_key, command.request_hash,
                                                 outcome->reused ? 200 : 202, response, now, expires);
             !remembered) {
@@ -575,11 +594,13 @@ domain::Result<ports::BatchOutcome> SqliteTaskRepository::create_batch(const por
             if (!batch) {
                 return std::move(batch).error();
             }
+            restore_statuses(*batch, response.value("status", std::vector<std::string>{}));
             return ports::BatchOutcome{std::move(batch).value(), response["reused"].get<std::vector<bool>>(), true};
         }
 
         std::vector<std::string> task_ids;
         std::vector<bool> reused;
+        std::vector<std::string> statuses;
         std::uint32_t created = 0;
         for (std::size_t i = 0; i < command.items.size(); ++i) {
             const auto& item = command.items[i];
@@ -593,6 +614,7 @@ domain::Result<ports::BatchOutcome> SqliteTaskRepository::create_batch(const por
             }
             task_ids.push_back(outcome->task.task_id);
             reused.push_back(outcome->reused);
+            statuses.emplace_back(domain::to_string(outcome->task.status));
             created += outcome->reused ? 0U : 1U;
         }
         const auto reused_count = static_cast<std::uint32_t>(task_ids.size()) - created;
@@ -616,7 +638,7 @@ domain::Result<ports::BatchOutcome> SqliteTaskRepository::create_batch(const por
                 return done.error();
             }
         }
-        const nlohmann::json response{{"batch_id", batch_id}, {"reused", reused}};
+        const nlohmann::json response{{"batch_id", batch_id}, {"reused", reused}, {"status", statuses}};
         if (auto remembered = remember_response(db, owner, batch_route, command.idempotency_key, command.request_hash,
                                                 created > 0 ? 202 : 200, response, now, expires);
             !remembered) {
