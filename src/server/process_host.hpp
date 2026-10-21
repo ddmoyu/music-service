@@ -2,6 +2,7 @@
 
 #include "application/config/service_config.hpp"
 #include "application/ports/providers/bundle.hpp"
+#include "application/ports/transport/http_transport.hpp"
 #include "domain/result.hpp"
 #include "infrastructure/observability/logger.hpp"
 
@@ -30,6 +31,9 @@ struct HostOptions {
     // Start with claiming paused, as admin/download-policy would set it right away; tasks
     // are accepted and queued but not run until the policy is resumed.
     bool downloads_paused{false};
+    // The upstream HTTP transport behind admission; the HTTPS transport when empty.
+    // Lets gate tests run the real platform packages against recorded answers.
+    std::shared_ptr<application::ports::HttpTransport> transport;
 };
 
 // The serving process (configuration-and-deployment.md, 启动与退出). start() runs the

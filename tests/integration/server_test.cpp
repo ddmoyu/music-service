@@ -159,7 +159,10 @@ TEST_CASE("the service serves the control API and stops in order", "[server]") {
         CHECK(info_body["data"]["service"] == "music-service");
         CHECK(info_body["data"]["instance_id"] == service.report.instance_id);
         CHECK(info_body["data"]["features"]["downloads"] == true);    // executed since T17
-        CHECK(info_body["data"]["features"]["file_access"] == false); // nothing undelivered is declared
+        CHECK(info_body["data"]["features"]["file_access"] == true);  // on by default since T20
+        CHECK(info_body["data"]["features"]["progress_sse"] == true);
+        CHECK(info_body["data"]["media_base_url"] == *service.report.media_base_url);
+        CHECK(info_body["data"]["events_base_url"] == *service.report.events_base_url);
         CHECK(admin.Get("/api/v1/info", httplib::Headers{{"X-Request-Id", "bad id!"}})->get_header_value("X-Request-Id").rfind("req_", 0) == 0);
 
         // Scopes.

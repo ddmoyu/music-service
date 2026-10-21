@@ -58,6 +58,8 @@ struct Deployment {
         config = {{"config_version", 1},
                   {"data_dir", infrastructure::filesystem::path_to_utf8(dir / "data")},
                   {"control", {{"port", 0}}},
+                  {"media", {{"port", 0}}},
+                  {"events", {{"port", 0}}},
                   {"cors", {{"allowed_origins", {"http://127.0.0.1:5173"}}}},
                   {"destinations",
                    {{{"id", "dst_main"}, {"name", "主目录"}, {"root", infrastructure::filesystem::path_to_utf8(dir / "下载")}, {"principals", {"prn_local"}}}}}};
@@ -105,7 +107,7 @@ struct Deployment {
 struct RunningService {
     RunningService(Deployment& deployment, std::shared_ptr<infrastructure::observability::MemorySink> sink,
                    std::optional<std::vector<ports::ProviderBundle>> bundles = std::nullopt,
-                   bool downloads_paused = false)
+                   bool downloads_paused = false, std::shared_ptr<ports::HttpTransport> transport = nullptr)
         : deployment_(deployment) {
         std::promise<server::StartupReport> ready;
         auto started = ready.get_future();
@@ -115,6 +117,7 @@ struct RunningService {
         hooks.host.log_sink = std::move(sink);
         hooks.host.bundles = std::move(bundles);
         hooks.host.downloads_paused = downloads_paused;
+        hooks.host.transport = std::move(transport);
         thread_ = std::thread([this, hooks = std::move(hooks)]() mutable {
             result_ = deployment_.run({"serve"}, std::move(hooks));
         });

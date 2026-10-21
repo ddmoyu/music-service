@@ -407,7 +407,7 @@ int cmd_serve(const cfg::ServiceConfig& config, const Console& console, CommandH
     nlohmann::json line{{"event", "ready"},
                         {"instance_id", report.instance_id},
                         {"api_base_url", report.api_base_url},
-                        {"media_base_url", nullptr},
+                        {"media_base_url", report.media_base_url ? nlohmann::json(*report.media_base_url) : nullptr},
                         {"events_base_url", report.events_base_url ? nlohmann::json(*report.events_base_url) : nullptr}};
     console.out << line.dump() << std::endl;
     if (hooks.on_ready) {

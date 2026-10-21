@@ -82,6 +82,7 @@ add_executable(music_service_integration_tests
     integration/catalog_test.cpp
     integration/downloads_test.cpp
     integration/events_test.cpp
+    integration/kuwo_gate_test.cpp
     integration/media_test.cpp
     integration/publication_test.cpp
     integration/runner_test.cpp

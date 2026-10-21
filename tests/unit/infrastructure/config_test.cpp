@@ -71,6 +71,32 @@ TEST_CASE("defaults apply without a configuration file", "[config]") {
     CHECK_FALSE(config->config_file.has_value());
 }
 
+TEST_CASE("the file and event outlets are on by default once the build has them", "[config]") {
+    const auto config = load_service_config(options({}, full_build()));
+    REQUIRE(config);
+    CHECK(config->media.enabled);
+    CHECK(config->media.port == 17633);
+    CHECK(config->events.enabled);
+    CHECK(config->features.file_access);
+    CHECK_FALSE(config->features.media_proxy);
+
+    const auto off = load(R"({"media": {"enabled": false}, "events": {"enabled": false},
+                              "features": {"file_access": false}})",
+                          options({}, full_build()));
+    REQUIRE(off);
+    CHECK_FALSE(off->media.enabled);
+    CHECK_FALSE(off->events.enabled);
+    CHECK_FALSE(off->features.file_access);
+    // Unless set, file access follows the media listener.
+    const auto media_off = load(R"({"media": {"enabled": false}})", options({}, full_build()));
+    REQUIRE(media_off);
+    CHECK_FALSE(media_off->features.file_access);
+    const auto contradicting =
+        load(R"({"media": {"enabled": false}, "features": {"file_access": true}})", options({}, full_build()));
+    REQUIRE_FALSE(contradicting);
+    CHECK(has_problem(contradicting.error(), "/features"));
+}
+
 TEST_CASE("relative paths in the file resolve against the file's directory", "[config]") {
     const auto config = load(R"({
         "data_dir": "./state",

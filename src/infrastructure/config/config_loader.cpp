@@ -593,6 +593,10 @@ domain::Result<cfg::ServiceConfig> load(const std::optional<std::string>& text,
     const auto base = file ? file->parent_path() : options.working_directory;
     config.data_dir = resolve(base, "data");
     config.config_file = file;
+    // The download loop's file and event outlets are on by default once the build has them.
+    config.media.enabled = options.build.media_server;
+    config.events.enabled = options.build.event_server;
+    bool file_access_given = false;
 
     if (text) {
         std::string_view body{*text};
@@ -604,6 +608,12 @@ domain::Result<cfg::ServiceConfig> load(const std::optional<std::string>& text,
             return invalid({{"config_file", "is not valid JSON"}});
         }
         read_document(reader, doc, base, config);
+        const auto features = doc.find("features");
+        file_access_given = features != doc.end() && features->is_object() && features->contains("file_access");
+    }
+    // Unless set, file access follows the media listener it is served on.
+    if (!file_access_given) {
+        config.features.file_access = config.media.enabled;
     }
 
     apply_environment(reader, options, config);

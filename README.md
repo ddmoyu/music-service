@@ -4,7 +4,7 @@
 
 命名约定：项目与仓库名为 `music-service`；CMake 项目与库目标前缀为 `music_service`，C++ 命名空间为 `music_service`，服务可执行程序为 `music-service`，环境变量前缀为 `MUSIC_SERVICE_`，`/api/v1/info` 的 service 字段为 `music-service`。
 
-当前已接通酷我搜索、持久下载执行与已完成文件访问，T17／T19 的验收状态和 T20 端到端关口进度以[开发任务](docs/design/cpp20-refactor/development-tasks.md)中的最新实施记录为准。
+当前已接通酷我闭环：搜索、详情与解析，持久下载与重启恢复，SSE 与 HTTP 进度，已完成文件与媒体票据；媒体与事件监听默认启用。S1 关口（T20）的验收状态以[开发任务](docs/design/cpp20-refactor/development-tasks.md)中的最新实施记录为准。
 
 ## 目录结构
 

@@ -32,7 +32,7 @@ COPY --from=build /src/out/build/linux-gcc-release/src/server/music-service /usr
 COPY packaging/docker/config.json /etc/music-service/config.json
 USER music-service
 VOLUME ["/data", "/downloads"]
-EXPOSE 17632
+EXPOSE 17632 17633 17634
 # exec form: the service is PID 1 and receives SIGTERM from docker stop directly.
 ENTRYPOINT ["/usr/local/bin/music-service", "--config", "/etc/music-service/config.json"]
 CMD ["serve"]

@@ -18,7 +18,7 @@
 | --- | --- |
 | 顶层 | `config_version`（只能为 1）、`data_dir`、`destinations`、`providers`、`app_profiles`（当前只接受空对象，T24 启用） |
 | `control` | `host`、`port`、`workers`、`connection_queue` |
-| `media`、`events` | `enabled`、`host`、`port`、`workers`、`connection_queue`（events 当前默认关闭，启用后 info 声明 progress_sse 与 events_base_url；media 当前默认关闭，启用并开启 features.file_access 后 info 声明 file_access 与 media_base_url） |
+| `media`、`events` | `enabled`、`host`、`port`、`workers`、`connection_queue`（构建包含媒体与 SSE 模块时两者默认启用，分别监听 17633 与 17634；info 声明 file_access／media_base_url 与 progress_sse／events_base_url，关闭时如实声明降级） |
 | `event_limits` | `global_subscriptions`、`per_principal_subscriptions`、`max_queued_events`、`max_queued_bytes`、`max_event_bytes` |
 | `event_stream` | `progress_interval_ms`、`heartbeat_seconds`、`write_idle_seconds`、`max_connection_seconds` |
 | `public_urls` | `api_base`、`media_base`、`events_base` |
@@ -46,7 +46,7 @@
 | `handles` | `contexts`、`cursors`、`assets`、`matches`、`media_tickets`、`total_bytes` |
 | `shutdown` | `soft_seconds` |
 | `filesystem` | `failed_work_retention_hours` |
-| `features` | `file_access`、`media_proxy`、`direct_media_urls`、`automatic_fallback`、`transcoding` |
+| `features` | `file_access`（未设置时跟随 media.enabled）、`media_proxy`、`direct_media_urls`、`automatic_fallback`、`transcoding` |
 | `logging` | `format`（json／text）、`level`（trace／debug／info／warn／error） |
 | `destinations[]` | `id`、`name`、`root`、`principals`、`accept_new_tasks` |
 

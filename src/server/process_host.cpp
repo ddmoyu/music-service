@@ -97,7 +97,7 @@ struct ProcessHost::State {
     std::shared_ptr<infrastructure::filesystem::LocalDestinationFiles> files;
     std::shared_ptr<const providers::ProviderRegistry> registry;
     std::shared_ptr<runtime::AdmissionLedger> admission;
-    std::shared_ptr<infrastructure::transport::HttplibTransport> transport;
+    std::shared_ptr<application::ports::HttpTransport> transport;
     std::shared_ptr<application::transport::UpstreamClient> upstream;
     std::shared_ptr<runtime::BoundedExecutor> catalog_executor;
     std::shared_ptr<application::catalog::CatalogService> catalog;
@@ -369,15 +369,19 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
     }
 
     state->admission = std::make_shared<runtime::AdmissionLedger>(admission_limits(config), clock);
-    infrastructure::transport::HttplibTransportOptions transport_options;
-    transport_options.connect_timeout = config.upstream.connect_timeout;
-    transport_options.max_response_bytes = static_cast<std::size_t>(config.upstream.max_response_bytes);
-    transport_options.redirect_max = config.upstream.redirect_max;
-    auto transport = infrastructure::transport::HttplibTransport::create(transport_options);
-    if (!transport) {
-        return fail(std::move(transport).error(), "transport");
+    if (options.transport) {
+        state->transport = std::move(options.transport);
+    } else {
+        infrastructure::transport::HttplibTransportOptions transport_options;
+        transport_options.connect_timeout = config.upstream.connect_timeout;
+        transport_options.max_response_bytes = static_cast<std::size_t>(config.upstream.max_response_bytes);
+        transport_options.redirect_max = config.upstream.redirect_max;
+        auto transport = infrastructure::transport::HttplibTransport::create(transport_options);
+        if (!transport) {
+            return fail(std::move(transport).error(), "transport");
+        }
+        state->transport = std::move(transport).value();
     }
-    state->transport = std::move(transport).value();
     state->upstream = std::make_shared<application::transport::UpstreamClient>(state->admission, state->transport, clock);
 
     auto registry = providers::ProviderRegistry::build(

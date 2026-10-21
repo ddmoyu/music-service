@@ -2,7 +2,13 @@
   "config_version": 1,
   "data_dir": "/data",
   "control": {"host": "0.0.0.0", "port": 17632},
-  "public_urls": {"api_base": "http://127.0.0.1:17632"},
+  "media": {"host": "0.0.0.0", "port": 17633},
+  "events": {"host": "0.0.0.0", "port": 17634},
+  "public_urls": {
+    "api_base": "http://127.0.0.1:17632",
+    "media_base": "http://127.0.0.1:17633",
+    "events_base": "http://127.0.0.1:17634"
+  },
   "destinations": [
     {"id": "dst_default", "name": "downloads", "root": "/downloads", "principals": ["prn_local"]}
   ],

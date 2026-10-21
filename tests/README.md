@@ -4,6 +4,6 @@
 
 - dependencies：固定依赖的版本与基本可用性（JSON、SQLite、本机回环 HTTP、Mbed TLS 客户端构造），不含业务行为。
 - unit：领域规则（品质、身份、状态迁移、下载意图与指纹）与应用端口替身；后续加入请求签名向量和响应解析。
-- integration：SQLite 存储（迁移、单 writer、身份与凭证、目录绑定、任务与发布）；后续加入可控上游、文件、取消与恢复。
+- integration：SQLite 存储（迁移、单 writer、身份与凭证、目录绑定、任务与发布）、本机 HTTP(S) 上游、下载执行、SSE 与媒体入口；`kuwo_gate_test.cpp` 是 S1 关口（`[gate]`）：真实进程与真实酷我协议包，上游由录制样本和合成 MP3 的 CDN 应答，覆盖搜索到文件取回、客户端保存失败、重启、取消与停机续传。在线版本见 `packaging/e2e/kuwo_e2e.py`。
 - contract：公共 API、平台能力和扩展契约。
 - fixtures/providers：按平台与上下文版本组织的去凭证样本。

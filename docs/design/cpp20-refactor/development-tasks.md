@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-21。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T16、T18 **已完成**，T17、T19 **待验收**（Linux CI 待运行），S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-21。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T19 **已完成**，T20 **待验收**（Linux 与容器 CI 待运行），S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,7 +262,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-下一项为 **T20**（S1 酷我端到端关口），T17、T19 在 Linux CI 通过后转为已完成。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+T20（S1 酷我端到端关口）在 Linux 与容器 CI 通过后转为已完成，S1 随之通过；之后按阶段顺序进入 T21 与 S3 的 T29／T30。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
@@ -448,7 +448,19 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 | Linux 证据（CI 运行 39525823045、39526810353） | ubuntu-24.04，GCC 13.3.0：205/205 通过，Windows 与容器任务同时通过。首次运行在测试替身 mock_providers.hpp 中有 4 条 -Wmissing-field-initializers（ResolvedAudio 新字段未初始化），由 23c2271 修复后复跑 0 条项目警告 |
 | 已知限制 | 只验证 MP3（酷我标准品质的实际容器）；FLAC／M4A／Ogg／WAV／ADTS 的结构验证、标签写入与解密归 T30 及具体平台；不做完整解码证明；整曲判定依赖平台声明时长；处理器由 T17 的 Runner 在 processing 阶段调用，结果写入任务记录后才参与已完成结果复用的证据复核 |
 
-### T19 已完成文件访问与票据：待验收（2026-10-21，Windows 通过，Linux CI 待运行）
+### T20 S1 酷我端到端关口：待验收（2026-10-21，Windows 通过，Linux 与容器 CI 待运行）
+
+| 项目 | 记录 |
+| --- | --- |
+| 交付 | 下载闭环的出口默认启用：media 与 events 的缺省值跟随构建（构建含媒体与 SSE 模块即启用，监听 17633／17634），features.file_access 未设置时跟随 media.enabled；容器配置让三个监听都在 0.0.0.0 并给出同号 public_urls，镜像 EXPOSE 17632～17634。HostOptions 增加 transport，关口测试据此把真实酷我协议包接到录制应答上。修正 serve 在 stdout 输出的 ready 行把 media_base_url 固定写成 null（T19 遗留，日志中的 startup.ready 正确）。`tests/integration/kuwo_gate_test.cpp`（`[gate]`）：真实 music-service 进程＋真实酷我包，上游为 T12 样本（搜索、歌曲页、mobi.s、缺失歌曲）与按强 ETag／单段 Range 应答的 CDN（合成 176 秒 MP3，可在首块后挂起）；SSE 客户端移入共享的 `sse_client.hpp`。`packaging/e2e/kuwo_e2e.py`：仅用 Python 标准库的在线闭环，自带进程或附着到已运行服务；`packaging/docker/e2e.sh` 用它验证容器。CI 的 Windows、Linux、macOS 与容器任务各增加一步在线闭环（允许失败） |
+| 闭环（离线关口，三项用例） | ① 订阅 SSE 收到 stream.ready → 搜索“晴天”3 条含 rid 78932517 → 详情（不存在的 rid 为 404）→ resolve 为 standard／mp3／128000 bit/s／full → 创建连接关闭后任务在后台执行 → SSE 只按版本前进直到 completed → HTTP 快照含 actual_track、actual_quality、file_id 与 links.file，attempt=1，工作目录已清理，发布文件「歌手 - 晴天.mp3」与 CDN 字节一致 → 文件元数据与任务响应不含目标根路径或工作目录名 → 票据 Range 206 与 Content-Range → 客户端读取 64 KiB 后断开（A29），任务仍 completed、媒体响应额度归零、随后完整读取一致 → 上游请求全部为 HTTPS、只到 www／mobi／kw-lv.kuwo.cn、无秘密头，CDN 只请求一次 → 停止后离线新建另一 principal → 重启为新 instance_id，任务与文件仍在，旧票据 404、新票据可读，他人的任务、文件与列表均不可见 → 首个 key 重放 202 且 Idempotency-Replayed、新 key 200 reused、未再次下载。② 传输挂起时取消：202 canceling → canceled，SSE 依次出现 canceling 与 canceled，无工作目录、目标根内无任何文件；下一任务传输中停止服务（soft 1 秒）退出码 0，stdout 的 ready 行列出三个地址；重启后以 Range（非 0 起点）＋If-Range 强 ETag 续传，attempt 仍为 1，经票据读回完整文件。③ 关闭 SSE：info 声明 progress_sse=false、progress_polling=true，仅用 HTTP 创建、轮询、列表与取文件 |
+| 在线闭环（2026-10-21，Windows，中国大陆网络，匿名） | 调试构建 `python -I packaging/e2e/kuwo_e2e.py --binary …music-service.exe`，2.9 秒全部通过：搜索“晴天”10 条；详情与 resolve 为 standard、full、mp3、128000 bit/s；202 创建，SSE 依次 queued → resolving → downloading → processing → finalizing → completed，版本单调；文件 2,829,338 字节、audio/mpeg、ETag "sha256-23b445c0…"，票据 Range 206、完整读取与发布文件 SHA-256 一致（23b445c0…6a9e89）；客户端保存中途断开后任务仍 completed；force 第二次下载在 downloading 时取消，202 → canceled、无结果；进程被强制结束后重启为新实例，任务、文件、重放与复用均正确，旧票据 404 |
+| 覆盖的验收（T20 复验） | A01（重启后同 key 重放首个结果）；A04（创建连接关闭后完成）；A06／A23（另一 principal 的任务、文件与列表 404／为空，响应无路径）；A09～A11（SSE 版本只前进，终态以 HTTP 取得）；A12（传输中取消得到 canceled 且不发布；在线竞争得到一致的单一结果）；A21（重启后新实例，持久状态经 HTTP 同步，无重复任务）；A24 本地文件（票据 Range、断开后额度归还）；A27（停机保留检查点，重启以校验器续传且不计尝试）；A28（无 SSE 的完整操作）；A29（客户端保存失败与后端任务分离）；A32 票据部分（票据不跨重启，重新 media-access 即可）；A33（media_proxy 关闭时文件照常读取）；A46（重启后复用完成结果，不再下载） |
+| Windows 证据（2026-10-21） | Windows 11 Pro 10.0.26200 x64，MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 264 项中 261 通过、3 项在线用例按设计跳过；`[gate]` 在最终代码上连续 5 次通过；`smoke.ps1` 通过（ready 行含 media／events 地址）；GCC 16.2 在 -O2 严格警告下检查改动的源码与测试（依赖作系统头）0 条项目警告 |
+| Linux 与容器证据 | 待 CI 运行（离线关口随 ctest 运行，在线闭环步骤允许失败）；通过后补记运行号，T20 与 S1 改为已完成 |
+| 已知限制 | 映射表中归 T20 的其余复验没有在关口里重新组合，仍由各自主责任务的用例在三平台 CI 中覆盖：A02／A03（T14）、A07／A08（T18）、A17／A19 失败路径／A20（T16、T17）、A22／A25／A26／A43／A44（T17）、A35～A37（T14）、A49（T10、T14）、A50（T17）；酷我标准品质没有凭证，A38／A39／A47 的凭证隔离与默认账号切换无法在酷我上实测，仍只有 T08／T13 的替身用例；Windows 上在线闭环的重启是强制结束（无控制台信号），优雅停机由离线关口与 Linux／容器的 SIGTERM 覆盖；本机没有 Docker，容器在线闭环只在 CI 运行，海外运行器可能被酷我按地区拒绝，因此在线结果单独记录、不作为必需检查；macOS 不在 S1 关口范围；标签写入、匹配与自动换源仍未上线，关口不把替身行为记成能力 |
+
+### T19 已完成文件访问与票据：已完成（2026-10-21，提交 013b5be）
 
 | 项目 | 记录 |
 | --- | --- |
@@ -457,10 +469,10 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 | 覆盖的验收 | A23（其他 principal 的 file_id 在元数据、media-access 与媒体路由均为 404；未知与过期票据分别为 404 与 410 MEDIA_TICKET_EXPIRED（单元用例）；响应与日志不含路径和票据）；A24 的本地文件部分（206／416／多段／If-Range／If-None-Match／HEAD；同一 principal 额度为 1 时第二个请求 429，客户端中途断开后额度归还、随后请求成功）；A32 的票据部分（票据过期只需重新 media-access，期限不超过申请值；票据只读其目标文件）；A33（media_proxy 关闭时 asset 访问为 501，已完成文件照常读取）。另覆盖文件被移走或改写转 FILE_MISSING 且复制回去不复活、completed 任务的 links.file、ticket 的总量与每 owner 上限 |
 | 真实样本（2026-10-21，Windows，匿名） | 调试构建的 music-service（media 与 file_access 启用）：下载酷我 rid 78932517 后，`GET /api/v1/files/{id}` 返回 2,829,338 字节、audio/mpeg、无路径；media-access 签发的票据 URL 以 `Range: bytes=0-15` 返回 206 与 `Content-Range: bytes 0-15/2829338`（ID3 头），完整读取与发布文件逐字节一致；服务日志中不出现票据 |
 | Windows 证据（2026-10-21） | MSVC 19.51 /W4：0 条项目警告；`ctest` 260 项中 257 通过、3 项在线用例按设计跳过；媒体用例连续 5 次通过；GCC 16.2 在 -O2 严格警告下检查新增与改动的源码（含媒体与控制入口）0 条项目警告 |
-| Linux 证据 | 待 CI 运行；通过后补记运行号并改为已完成 |
+| Linux 证据（CI 运行 39573491570） | ubuntu-24.04，GCC 13.3.0，glibc 2.39：0 条项目警告，260/260 通过；Windows 与容器任务同时通过 |
 | 已知限制 | 未知 Range 单位或语法错误的 Range 由 cpp-httplib 在路由前以 416 拒绝，与 API「忽略未知单位」不同，尚无法在入口内覆盖；media 监听与 file_access 仍默认关闭，T20 随下载闭环启用；在线 asset 代理与直链（T34）未实现，asset 访问返回 501；token 撤销与 principal 停用只能离线执行，运行中的票据撤销路径只有代码检查、没有端到端用例；票据只在内存中，重启后需重新 media-access；资产 missing 只在读取时懒检查，没有后台扫描 |
 
-### T17 持久调度与最小下载执行：待验收（2026-10-21，Windows 通过，Linux CI 待运行）
+### T17 持久调度与最小下载执行：已完成（2026-10-21，提交 fe6155c）
 
 | 项目 | 记录 |
 | --- | --- |
@@ -469,7 +481,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 | 覆盖的验收 | A04（真实服务：HTTP 创建后客户端断开，后台完成并可单独查询）；A22（旧执行的检查点在新领取后被拒）；A25（无 Content-Length 时进度不伪造总量）；A26（尝试耗尽为 failed；暂停计入绝对截止，到期为 REQUEST_DEADLINE_EXCEEDED；deadline 在暂停、重新领取与重试后不变）；A27（停机时停止领取、等待后要求停止，检查点保留 16 KiB 已刷写字节，下次以 Range 续传得到完整文件）；A43（来源达到下载额度时持久延后并归还执行槽，账本无残留租约；冷却来源的任务不被领取、其他来源照常推进）；A44（两次 admission 延后 attempt 保持 1、execution_id 改变，随后真实 503 结束尝试，下一次为 attempt 2）。另覆盖完整下载与发布、同名换候选名、传输中断续传、200 覆盖部分文件、HTML 正文不发布、principal 轮转、暂停不领取、取消停止传输并清理、崩溃遗留的运行中任务按阶段重新排队，以及 admin/download-policy 的权限、校验与 admin/status |
 | 真实样本（2026-10-21，Windows，匿名） | 调试构建的 music-service serve：`POST /api/v1/downloads` 酷我 rid 78932517 标准品质后不保持连接，约 1.1 秒后 completed（attempt 1），文件「蓝心羽 - 晴天.mp3」2,829,338 字节，audio.verify 实测 176,796 ms、completeness=full，仅 METADATA_NOT_WRITTEN；PATCH 暂停后 admin/status 显示 paused=true。样本与数据目录只在本机临时目录 |
 | Windows 证据（2026-10-21） | MSVC 19.51 /W4：0 条项目警告；`ctest` 254 项中 251 通过、3 项在线用例按设计跳过；GCC 16.2 在 -O2 严格警告下检查新增的调度、Runner、仓储、文件原语与测试源码 0 条警告 |
-| Linux 证据 | 待 CI 运行；通过后补记运行号并改为已完成 |
+| Linux 证据（CI 运行 39573491570） | 与 T19 同一次推送：ubuntu-24.04，GCC 13.3.0：0 条项目警告，260/260 通过（含调度与 Runner 用例）；Windows 与容器任务同时通过 |
 | 已知限制 | 文件名规则 naming-v1 为「歌手 - 标题.扩展名」（无详情时为 source-id），尚无配置模板；探测阶段被跳过（解析结果与处理验证已足够）；默认账号凭证的固定绑定沿用 CredentialService.lease，本任务未另做凭证切换的执行用例（T20 复验 A39）；暂停策略不持久化；数据库在有限重试后仍不可写时，执行保持运行阶段并交给下次启动的 requeue；没有孤立工作目录清理与失败工作文件的保留期清理（T31）；Retry-After 只经入场账本冷却生效，任务级退避不读取它（T29）；auto 换源与匹配仍不支持 |
 
 ### T18 事件、SSE 与 HTTP 同步：已完成（2026-10-21，提交 c20ca47）

@@ -41,8 +41,9 @@ struct LoadOptions {
     BuildCapabilities build;
 };
 
-// Applies built-in defaults, the JSON file, the listed MUSIC_SERVICE_* variables and the
-// command-line overrides, in that order, then validates. Relative paths in the file
+// Applies built-in defaults (media, events and file_access follow the build), the JSON
+// file, the listed MUSIC_SERVICE_* variables and the command-line overrides, in that
+// order, then validates. Relative paths in the file
 // resolve against the file's directory; relative paths from the environment or the
 // command line resolve against working_directory. Unknown keys, wrong types and
 // out-of-range values are errors; all problems found are reported together in
