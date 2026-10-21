@@ -28,3 +28,12 @@ if(WIN32)
         NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
     )
 endif()
+if(APPLE)
+    # cpp-httplib's Mbed TLS backend enumerates the macOS Keychain roots.
+    find_library(MUSIC_SERVICE_SECURITY_FRAMEWORK Security REQUIRED)
+    find_library(MUSIC_SERVICE_COREFOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
+    target_link_libraries(music_service_third_party_httplib INTERFACE
+        "${MUSIC_SERVICE_SECURITY_FRAMEWORK}"
+        "${MUSIC_SERVICE_COREFOUNDATION_FRAMEWORK}"
+    )
+endif()

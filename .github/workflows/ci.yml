@@ -53,6 +53,30 @@ jobs:
       - name: Runtime smoke test
         run: packaging/linux/smoke.sh out/build/linux-gcc-debug/src/server/music-service
 
+  macos-clang:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: |
+          brew install cmake ninja llvm@20
+          echo "MUSIC_SERVICE_LLVM_ROOT=$(brew --prefix llvm@20)" >> "$GITHUB_ENV"
+      - name: Configure, build and test
+        run: |
+          cmake --version
+          "$MUSIC_SERVICE_LLVM_ROOT/bin/clang++" --version
+          sw_vers
+          uname -m
+          cmake --preset macos-clang-debug
+          cmake --build --preset macos-clang-debug --parallel 3
+          ctest --preset macos-clang-debug
+      - name: Upstream HTTPS through the system Keychain
+        env:
+          MUSIC_SERVICE_ONLINE_TESTS: "1"
+        run: out/build/macos-clang-debug/tests/music_service_integration_tests "[online]"
+      - name: Runtime smoke test
+        run: bash packaging/linux/smoke.sh out/build/macos-clang-debug/src/server/music-service
+
   docker:
     runs-on: ubuntu-24.04
     steps:

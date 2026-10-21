@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Runtime smoke test of a built music-service on Linux (or inside any POSIX shell):
+# Runtime smoke test of a built music-service on Linux or macOS:
 # init, serve, readiness, an authenticated request, offline management refused while
 # running, SIGTERM, a clean exit, the shutdown order, and the lock released.
 # Usage: packaging/linux/smoke.sh path/to/music-service [port]
 set -euo pipefail
 
-bin="$(realpath "$1")"
+# Resolve the executable without requiring GNU realpath on macOS.
+bin="$(cd "$(dirname "$1")" && pwd -P)/$(basename "$1")"
 port="${2:-17642}"
 work="$(mktemp -d)"
 pid=""
@@ -28,8 +29,10 @@ run() { "$bin" --config "$work/config.json" "$@"; }
 
 echo "== system"
 uname -srm
-ldd --version | head -n 1
-ldd "$bin" | sed 's/ (0x[0-9a-f]*)//'
+case "$(uname -s)" in
+  Darwin) sw_vers; otool -L "$bin" ;;
+  *) ldd --version | head -n 1; ldd "$bin" | sed 's/ (0x[0-9a-f]*)//' ;;
+esac
 
 echo "== version, check-config, init"
 run version

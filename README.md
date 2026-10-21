@@ -4,14 +4,14 @@
 
 命名约定：项目与仓库名为 `music-service`；CMake 项目与库目标前缀为 `music_service`，C++ 命名空间为 `music_service`，服务可执行程序为 `music-service`，环境变量前缀为 `MUSIC_SERVICE_`，`/api/v1/info` 的 service 字段为 `music-service`。
 
-当前进度：T01～T03 已完成（固定版本依赖、领域规则与应用端口、配置／时钟／日志基础），尚无平台实现、存储、运行时或服务入口。任务与证据见[开发任务](docs/design/cpp20-refactor/development-tasks.md)。
+当前已接通酷我搜索、持久下载执行与已完成文件访问，T17／T19 的验收状态和 T20 端到端关口进度以[开发任务](docs/design/cpp20-refactor/development-tasks.md)中的最新实施记录为准。
 
 ## 目录结构
 
 ```text
 music-service/
   CMakeLists.txt               # 顶层 C++20 工程
-  CMakePresets.json            # Windows MSVC／Linux GCC 预设与测试预设
+  CMakePresets.json            # Windows MSVC／Linux GCC／macOS LLVM 构建与测试预设
   cmake/                       # 编译选项、依赖获取与校验、第三方适配、工具链
   src/                         # 全部源码，头文件与实现放在同一模块目录
     domain/                    # 值对象与纯规则，无 I/O
@@ -27,10 +27,10 @@ music-service/
     server/                    # music-service 可执行程序：main 与依赖组装
   tests/                       # 依赖、单元、集成与契约测试及去凭证样本
   config/                      # 配置键名说明与无秘密的示例配置
-  packaging/                   # Windows、Linux 与 Docker 交付
+  packaging/                   # Windows、Linux、macOS 与 Docker 运行验证
   docs/                        # 研究记录与设计文档
   third_party/                 # 研究用外部源码，不参与构建
-  .github/workflows/           # CI：Windows MSVC 与 Linux GCC
+  .github/workflows/           # CI：Windows、Linux、macOS 与 Docker
 ```
 
 - 头文件与实现放在同一模块目录，所有模块都以 `src/` 为包含根，写作 `#include "domain/result.hpp"`。本项目只产出服务程序、不发布 C++ 库，因此不设单独的 `include/` 目录。
@@ -57,10 +57,21 @@ cmake --build --preset linux-gcc-debug
 ctest --preset linux-gcc-debug
 ```
 
-- Debug 预设默认开启测试；Release 预设（windows-msvc-release、linux-gcc-release）不构建测试。构建目录为 `out/build/<预设名>`，按系统、编译器与配置隔离。Linux 使用当前主机架构，ARM64 等发布组合须单独验证。
+```sh
+# macOS：使用 LLVM 20 及其 libc++，以支持 C++20 jthread / stop_token。
+brew install cmake ninja llvm@20
+export MUSIC_SERVICE_LLVM_ROOT="$(brew --prefix llvm@20)"
+cmake --preset macos-clang-debug
+cmake --build --preset macos-clang-debug --parallel 3
+ctest --preset macos-clang-debug
+bash packaging/linux/smoke.sh out/build/macos-clang-debug/src/server/music-service
+```
+
+- Debug 预设默认开启测试；Release 预设（windows-msvc-release、linux-gcc-release、macos-clang-release）不构建测试。构建目录为 `out/build/<预设名>`，按系统、编译器与配置隔离。Linux／macOS 使用当前主机架构；macOS CI 首先覆盖 `macos-15` 的 Apple Silicon，Intel 和其他发布组合须单独验证。
+- macOS 预设使用 Homebrew LLVM 的编译器、C++ 头文件和运行库，并记录运行库搜索路径。当前用于构建与 CI 验证，不能将依赖本机 Homebrew 路径的产物直接当作独立发行包。
 - 开发机差异放在已忽略的 CMakeUserPresets.json，不提交绝对工具链路径。
 - Windows 上使用官方 CMake 或 Visual Studio 自带的 CMake。MSYS2／MinGW 发行的 cmake 内置 curl 不带 CA 证书，下载依赖会失败；MinGW 不是支持的工具链。
-- 测试通过只说明已实现部分正确，不代表服务、跨平台运行或发布验收；当前还没有 music-service 可执行程序。
+- 测试通过只说明相应检查覆盖的部分正确，不代替端到端和发布验收；服务程序位于 `out/build/<预设名>/src/server/`。
 
 ## 文档入口
 

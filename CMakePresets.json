@@ -48,6 +48,17 @@
       }
     },
     {
+      "name": "macos-clang",
+      "hidden": true,
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "toolchainFile": "${sourceDir}/cmake/toolchains/macos-llvm.cmake"
+    },
+    {
       "name": "windows-msvc-debug",
       "displayName": "Windows x64 MSVC Debug",
       "inherits": "windows-msvc",
@@ -80,6 +91,23 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
       }
+    },
+    {
+      "name": "macos-clang-debug",
+      "displayName": "macOS LLVM Debug (native architecture)",
+      "inherits": "macos-clang",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BUILD_TESTING": true
+      }
+    },
+    {
+      "name": "macos-clang-release",
+      "displayName": "macOS LLVM Release (native architecture)",
+      "inherits": "macos-clang",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
     }
   ],
   "buildPresets": [
@@ -98,6 +126,14 @@
     {
       "name": "linux-gcc-release",
       "configurePreset": "linux-gcc-release"
+    },
+    {
+      "name": "macos-clang-debug",
+      "configurePreset": "macos-clang-debug"
+    },
+    {
+      "name": "macos-clang-release",
+      "configurePreset": "macos-clang-release"
     }
   ],
   "testPresets": [
@@ -120,6 +156,11 @@
       "name": "linux-gcc-debug",
       "inherits": "test-base",
       "configurePreset": "linux-gcc-debug"
+    },
+    {
+      "name": "macos-clang-debug",
+      "inherits": "test-base",
+      "configurePreset": "macos-clang-debug"
     }
   ]
 }
