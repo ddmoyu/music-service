@@ -249,7 +249,7 @@ json credential_json(const ports::CredentialRecord& c) {
                 {"label", c.label},
                 {"kind", c.kind},
                 {"auth_profile", c.auth_profile},
-                {"scope_summary", nullptr},
+                {"scope_summary", c.scopes.empty() ? json(nullptr) : json(c.scopes)},
                 {"expires_at", optional_time(c.expires_at)},
                 {"version", c.version},
                 {"status", to_string(c.status)},

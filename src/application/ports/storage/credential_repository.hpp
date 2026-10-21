@@ -31,6 +31,7 @@ struct CredentialRecord {
     std::chrono::system_clock::time_point created_at;
     std::optional<std::chrono::system_clock::time_point> last_verified_at;
     std::optional<VerifyOutcome> last_verify_result;
+    std::vector<std::string> scopes; // scope evidence of the last verification
 };
 
 struct NewCredential {
@@ -41,6 +42,15 @@ struct NewCredential {
     std::string auth_profile;
     std::string secret_ref;
     std::optional<std::chrono::system_clock::time_point> expires_at;
+};
+
+// What a verification established about the checked version. Absent evidence keeps
+// the stored value.
+struct VerificationEvidence {
+    VerifyOutcome outcome{VerifyOutcome::unknown};
+    std::chrono::system_clock::time_point at;
+    std::optional<std::chrono::system_clock::time_point> expires_at;
+    std::vector<std::string> scopes;
 };
 
 struct SecretReplacement {
@@ -68,19 +78,20 @@ public:
 
     // Conditional on expected_version and the credential not being revoked; at least
     // one of secret and label must be given. Advances the version. A new secret also
-    // returns the credential to active and forgets the last verification.
+    // returns the credential to active and forgets the last verification, its scopes
+    // and expires_at, which described the old secret.
     virtual domain::Result<SecretReplacement>
     replace_secret(const std::string& owner_id, const std::string& id,
                    std::uint64_t expected_version, const std::optional<std::string>& new_secret_ref,
                    const std::optional<std::string>& new_label) = 0;
 
-    // Stores a verification result for the version that was checked: VERSION_CONFLICT
-    // if the credential changed meanwhile, VALIDATION_FAILED if revoked. valid and
-    // invalid also set the status; unknown leaves it. The version does not change.
+    // Stores a verification result and its evidence for the version that was checked:
+    // VERSION_CONFLICT if the credential changed meanwhile, VALIDATION_FAILED if
+    // revoked. valid and invalid also set the status; unknown leaves it. The version
+    // does not change.
     virtual domain::Result<CredentialRecord>
     record_verification(const std::string& owner_id, const std::string& id,
-                        std::uint64_t expected_version, VerifyOutcome outcome,
-                        std::chrono::system_clock::time_point at) = 0;
+                        std::uint64_t expected_version, const VerificationEvidence& evidence) = 0;
 
     // Every secret_ref a credential still points to, for reclaiming orphaned secrets.
     virtual domain::Result<std::vector<std::string>> referenced_secret_refs() = 0;
@@ -94,7 +105,7 @@ public:
     virtual domain::Result<DefaultSelection> get_default(const std::string& owner_id,
                                                          const std::string& source) = 0;
     // The credential must belong to the owner (else NOT_FOUND), match the source and
-    // not be revoked (else VALIDATION_FAILED). Setting the same value keeps the version.
+    // be neither revoked nor invalid (else VALIDATION_FAILED). Setting the same value keeps the version.
     virtual domain::Result<DefaultSelection> set_default(const std::string& owner_id,
                                                          const std::string& source,
                                                          const std::string& credential_id) = 0;

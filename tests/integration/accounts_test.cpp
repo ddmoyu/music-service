@@ -77,20 +77,22 @@ private:
 };
 
 // Verifier that runs a hook before answering, to let a test change the credential
-// while a verification is in flight.
+// while a verification is in flight, and returns the evidence the test chose.
 class HookVerifier final : public ports::ICredentialVerifier {
 public:
-    explicit HookVerifier(std::function<void()> hook) : hook_(std::move(hook)) {}
+    HookVerifier(std::function<void()> hook, const ports::CredentialVerification& verdict)
+        : hook_(std::move(hook)), verdict_(verdict) {}
     domain::Result<ports::CredentialVerification> verify(const ports::CredentialSnapshot&,
                                                          const ports::OperationContext&) override {
         if (hook_) {
             hook_();
         }
-        return ports::CredentialVerification{ports::VerificationStatus::valid, {}, {}, {}};
+        return verdict_;
     }
 
 private:
     std::function<void()> hook_;
+    const ports::CredentialVerification& verdict_;
 };
 
 struct Accounts {
@@ -109,11 +111,13 @@ struct Accounts {
                                  .verifier = [this](const ports::ProviderSetup&)
                                      -> domain::Result<std::shared_ptr<ports::ICredentialVerifier>> {
                                      return std::shared_ptr<ports::ICredentialVerifier>{
-                                         std::make_shared<HookVerifier>([this] {
-                                             if (verify_hook) {
-                                                 verify_hook();
-                                             }
-                                         })};
+                                         std::make_shared<HookVerifier>(
+                                             [this] {
+                                                 if (verify_hook) {
+                                                     verify_hook();
+                                                 }
+                                             },
+                                             hooked_verdict)};
                                  }}};
         hooked.capabilities = {{.key = "verify_credentials",
                                 .credentials = ports::CredentialRequirement::required,
@@ -180,6 +184,7 @@ struct Accounts {
         std::make_shared<infrastructure::secrets::FileSecretStore>(dir / "secrets");
     std::shared_ptr<const providers::ProviderRegistry> registry;
     std::function<void()> verify_hook;
+    ports::CredentialVerification hooked_verdict{ports::VerificationStatus::valid, {}, {}, {}};
 
     std::unique_ptr<Database> database;
     std::shared_ptr<FlakyIdentityRepository> identities;
@@ -426,6 +431,100 @@ TEST_CASE("verification results belong to the version that was checked", "[accou
     const auto after = unwrap(a.credentials->get(prn, racing.id));
     CHECK(after.version == 2);
     CHECK_FALSE(after.last_verify_result);
+}
+
+TEST_CASE("verification evidence is stored with the checked version", "[accounts]") {
+    Accounts a{"evidence"};
+    const auto prn = a.principal();
+    const auto cred = a.cookie(prn, "hooked", "v=1");
+    const std::chrono::system_clock::time_point expiry =
+        std::chrono::time_point_cast<std::chrono::milliseconds>(a.clock->now() + std::chrono::hours(24));
+    a.hooked_verdict = {ports::VerificationStatus::valid, std::string{"nick"}, {"vip", "lossless"}, expiry};
+    const std::vector<std::string> scopes{"vip", "lossless"};
+
+    const auto verified = unwrap(a.credentials->verify(prn, cred.id, context()));
+    CHECK(verified.credential.expires_at == expiry);
+    CHECK(verified.credential.scopes == scopes);
+
+    // Persisted, not just echoed.
+    a.reopen();
+    const auto stored = unwrap(a.credentials->get(prn, cred.id));
+    CHECK(stored.expires_at == expiry);
+    CHECK(stored.scopes == scopes);
+
+    // A verification without evidence keeps what is known.
+    a.hooked_verdict = {ports::VerificationStatus::unknown, {}, {}, {}};
+    const auto unknown = unwrap(a.credentials->verify(prn, cred.id, context()));
+    CHECK(unknown.credential.expires_at == expiry);
+    CHECK(unknown.credential.scopes == scopes);
+
+    // A label change keeps the evidence; a new secret forgets it.
+    CHECK(unwrap(a.credentials->update(prn, cred.id, {{}, std::string{"renamed"}, {}})).scopes == scopes);
+    const auto replaced = unwrap(a.credentials->update(prn, cred.id, {ports::SecretBytes{"v=2"}, {}, {}}));
+    CHECK_FALSE(replaced.expires_at);
+    CHECK(replaced.scopes.empty());
+
+    // A39: evidence from a verification racing an update is dropped with the verdict.
+    a.hooked_verdict = {ports::VerificationStatus::valid, {}, {"vip"}, expiry};
+    bool fired = false;
+    a.verify_hook = [&] {
+        if (std::exchange(fired, true)) {
+            return;
+        }
+        (void)unwrap(a.credentials->update(prn, cred.id, {ports::SecretBytes{"v=3"}, {}, {}}));
+    };
+    CHECK(a.credentials->verify(prn, cred.id, context()).error().code == ErrorCode::version_conflict);
+    const auto after = unwrap(a.credentials->get(prn, cred.id));
+    CHECK_FALSE(after.expires_at);
+    CHECK(after.scopes.empty());
+}
+
+TEST_CASE("invalid or expired credentials are not selected or leased", "[accounts]") {
+    Accounts a{"unusable"};
+    const auto prn = a.principal();
+
+    // Failed verification: no new default, binding or lease until it verifies again.
+    const auto bad = a.cookie(prn, "aud", "bad");
+    (void)unwrap(a.credentials->set_default(prn, "aud", bad.id));
+    const auto bound = unwrap(a.credentials->resolve_binding(prn, "aud", "resolve_audio", std::nullopt)).binding;
+    CHECK(unwrap(a.credentials->verify(prn, bad.id, context())).credential.status ==
+          ports::CredentialStatus::invalid);
+    CHECK(a.credentials->lease(bound).error().code == ErrorCode::credentials_required);
+    CHECK(a.credentials->resolve_binding(prn, "aud", "resolve_audio", std::nullopt).error().code ==
+          ErrorCode::credentials_required);
+    CHECK(a.credentials->resolve_binding(prn, "aud", "resolve_audio", bad.id).error().code ==
+          ErrorCode::validation_failed);
+    (void)unwrap(a.credentials->clear_default(prn, "aud"));
+    CHECK(a.credentials->set_default(prn, "aud", bad.id).error().code == ErrorCode::validation_failed);
+    // The repository refuses it inside its own transaction too.
+    CHECK(a.credential_repo->set_default(prn, "aud", bad.id).error().code == ErrorCode::validation_failed);
+    // An optional capability falls back to anonymous rather than the invalid default.
+    const auto combo = a.cookie(prn, "both", "bad");
+    (void)unwrap(a.credentials->set_default(prn, "both", combo.id));
+    (void)unwrap(a.credential_repo->record_verification(
+        prn, combo.id, combo.version, {ports::VerifyOutcome::invalid, a.clock->now(), {}, {}}));
+    CHECK(unwrap(a.credentials->resolve_binding(prn, "both", "resolve_audio", std::nullopt)).binding.mode() ==
+          domain::AccountMode::anonymous);
+
+    // A new secret returns it to active and the accepted binding leases again.
+    (void)unwrap(a.credentials->update(prn, bad.id, {ports::SecretBytes{"good"}, {}, {}}));
+    CHECK(unwrap(a.credentials->lease(bound)).secret->reveal() == "good");
+
+    // Past its expiry the credential stops leasing, also for an accepted binding.
+    const auto expiring = unwrap(a.credentials->create({prn, "aud", "label", ports::CredentialKind::cookie,
+                                                        "web_cookie", ports::SecretBytes{"e=1"},
+                                                        a.clock->now() + std::chrono::hours(1)}));
+    (void)unwrap(a.credentials->set_default(prn, "aud", expiring.id));
+    const auto expiring_binding =
+        unwrap(a.credentials->resolve_binding(prn, "aud", "resolve_audio", std::nullopt)).binding;
+    CHECK(unwrap(a.credentials->lease(expiring_binding)).secret->reveal() == "e=1");
+    a.clock->advance(std::chrono::hours(1));
+    CHECK(a.credentials->lease(expiring_binding).error().code == ErrorCode::credentials_required);
+    CHECK(a.credentials->resolve_binding(prn, "aud", "resolve_audio", std::nullopt).error().code ==
+          ErrorCode::credentials_required);
+    CHECK(a.credentials->resolve_binding(prn, "aud", "resolve_audio", expiring.id).error().code ==
+          ErrorCode::validation_failed);
+    CHECK(a.credentials->set_default(prn, "aud", expiring.id).error().code == ErrorCode::validation_failed);
 }
 
 TEST_CASE("default selection is owned, versioned and survives restarts", "[accounts]") {

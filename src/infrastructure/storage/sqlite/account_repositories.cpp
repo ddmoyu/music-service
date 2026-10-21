@@ -94,7 +94,7 @@ ports::CredentialStatus parse_status(const std::string& text) {
 
 constexpr std::string_view credential_columns =
     "id, owner_id, source, label, kind, auth_profile, secret_ref, version, status, expires_at, "
-    "created_at, last_verified_at, last_verify_result";
+    "created_at, last_verified_at, last_verify_result, scope_summary";
 
 std::string_view outcome_text(ports::VerifyOutcome outcome) {
     switch (outcome) {
@@ -131,7 +131,8 @@ ports::CredentialRecord read_credential(const Statement& s) {
                                    from_millis(s.optional_integer(9)),
                                    from_millis(s.integer(10)),
                                    from_millis(s.optional_integer(11)),
-                                   parse_outcome(s.optional_text(12))};
+                                   parse_outcome(s.optional_text(12)),
+                                   split_scopes(s.optional_text(13).value_or(""))};
 }
 
 domain::Result<std::optional<ports::CredentialRecord>>
@@ -447,7 +448,9 @@ SqliteCredentialRepository::replace_secret(const std::string& owner_id, const st
         auto s = db.prepare("UPDATE credentials SET secret_ref = ?, label = ?, version = ?,"
                             " status = CASE WHEN ? THEN 'active' ELSE status END,"
                             " last_verified_at = CASE WHEN ? THEN NULL ELSE last_verified_at END,"
-                            " last_verify_result = CASE WHEN ? THEN NULL ELSE last_verify_result END"
+                            " last_verify_result = CASE WHEN ? THEN NULL ELSE last_verify_result END,"
+                            " scope_summary = CASE WHEN ? THEN NULL ELSE scope_summary END,"
+                            " expires_at = CASE WHEN ? THEN NULL ELSE expires_at END"
                             " WHERE id = ? AND owner_id = ?");
         if (!s) {
             return std::move(s).error();
@@ -459,8 +462,10 @@ SqliteCredentialRepository::replace_secret(const std::string& owner_id, const st
             .bind(4, new_secret)
             .bind(5, new_secret)
             .bind(6, new_secret)
-            .bind(7, id)
-            .bind(8, owner_id);
+            .bind(7, new_secret)
+            .bind(8, new_secret)
+            .bind(9, id)
+            .bind(10, owner_id);
         if (auto done = s->run(); !done) {
             return done.error();
         }
@@ -476,8 +481,7 @@ SqliteCredentialRepository::replace_secret(const std::string& owner_id, const st
 domain::Result<ports::CredentialRecord>
 SqliteCredentialRepository::record_verification(const std::string& owner_id, const std::string& id,
                                                 std::uint64_t expected_version,
-                                                ports::VerifyOutcome outcome,
-                                                std::chrono::system_clock::time_point at) {
+                                                const ports::VerificationEvidence& evidence) {
     return ctx_.database->write([&](Connection& db) -> domain::Result<ports::CredentialRecord> {
         auto found = find_credential(db, owner_id, id);
         if (!found) {
@@ -495,21 +499,25 @@ SqliteCredentialRepository::record_verification(const std::string& owner_id, con
                                  "credential changed during verification", true, {}};
         }
         std::string status = current.status == ports::CredentialStatus::invalid ? "invalid" : "active";
-        if (outcome == ports::VerifyOutcome::valid) {
+        if (evidence.outcome == ports::VerifyOutcome::valid) {
             status = "active";
-        } else if (outcome == ports::VerifyOutcome::invalid) {
+        } else if (evidence.outcome == ports::VerifyOutcome::invalid) {
             status = "invalid";
         }
+        // Committed with the version check, so evidence never lands on a newer secret.
+        const auto scopes = evidence.scopes.empty() ? current.scopes : evidence.scopes;
         auto s = db.prepare("UPDATE credentials SET last_verified_at = ?, last_verify_result = ?,"
-                            " status = ? WHERE id = ? AND owner_id = ?");
+                            " status = ?, expires_at = ?, scope_summary = ? WHERE id = ? AND owner_id = ?");
         if (!s) {
             return std::move(s).error();
         }
-        s->bind(1, to_millis(at))
-            .bind(2, std::string{outcome_text(outcome)})
+        s->bind(1, to_millis(evidence.at))
+            .bind(2, std::string{outcome_text(evidence.outcome)})
             .bind(3, status)
-            .bind(4, id)
-            .bind(5, owner_id);
+            .bind(4, to_millis(evidence.expires_at ? evidence.expires_at : current.expires_at))
+            .bind(5, scopes.empty() ? std::nullopt : std::optional<std::string>{join_scopes(scopes)})
+            .bind(6, id)
+            .bind(7, owner_id);
         if (auto done = s->run(); !done) {
             return done.error();
         }
@@ -602,6 +610,9 @@ SqliteCredentialRepository::set_default(const std::string& owner_id, const std::
         }
         if (credential.value()->status == ports::CredentialStatus::revoked) {
             return domain::Error::validation("credential_id", "is revoked");
+        }
+        if (credential.value()->status == ports::CredentialStatus::invalid) {
+            return domain::Error::validation("credential_id", "failed verification");
         }
         auto current = find_default(db, owner_id, source);
         if (!current) {

@@ -63,6 +63,28 @@ Error credentials_required(std::string message) {
     return Error{ErrorCode::credentials_required, std::move(message), false, {}};
 }
 
+// Why a credential cannot authorize new work, if it cannot: revoked, failed its last
+// verification, or past its known expiry. Verification itself may still run, so a
+// renewed account can become usable again.
+std::optional<std::string> unusable_reason(const ports::CredentialRecord& record,
+                                           std::chrono::system_clock::time_point now) {
+    switch (record.status) {
+    case ports::CredentialStatus::revoked:
+        return "is revoked";
+    case ports::CredentialStatus::invalid:
+        return "failed verification";
+    case ports::CredentialStatus::active:
+        break;
+    }
+    if (!record.secret_ref) {
+        return "is revoked";
+    }
+    if (record.expires_at && *record.expires_at <= now) {
+        return "has expired";
+    }
+    return std::nullopt;
+}
+
 ports::VerifyOutcome to_outcome(ports::VerificationStatus status) {
     switch (status) {
     case ports::VerificationStatus::valid:
@@ -229,8 +251,9 @@ domain::Result<VerifyResult> CredentialService::verify(const std::string& owner_
     }
     // Stored only for the version that was checked; a later secret is not judged by
     // an earlier result.
-    auto stored = credentials_->record_verification(owner_id, id, record->version,
-                                                    to_outcome(verification->status), clock_->now());
+    auto stored = credentials_->record_verification(
+        owner_id, id, record->version,
+        {to_outcome(verification->status), clock_->now(), verification->expires_at, verification->scopes});
     if (!stored) {
         return std::move(stored).error();
     }
@@ -258,14 +281,14 @@ domain::Result<ports::DefaultSelection> CredentialService::set_default(const std
     if (record->source != source) {
         return Error::validation("credential_id", "belongs to another source");
     }
-    if (record->status == ports::CredentialStatus::revoked) {
-        return Error::validation("credential_id", "is revoked");
+    if (auto reason = unusable_reason(record.value(), clock_->now())) {
+        return Error::validation("credential_id", *reason);
     }
     auto profile = providers_->describe_auth_profile(source, record->auth_profile);
     if (!profile || ports::to_string(profile->kind) != record->kind) {
         return Error::validation("credential_id", "its auth profile is no longer registered");
     }
-    // The repository re-checks owner, source and revocation inside the transaction.
+    // The repository re-checks owner, source and status inside the transaction.
     return credentials_->set_default(owner_id, source, credential_id);
 }
 
@@ -313,8 +336,8 @@ domain::Result<ResolvedBinding> CredentialService::resolve_binding(const std::st
         if (record->source != source_text) {
             return Error::validation("credential_id", "belongs to another source");
         }
-        if (record->status == ports::CredentialStatus::revoked) {
-            return Error::validation("credential_id", "is revoked");
+        if (auto reason = unusable_reason(record.value(), clock_->now())) {
+            return Error::validation("credential_id", *reason);
         }
         if (!allows(record->auth_profile)) {
             return Error::validation("credential_id", "its auth profile cannot be used here");
@@ -343,7 +366,7 @@ domain::Result<ResolvedBinding> CredentialService::resolve_binding(const std::st
         if (!record) {
             return std::move(record).error();
         }
-        if (record->status != ports::CredentialStatus::revoked && allows(record->auth_profile)) {
+        if (!unusable_reason(record.value(), clock_->now()) && allows(record->auth_profile)) {
             auto binding = user_binding(record.value());
             if (!binding) {
                 return std::move(binding).error();
@@ -386,8 +409,8 @@ domain::Result<CredentialLease> CredentialService::lease(const domain::AccountBi
             }
             return std::move(record).error();
         }
-        if (record->status == ports::CredentialStatus::revoked || !record->secret_ref) {
-            return credentials_required("the bound credential was revoked");
+        if (auto reason = unusable_reason(record.value(), clock_->now())) {
+            return credentials_required("the bound credential " + *reason);
         }
         if (record->source != binding.source().value() || record->auth_profile != binding.auth_profile()) {
             return Error{ErrorCode::internal, "bound credential does not match its binding", false, {}};

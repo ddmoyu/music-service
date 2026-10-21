@@ -59,8 +59,8 @@ public:
                    const std::optional<std::string>& new_label) override;
     domain::Result<application::ports::CredentialRecord>
     record_verification(const std::string& owner_id, const std::string& id,
-                        std::uint64_t expected_version, application::ports::VerifyOutcome outcome,
-                        std::chrono::system_clock::time_point at) override;
+                        std::uint64_t expected_version,
+                        const application::ports::VerificationEvidence& evidence) override;
     domain::Result<std::vector<std::string>> referenced_secret_refs() override;
     domain::Result<application::ports::SecretReplacement> revoke(const std::string& owner_id,
                                                                  const std::string& id) override;
