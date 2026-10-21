@@ -24,6 +24,7 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -133,6 +134,74 @@ private:
     std::thread thread_;
 };
 
+// A loopback listener that hands each accepted socket to a script, for upstreams
+// httplib's server cannot imitate: a TCP peer that never speaks TLS, or one that
+// sends its response head too slowly. The script ends when closing is set.
+class RawServer {
+public:
+    using Script = std::function<void(socket_t, const std::atomic<bool>& closing)>;
+
+    explicit RawServer(Script script) : script_(std::move(script)) {
+        listener_ = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        REQUIRE(listener_ != INVALID_SOCKET);
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        REQUIRE(::bind(listener_, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) == 0);
+        REQUIRE(::listen(listener_, 4) == 0);
+        socklen_t length = sizeof(addr);
+        REQUIRE(::getsockname(listener_, reinterpret_cast<sockaddr*>(&addr), &length) == 0);
+        port_ = ntohs(addr.sin_port);
+        thread_ = std::thread([this] {
+            while (!closing_.load()) {
+                const socket_t peer = ::accept(listener_, nullptr, nullptr);
+                if (peer == INVALID_SOCKET) {
+                    return;
+                }
+                script_(peer, closing_);
+                close(peer);
+            }
+        });
+    }
+    ~RawServer() {
+        closing_.store(true);
+#ifndef _WIN32
+        ::shutdown(listener_, SHUT_RDWR); // close() alone does not wake accept on Linux
+#endif
+        close(listener_); // wakes the blocked accept
+        thread_.join();
+    }
+
+    [[nodiscard]] int port() const { return port_; }
+
+private:
+    static void close(socket_t sock) {
+#ifdef _WIN32
+        ::closesocket(sock);
+#else
+        ::close(sock);
+#endif
+    }
+
+    Script script_;
+    socket_t listener_{INVALID_SOCKET};
+    int port_{0};
+    std::atomic<bool> closing_{false};
+    std::thread thread_;
+};
+
+void send_text(socket_t sock, std::string_view text) {
+    (void)::send(sock, text.data(), static_cast<int>(text.size()), 0);
+}
+
+// Waits without reading, so the request stays unanswered.
+void hold(const std::atomic<bool>& closing, std::chrono::milliseconds at_most) {
+    const auto until = std::chrono::steady_clock::now() + at_most;
+    while (!closing.load() && std::chrono::steady_clock::now() < until) {
+        std::this_thread::sleep_for(10ms);
+    }
+}
+
 std::string category(const domain::Error& error) {
     for (const auto& detail : error.details) {
         if (detail.field == "transport") {
@@ -143,9 +212,10 @@ std::string category(const domain::Error& error) {
 }
 
 struct Harness {
-    explicit Harness(runtime::AdmissionLimits limits = {}, bool trust_test_ca = true) {
+    explicit Harness(runtime::AdmissionLimits limits = {}, bool trust_test_ca = true,
+                     std::chrono::seconds connect_timeout = 3s) {
         HttplibTransportOptions options;
-        options.connect_timeout = 3s;
+        options.connect_timeout = connect_timeout;
         options.max_response_bytes = 1024 * 1024;
         options.redirect_max = 3;
         if (trust_test_ca) {
@@ -403,6 +473,104 @@ TEST_CASE("Retry-After cools the source down in the admission ledger", "[transpo
     CHECK(server.seen.requests == 1);
 }
 
+TEST_CASE("Retry-After too large to add to the clock still cools down", "[transport]") {
+    TestServer server{TestServer::Kind::trusted_tls};
+    std::string value;
+    server.routes().Get("/limited", [&](const httplib::Request&, httplib::Response& res) {
+        res.status = 503;
+        res.set_header("Retry-After", value);
+    });
+    server.start();
+
+    for (const auto* huge : {"9223372036854775807", "99999999999999999999999"}) {
+        value = huge;
+        Harness h;
+        CHECK(h.fetched(get(server.url("/limited"))).head.status == 503);
+        CHECK(h.ledger->usage().cooldowns.size() == 1);
+        REQUIRE(std::holds_alternative<PendingHop>(test::unwrap(h.fetch(get(server.url("/limited"))))));
+    }
+    // A sign is not delta-seconds.
+    value = "-5";
+    Harness h;
+    CHECK(h.fetched(get(server.url("/limited"))).head.status == 503);
+    CHECK(h.ledger->usage().cooldowns.empty());
+}
+
+TEST_CASE("HEAD and 204 responses keep their status and headers", "[transport]") {
+    TestServer server{TestServer::Kind::trusted_tls};
+    server.routes().Get("/file", [](const httplib::Request&, httplib::Response& res) {
+        res.set_header("ETag", "\"v1\"");
+        res.set_content(std::string(4096, 'f'), "audio/mpeg");
+    });
+    server.routes().Get("/moved", [](const httplib::Request&, httplib::Response& res) {
+        res.set_redirect("/file", 302);
+    });
+    server.routes().Get("/empty", [](const httplib::Request&, httplib::Response& res) {
+        res.status = 204;
+        res.set_header("X-Empty", "yes");
+    });
+    server.start();
+    Harness h;
+
+    auto head_request = get(server.url("/file"));
+    head_request.method = ports::HttpMethod::head;
+    const auto head = h.fetched(head_request);
+    CHECK(head.head.status == 200);
+    CHECK(head.head.header("ETag") == "\"v1\"");
+    CHECK(head.body.empty());
+
+    // Content-Length of a HEAD response describes a body that never comes.
+    auto small = head_request;
+    small.max_response_bytes = 16;
+    CHECK(h.fetched(small).head.status == 200);
+
+    auto moved = get(server.url("/moved"));
+    moved.method = ports::HttpMethod::head;
+    const auto followed = h.fetched(moved);
+    CHECK(followed.head.status == 200);
+    CHECK(followed.head.final_url == server.url("/file"));
+    CHECK(server.seen.method_by_path["/file"] == "HEAD");
+
+    const auto empty = h.fetched(get(server.url("/empty")));
+    CHECK(empty.head.status == 204);
+    CHECK(empty.head.header("X-Empty") == "yes");
+
+    int heads = 0;
+    auto streamed = test::unwrap(h.client->stream(
+        get(server.url("/empty")), h.base(), Harness::context(),
+        [&](const ports::HttpResponseHead& seen) {
+            ++heads;
+            return seen.status == 204;
+        },
+        [](std::span<const char>) { return true; }));
+    REQUIRE(std::holds_alternative<ports::HttpResponseHead>(streamed));
+    CHECK(heads == 1);
+    CHECK(std::get<ports::HttpResponseHead>(streamed).status == 204);
+    CHECK_FALSE(std::get<ports::HttpResponseHead>(streamed).stopped_by_consumer);
+
+    auto refused = test::unwrap(h.client->stream(
+        get(server.url("/empty")), h.base(), Harness::context(), [](const ports::HttpResponseHead&) { return false; },
+        [](std::span<const char>) { return true; }));
+    REQUIRE(std::holds_alternative<ports::HttpResponseHead>(refused));
+    CHECK(std::get<ports::HttpResponseHead>(refused).stopped_by_consumer);
+    CHECK(h.ledger->usage().total == 0);
+}
+
+TEST_CASE("a TLS handshake that never completes is a retryable timeout", "[transport]") {
+    // Accepts the TCP connection and never answers the ClientHello.
+    RawServer silent{[](socket_t, const std::atomic<bool>& closing) { hold(closing, 5s); }};
+    Harness h{{}, true, 1s};
+
+    const auto started = std::chrono::steady_clock::now();
+    const auto result = h.fetch(get("https://127.0.0.1:" + std::to_string(silent.port()) + "/x"));
+    CHECK(std::chrono::steady_clock::now() - started < 3s);
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().code == domain::ErrorCode::upstream_timeout);
+    CHECK(result.error().retryable);
+    CHECK(category(result.error()) == "tls_handshake_timeout");
+    CHECK(h.ledger->usage().total == 0);
+}
+
 TEST_CASE("bodies stream in chunks and bounded responses stop at the limit", "[transport]") {
     constexpr std::size_t total = 4 * 1024 * 1024;
     const std::string piece(64 * 1024, 'a');
@@ -556,6 +724,25 @@ TEST_CASE("cancellation and deadlines end the transfer and release the lease", "
             });
         REQUIRE_FALSE(result.has_value());
         CHECK(result.error().code == domain::ErrorCode::canceled);
+    }
+    SECTION("the deadline holds while the head trickles in") {
+        // Each header line arrives well within the idle timeout; only the total
+        // deadline can end the request.
+        RawServer trickle{[](socket_t peer, const std::atomic<bool>& closing) {
+            send_text(peer, "HTTP/1.1 200 OK\r\n");
+            for (int i = 0; i < 400 && !closing.load(); ++i) {
+                send_text(peer, "X-Slow: " + std::to_string(i) + "\r\n");
+                std::this_thread::sleep_for(20ms);
+            }
+        }};
+        auto request = get("http://127.0.0.1:" + std::to_string(trickle.port()) + "/slow");
+        request.plaintext_endpoints.push_back(
+            {"127.0.0.1", static_cast<std::uint16_t>(trickle.port()), "/slow", "search", false});
+        const auto started = std::chrono::steady_clock::now();
+        const auto result = h.fetch(request, Harness::context(300ms));
+        CHECK(std::chrono::steady_clock::now() - started < 600ms);
+        REQUIRE_FALSE(result.has_value());
+        CHECK(result.error().code == domain::ErrorCode::deadline_exceeded);
     }
     SECTION("the deadline passes") {
         const auto started = std::chrono::steady_clock::now();

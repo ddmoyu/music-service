@@ -52,7 +52,8 @@ domain::Error timeout_error(std::string category, std::string message) {
     return error;
 }
 
-domain::Error map_error(httplib::Error error) {
+// ssl_error is the TLS layer's code for the failed request, as httplib reports it.
+domain::Error map_error(httplib::Error error, int ssl_error) {
     switch (error) {
     case httplib::Error::Connection:
     case httplib::Error::ProxyConnection:
@@ -66,6 +67,12 @@ domain::Error map_error(httplib::Error error) {
     case httplib::Error::ConnectionClosed:
         return transport_error("connection_lost", "the upstream connection was interrupted", true);
     case httplib::Error::SSLConnection:
+        // A handshake still waiting for the peer when the connect timeout fired is a
+        // slow upstream, not a broken one.
+        if (ssl_error == static_cast<int>(httplib::tls::ErrorCode::WantRead) ||
+            ssl_error == static_cast<int>(httplib::tls::ErrorCode::WantWrite)) {
+            return timeout_error("tls_handshake_timeout", "the TLS handshake with the upstream timed out");
+        }
         return transport_error("tls_handshake", "TLS handshake with the upstream failed", false);
     case httplib::Error::SSLLoadingCerts:
         return transport_error("tls_trust_store", "trusted certificates could not be loaded", false);
@@ -91,6 +98,7 @@ bool is_user_agent(std::string_view name) noexcept {
 
 // Why a hop ended early, as decided by our own callbacks.
 struct HopState {
+    bool head_seen{false};
     std::optional<std::string> location; // set for a redirect response
     std::size_t redirect_bytes{0};
     bool consumer_stopped{false};
@@ -212,7 +220,10 @@ domain::Result<ports::HttpResponseHead> HttplibTransport::perform(const ports::H
         }
         req.body = current.body;
 
-        req.response_handler = [&](const httplib::Response& response) {
+        // Records the head; false stops the transfer. httplib skips response_handler
+        // for responses without a body (HEAD, 204), so those come here after send().
+        const auto take_head = [&](const httplib::Response& response, bool has_body) {
+            state.head_seen = true;
             head.status = response.status;
             head.headers.clear();
             for (const auto& [name, value] : response.headers) {
@@ -223,7 +234,7 @@ domain::Result<ports::HttpResponseHead> HttplibTransport::perform(const ports::H
                 return true; // read and discard the small body
             }
             if (sink.bounded) {
-                if (response.has_header("Content-Length") &&
+                if (has_body && response.has_header("Content-Length") &&
                     response.get_header_value_u64("Content-Length") > sink.limit) {
                     state.too_large = true;
                     return false;
@@ -236,6 +247,7 @@ domain::Result<ports::HttpResponseHead> HttplibTransport::perform(const ports::H
             }
             return true;
         };
+        req.response_handler = [&](const httplib::Response& response) { return take_head(response, true); };
         req.content_receiver = [&](const char* data, std::size_t length, std::size_t, std::size_t) {
             if (context.stop.stop_requested()) {
                 state.canceled = true;
@@ -268,16 +280,16 @@ domain::Result<ports::HttpResponseHead> HttplibTransport::perform(const ports::H
             return true;
         };
 
-        httplib::Response response;
-        auto error = httplib::Error::Success;
-        bool ok = false;
-        {
+        // send() leaves the start of the max timeout to the caller; unset, the
+        // total budget is not measured from this hop.
+        req.start_time_ = Clock::now();
+        auto result = [&] {
             // Aborts the socket from whichever thread requests the stop; send()
             // returns once the connection is really closed.
             std::stop_callback abort_on_stop{context.stop, [&client] { client.stop(); }};
-            ok = client.send(req, response, error);
-        }
-        if (!ok) {
+            return client.send(req);
+        }();
+        if (!result) {
             if (state.consumer_stopped) {
                 head.stopped_by_consumer = true;
                 return head;
@@ -292,7 +304,11 @@ domain::Result<ports::HttpResponseHead> HttplibTransport::perform(const ports::H
                 return domain::Error{domain::ErrorCode::deadline_exceeded, "the operation deadline passed", false,
                                      {}};
             }
-            return map_error(error);
+            return map_error(result.error(), result.ssl_error());
+        }
+        if (!state.head_seen && !take_head(result.value(), false)) {
+            head.stopped_by_consumer = true; // only on_head refuses a bodiless response
+            return head;
         }
 
         if (!state.location) {

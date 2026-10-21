@@ -13,6 +13,10 @@ namespace music_service::application::transport {
 
 namespace {
 
+// Longer than any cooldown the admission ledger keeps, and small enough that adding
+// it to the steady clock cannot overflow.
+constexpr std::chrono::seconds max_retry_after = std::chrono::hours{24 * 365};
+
 // Retry-After as delta-seconds. An HTTP-date is ignored rather than trusted against
 // a possibly skewed upstream clock.
 std::optional<std::chrono::seconds> retry_after(const ports::HttpResponseHead& head) {
@@ -20,12 +24,21 @@ std::optional<std::chrono::seconds> retry_after(const ports::HttpResponseHead& h
     if (!value || value->empty()) {
         return std::nullopt;
     }
-    long long seconds = 0;
+    // Unsigned, so a sign is rejected rather than parsed.
+    unsigned long long seconds = 0;
     const auto [end, ec] = std::from_chars(value->data(), value->data() + value->size(), seconds);
-    if (ec != std::errc{} || end != value->data() + value->size() || seconds < 0) {
+    if (end != value->data() + value->size()) {
         return std::nullopt;
     }
-    return std::chrono::seconds{seconds};
+    // A value too large to represent still cools down, capped before it reaches the clock.
+    if (ec == std::errc::result_out_of_range ||
+        (ec == std::errc{} && seconds > static_cast<unsigned long long>(max_retry_after.count()))) {
+        return max_retry_after;
+    }
+    if (ec != std::errc{}) {
+        return std::nullopt;
+    }
+    return std::chrono::seconds{static_cast<std::chrono::seconds::rep>(seconds)};
 }
 
 } // namespace
