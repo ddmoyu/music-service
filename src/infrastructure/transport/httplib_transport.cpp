@@ -53,6 +53,9 @@ domain::Error timeout_error(std::string category, std::string message) {
 }
 
 // ssl_error is the TLS layer's code for the failed request, as httplib reports it.
+// How early a socket timeout may fire relative to the deadline it was capped to.
+constexpr std::chrono::milliseconds deadline_slack{50};
+
 domain::Error map_error(httplib::Error error, int ssl_error) {
     switch (error) {
     case httplib::Error::Connection:
@@ -302,7 +305,13 @@ domain::Result<ports::HttpResponseHead> HttplibTransport::perform(const ports::H
             if (state.too_large) {
                 return transport_error("response_too_large", "the upstream response exceeds the limit", false);
             }
-            if (state.deadline || context.expired(Clock::now())) {
+            // A socket timeout the deadline capped may fire up to a timer tick early
+            // (about 16 ms on Windows); within that slack it is still the deadline.
+            const bool capped = remaining < options_.idle_timeout || remaining < options_.connect_timeout;
+            const bool timed_out = result.error() == httplib::Error::Read || result.error() == httplib::Error::Timeout ||
+                                   result.error() == httplib::Error::ConnectionTimeout;
+            if (state.deadline || context.expired(Clock::now()) ||
+                (capped && timed_out && context.expired(Clock::now() + deadline_slack))) {
                 return domain::Error{domain::ErrorCode::deadline_exceeded, "the operation deadline passed", false,
                                      {}};
             }
