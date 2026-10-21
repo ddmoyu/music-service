@@ -668,8 +668,12 @@ TEST_CASE("executions a crash left running are due again at their resume stage",
     Runs r{"requeue"};
     const auto resolving = r.create("src", "1");
     const auto downloading = r.create("src", "2");
+    // Tasks created in the same millisecond have no claim order; find the second one by id.
     auto first = *unwrap(r.tasks->claim_next(r.clock->now()));
     auto second = *unwrap(r.tasks->claim_next(r.clock->now()));
+    if (first.task_id == downloading) {
+        std::swap(first, second);
+    }
     REQUIRE(second.task_id == downloading);
     second = unwrap(r.tasks->transition(
         {second.task_id, *second.execution_id, second.version, TaskStatus::downloading, {}, {}, {}}));
