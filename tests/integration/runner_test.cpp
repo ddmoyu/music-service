@@ -542,6 +542,159 @@ TEST_CASE("a 200 answer to a range request replaces the partial file", "[downloa
     CHECK(read_bytes(r.root / "detail.mp3") == r.audio); // never appended to the old prefix
 }
 
+TEST_CASE("a 206 of another range or resource is not mixed into the file (A14)", "[downloads][runner]") {
+    SECTION("the range starts elsewhere") {
+        Runs r{"range-start"};
+        int calls = 0;
+        r.transport->answer = [&](const ports::HttpRequest& request) {
+            ++calls;
+            if (calls == 1) {
+                auto reply = serve(r.audio);
+                reply.reset_after = 80000;
+                return reply;
+            }
+            if (header(request, "Range")) {
+                auto reply = serve_range(request, r.audio);
+                reply.headers[0].value = "bytes 0-" + std::to_string(r.audio.size() - 1) + "/" +
+                                         std::to_string(r.audio.size());
+                reply.body = r.audio; // the whole file, labeled as a range from 0
+                return reply;
+            }
+            return serve(r.audio);
+        };
+        r.create();
+        CHECK(r.run_next().outcome == RunOutcome::completed);
+        const auto requests = r.transport->requests();
+        REQUIRE(requests.size() == 3);
+        CHECK_FALSE(header(requests[2], "Range")); // started over without a range
+        CHECK(read_bytes(r.root / "detail.mp3") == r.audio);
+    }
+    SECTION("the validator changed") {
+        Runs r{"range-etag"};
+        const auto other = mp3(1150); // another encoding of the track
+        int calls = 0;
+        r.transport->answer = [&](const ports::HttpRequest& request) {
+            if (++calls == 1) {
+                auto reply = serve(r.audio);
+                reply.reset_after = 80000;
+                return reply;
+            }
+            if (const auto range = header(request, "Range")) {
+                const auto from = std::stoull(range->substr(6));
+                return Reply{206,
+                             {{"Content-Range", "bytes " + std::to_string(from) + "-" +
+                                                    std::to_string(r.audio.size() - 1) + "/" +
+                                                    std::to_string(r.audio.size())},
+                              {"ETag", "\"v2\""}},
+                             other.substr(from, r.audio.size() - from)};
+            }
+            return serve(other, "\"v2\"");
+        };
+        r.create();
+        CHECK(r.run_next().outcome == RunOutcome::completed);
+        CHECK(read_bytes(r.root / "detail.mp3") == other); // only bytes of one resource
+    }
+}
+
+TEST_CASE("a 416 completes only with matching evidence, otherwise starts over (A15)", "[downloads][runner]") {
+    Runs r{"unsatisfiable"};
+    int calls = 0;
+    r.transport->answer = [&](const ports::HttpRequest& request) {
+        if (++calls == 1) {
+            auto reply = serve_range(request, r.audio);
+            reply.reset_after = 64000;
+            return reply;
+        }
+        if (header(request, "Range")) {
+            // The server claims the resource is no longer than what is here.
+            return Reply{416, {{"Content-Range", "bytes */64000"}}, {}};
+        }
+        return serve(r.audio);
+    };
+    const auto id = r.create();
+    CHECK(r.run_next().outcome == RunOutcome::completed);
+    const auto requests = r.transport->requests();
+    REQUIRE(requests.size() == 3);
+    CHECK(header(requests[1], "Range") == "bytes=64000-");
+    CHECK_FALSE(header(requests[2], "Range"));
+    CHECK(read_bytes(r.root / "detail.mp3") == r.audio); // never published as 64000 bytes
+    CHECK(r.get(id).attempt == 1);
+}
+
+TEST_CASE("an expired address is resolved again and the same resource resumes (A16)", "[downloads][runner]") {
+    Runs r{"expired"};
+    int resolved = 0;
+    r.script->answer = [&](const domain::TrackRef& t) -> domain::Result<ports::ResolvedAudio> {
+        ++resolved;
+        return ports::ResolvedAudio{t,
+                                    domain::Quality::standard,
+                                    domain::Completeness::unknown,
+                                    "mp3",
+                                    128000,
+                                    "https://cdn.test/signed-" + std::to_string(resolved) + ".mp3",
+                                    {},
+                                    {},
+                                    30010,
+                                    ports::ProcessingPlan{}};
+    };
+    int first_url = 0;
+    r.transport->answer = [&](const ports::HttpRequest& request) {
+        if (request.url == "https://cdn.test/signed-1.mp3") {
+            if (++first_url == 1) {
+                auto reply = serve_range(request, r.audio);
+                reply.reset_after = 90000;
+                return reply;
+            }
+            return Reply{403, {{"Content-Type", "text/html"}}, "expired"}; // the signature ran out
+        }
+        return serve_range(request, r.audio);
+    };
+    const auto id = r.create();
+    const auto first = r.run_next();
+    CHECK(first.outcome == RunOutcome::waiting_retry);
+    auto task = r.get(id);
+    CHECK(task.wait_reason == domain::WaitReason::upstream_retry);
+    CHECK(task.resume_stage == TaskStatus::resolving);
+    REQUIRE(task.next_retry_at);
+    CHECK(r.run_next(*task.next_retry_at).outcome == RunOutcome::completed);
+    CHECK(resolved == 2);
+    const auto requests = r.transport->requests();
+    const auto& last = requests.back();
+    CHECK(last.url == "https://cdn.test/signed-2.mp3");
+    CHECK(header(last, "Range") == "bytes=90000-"); // same track, quality and validator
+    CHECK(header(last, "If-Range") == "\"v1\"");
+    CHECK(read_bytes(r.root / "detail.mp3") == r.audio);
+    CHECK(r.get(id).attempt == 2);
+}
+
+TEST_CASE("Retry-After moves the next attempt later, within its cap", "[downloads][runner]") {
+    auto options = quick_options();
+    options.max_retry_after = 120s;
+    runtime::AdmissionLimits limits;
+    limits.max_cooldown = 0s; // only the task's own wait is under test here
+    Runs r{"retry-after", options, limits};
+    std::string wait = "30";
+    r.transport->answer = [&](const ports::HttpRequest&) {
+        return Reply{503, {{"Retry-After", wait}}, {}};
+    };
+    const auto id = r.create();
+    auto before = r.clock->now();
+    CHECK(r.run_next().outcome == RunOutcome::waiting_retry);
+    auto task = r.get(id);
+    REQUIRE(task.next_retry_at);
+    CHECK(*task.next_retry_at >= before + 30s);
+    CHECK(*task.next_retry_at < before + 40s);
+
+    wait = "86400"; // a day: capped
+    before = r.clock->now();
+    CHECK(r.run_next(*task.next_retry_at).outcome == RunOutcome::waiting_retry);
+    task = r.get(id);
+    REQUIRE(task.next_retry_at);
+    CHECK(*task.next_retry_at >= before + 120s);
+    CHECK(*task.next_retry_at < before + 130s);
+    CHECK(task.attempt == 2);
+}
+
 TEST_CASE("a cut-off or non-audio body is never published", "[downloads][runner]") {
     Runs r{"invalid"};
     r.transport->answer = [](const ports::HttpRequest&) {

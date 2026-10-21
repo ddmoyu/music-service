@@ -436,6 +436,7 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
     runner_options.max_file_bytes = config.downloads.max_file_bytes;
     runner_options.initial_backoff = config.retry.initial_backoff;
     runner_options.backoff_multiplier = config.retry.multiplier;
+    runner_options.max_retry_after = admission_limits(config).max_cooldown; // the same cap as cooldowns
     runner_options.attempt_budget = config.download_timeouts.attempt;
     runner_options.absolute_budget = config.download_timeouts.absolute;
     runner_options.progress_interval = config.event_stream.progress_interval;

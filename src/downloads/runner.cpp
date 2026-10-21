@@ -1,6 +1,7 @@
 #include "downloads/runner.hpp"
 
 #include "application/transport/http_rules.hpp"
+#include "application/transport/upstream_client.hpp"
 #include "downloads/resume_policy.hpp"
 
 #include <nlohmann/json.hpp>
@@ -51,6 +52,16 @@ Error error(ErrorCode code, std::string message, bool retryable, std::string fie
 bool admission_deferred(const Error& e) {
     return e.code == ErrorCode::service_busy &&
            std::any_of(e.details.begin(), e.details.end(), [](const auto& d) { return d.field == "admission"; });
+}
+
+// The upstream's own wait, as the error carries it (retry_after_seconds).
+std::optional<std::chrono::seconds> retry_hint(const Error& e) {
+    for (const auto& detail : e.details) {
+        if (detail.field == "retry_after_seconds") {
+            return application::transport::parse_retry_after(detail.reason);
+        }
+    }
+    return std::nullopt;
 }
 
 bool storage_busy(const Error& e) {
@@ -347,6 +358,10 @@ RunReport Execution::retry_later(const Error& cause, bool discard_partial) {
     // Up to a fifth more, so failed tasks do not come back in step.
     thread_local std::minstd_rand jitter{std::random_device{}()};
     backoff += milliseconds{std::uniform_int_distribution<std::int64_t>{0, backoff.count() / 5}(jitter)};
+    // A bounded Retry-After of the upstream can only move the next attempt later.
+    if (const auto hint = retry_hint(cause)) {
+        backoff = std::max<milliseconds>(backoff, std::min(*hint, o_.max_retry_after));
+    }
     const auto at = now + backoff;
     if (task_.attempt >= o_.max_attempts || (task_.deadline_at && at >= *task_.deadline_at)) {
         return fail(cause);
@@ -670,6 +685,9 @@ std::optional<RunReport> Execution::download() {
 
         progress_ = {offset, cp.total_bytes, {}};
         int status = 0;
+        std::optional<std::chrono::seconds> wait_hint;   // 429/503 Retry-After
+        std::optional<std::uint64_t> unsatisfied_total; // 416 Content-Range: bytes */total
+        std::optional<std::string> unsatisfied_etag;
         bool mismatch = false;
         bool too_large = false;
         bool conflict = false; // a cancel or another execution won a checkpoint write
@@ -701,6 +719,16 @@ std::optional<RunReport> Execution::download() {
                     return false;
                 }
             } else {
+                if (status == 429 || status == 503) {
+                    wait_hint = application::transport::retry_after(head);
+                }
+                if (status == 416) {
+                    const auto range = head.header("Content-Range");
+                    if (range && range->rfind("bytes */", 0) == 0) {
+                        unsatisfied_total = parse_uint(std::string_view{*range}.substr(8));
+                    }
+                    unsatisfied_etag = head.header("ETag");
+                }
                 return false;
             }
             const auto etag = head.header("ETag");
@@ -803,6 +831,19 @@ std::optional<RunReport> Execution::download() {
             }
             return stopped(TaskStatus::downloading);
         }
+        if (status == 416) {
+            // Nothing past the offset. Complete only when the server's total is exactly
+            // what is already here and the validators agree; verification has the last
+            // word. Otherwise the resource is not the one the prefix came from.
+            const bool same = unsatisfied_etag ? cp.etag && *unsatisfied_etag == *cp.etag : true;
+            if (offset > 0 && unsatisfied_total && cp.total_bytes && *unsatisfied_total == offset &&
+                *cp.total_bytes == offset && same && (cp.etag || cp.last_modified)) {
+                cp.complete = true;
+                progress_ = {offset, cp.total_bytes, {}};
+                return save_checkpoint(false);
+            }
+            mismatch = true;
+        }
         if (mismatch) {
             // The resource changed under the partial file: start this resource from zero.
             cp.etag.reset();
@@ -821,6 +862,9 @@ std::optional<RunReport> Execution::download() {
             auto e =
                 error(status == 429 ? ErrorCode::upstream_rate_limited : ErrorCode::upstream_failed,
                       "the audio server answered with a temporary error", true, "http_status", std::to_string(status));
+            if (wait_hint) {
+                e.details.push_back({"retry_after_seconds", std::to_string(wait_hint->count())});
+            }
             if (auto ended = save_checkpoint(true)) {
                 return ended;
             }

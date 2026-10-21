@@ -17,17 +17,16 @@ namespace {
 // it to the steady clock cannot overflow.
 constexpr std::chrono::seconds max_retry_after = std::chrono::hours{24 * 365};
 
-// Retry-After as delta-seconds. An HTTP-date is ignored rather than trusted against
-// a possibly skewed upstream clock.
-std::optional<std::chrono::seconds> retry_after(const ports::HttpResponseHead& head) {
-    const auto value = head.header("Retry-After");
-    if (!value || value->empty()) {
+} // namespace
+
+std::optional<std::chrono::seconds> parse_retry_after(std::string_view text) {
+    if (text.empty()) {
         return std::nullopt;
     }
     // Unsigned, so a sign is rejected rather than parsed.
     unsigned long long seconds = 0;
-    const auto [end, ec] = std::from_chars(value->data(), value->data() + value->size(), seconds);
-    if (end != value->data() + value->size()) {
+    const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), seconds);
+    if (end != text.data() + text.size()) {
         return std::nullopt;
     }
     // A value too large to represent still cools down, capped before it reaches the clock.
@@ -41,7 +40,13 @@ std::optional<std::chrono::seconds> retry_after(const ports::HttpResponseHead& h
     return std::chrono::seconds{static_cast<std::chrono::seconds::rep>(seconds)};
 }
 
-} // namespace
+std::optional<std::chrono::seconds> retry_after(const ports::HttpResponseHead& head) {
+    const auto value = head.header("Retry-After");
+    if (!value) {
+        return std::nullopt;
+    }
+    return parse_retry_after(*value);
+}
 
 UpstreamClient::UpstreamClient(std::shared_ptr<ports::UpstreamAdmissionPort> admission,
                                std::shared_ptr<ports::HttpTransport> transport,

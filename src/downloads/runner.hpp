@@ -30,6 +30,9 @@ struct RunnerOptions {
     std::uint64_t max_file_bytes{2ULL * 1024 * 1024 * 1024};
     std::chrono::milliseconds initial_backoff{1000};   // retry.initial_backoff
     std::uint32_t backoff_multiplier{2};               // retry.multiplier
+    // Upper bound on an upstream Retry-After that moves the next attempt later; the
+    // admission ledger caps its cooldowns the same way.
+    std::chrono::seconds max_retry_after{300};
     std::chrono::seconds attempt_budget{600};          // download_timeouts.attempt
     std::chrono::seconds absolute_budget{1800};        // download_timeouts.absolute
     std::chrono::milliseconds progress_interval{1000}; // event_stream.progress_interval

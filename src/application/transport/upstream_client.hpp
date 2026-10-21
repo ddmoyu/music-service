@@ -7,13 +7,21 @@
 #include "application/ports/transport/upstream_http.hpp"
 #include "domain/result.hpp"
 
+#include <chrono>
 #include <memory>
+#include <optional>
+#include <string_view>
 #include <variant>
 
 namespace music_service::application::transport {
 
 using ports::HopResult;
 using ports::PendingHop;
+
+// Retry-After as delta-seconds; an HTTP-date is ignored rather than trusted against a
+// possibly skewed upstream clock. Values too large to represent come back as one year.
+std::optional<std::chrono::seconds> parse_retry_after(std::string_view text);
+std::optional<std::chrono::seconds> retry_after(const ports::HttpResponseHead& head);
 
 // Runs one upstream call as a sequence of admitted hops: each origin gets its own
 // lease from the admission port (never blocking), the transport follows redirects
