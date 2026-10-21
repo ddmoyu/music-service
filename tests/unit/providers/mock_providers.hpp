@@ -71,7 +71,8 @@ public:
                                                        const domain::TrackRef& track,
                                                        const domain::ResourceRequirement&) override {
         ports::ResolvedAudio audio{track, domain::Quality::standard, domain::Completeness::full,
-                                   "mp3", 128000, "https://audio.invalid/a.mp3", {}, {}};
+                                   "mp3", 128000, "https://audio.invalid/a.mp3", {}, {},
+                                   std::nullopt, ports::ProcessingPlan{}};
         return audio;
     }
 };
