@@ -272,12 +272,14 @@ domain::Result<SearchResult> CatalogService::search_tracks(const SearchRequest& 
     bool any_ok = false;
     bool any_executed = false;
     bool all_timeouts = true;
+    bool all_busy = true;
     for (const auto& source : result.sources) {
         if (source.status == SourceStatus::ok) {
             any_ok = true;
         } else if (source.status == SourceStatus::failed) {
             any_executed = true;
             all_timeouts = all_timeouts && source.error && is_timeout(*source.error);
+            all_busy = all_busy && source.error && source.error->code == ErrorCode::service_busy;
         }
     }
     if (cursor && !any_ok && result.sources.front().error &&
@@ -291,6 +293,9 @@ domain::Result<SearchResult> CatalogService::search_tracks(const SearchRequest& 
             result.failure = Error{ErrorCode::capability_unsupported, "no selected source supports this search", false, {}};
         } else if (all_timeouts) {
             result.failure = Error{ErrorCode::upstream_timeout, "every source timed out", true, {}};
+        } else if (all_busy) {
+            // Local capacity (workers or cursor handles), not the upstream.
+            result.failure = Error{ErrorCode::service_busy, "the service has no capacity for this search now", true, {}};
         } else {
             result.failure = Error{ErrorCode::upstream_failed, "every source failed", true, {}};
         }
@@ -371,6 +376,11 @@ SourceResult CatalogService::run_search(const SearchRequest& request, const std:
         if (!fetched) {
             return fail(std::move(fetched).error());
         }
+        // A result after this source's deadline or the request's end is late: dropped,
+        // never cached.
+        if (stop.stop_requested() || SteadyClock::now() >= deadline) {
+            return fail(Error{ErrorCode::upstream_timeout, "the source did not answer in time", true, {}});
+        }
         page = std::move(fetched).value();
         std::size_t bytes = 128;
         for (const auto& track : page->page.items) {
@@ -380,6 +390,9 @@ SourceResult CatalogService::run_search(const SearchRequest& request, const std:
         outcome.cache = CacheInfo{false, now};
     }
 
+    if (stop.stop_requested()) {
+        return fail(Error{ErrorCode::upstream_timeout, "the source did not answer in time", true, {}});
+    }
     SourcePage source_page{request.limit, page->page.page.returned, page->page.page.total, page->page.page.has_more,
                            std::nullopt};
     if (page->next_cursor) {
@@ -387,11 +400,11 @@ SourceResult CatalogService::run_search(const SearchRequest& request, const std:
                                     CursorState{source, request.q, request.limit, identity, binding->selection_version,
                                                 implementation, *page->next_cursor},
                                     now + limits_.lifetimes.cursor, now);
-        if (handle) {
-            source_page.next_cursor = std::move(handle).value();
-        } else {
-            source_page.has_more = page->page.page.has_more; // the page is still valid; no cursor to continue
+        if (!handle) {
+            // A page that says there is more but cannot be continued is not a success.
+            return fail(std::move(handle).error());
         }
+        source_page.next_cursor = std::move(handle).value();
     }
     outcome.status = SourceStatus::ok;
     outcome.page = std::move(source_page);

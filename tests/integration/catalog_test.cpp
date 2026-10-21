@@ -376,6 +376,97 @@ TEST_CASE("a slow source times out alone and does not hold the request", "[catal
     CHECK(slow.error->retryable);
 }
 
+TEST_CASE("late search results are dropped, not accepted or cached", "[catalog]") {
+    auto limits = Catalog::defaults();
+    limits.catalog.per_source_budget = 300ms;
+    Catalog c{"late", limits};
+    const auto owner = c.principal();
+
+    // Past its own budget but inside the request's: still a timeout for that source.
+    c.beta->delay_ms = 650;
+    const auto slow = unwrap(c.catalog->search_tracks({owner, "late", {"beta"}, false, 5, std::nullopt, 1000ms}));
+    REQUIRE(slow.failure);
+    CHECK(slow.failure->code == ErrorCode::upstream_timeout);
+    CHECK(slow.items.empty());
+    CHECK_FALSE(source_result(slow, "beta").page);
+
+    // Past the request's deadline: the work that finishes afterwards leaves no cache entry.
+    limits.catalog.per_source_budget = 5000ms;
+    Catalog d{"late-total", limits};
+    const auto other = d.principal();
+    d.beta->delay_ms = 3000;
+    const auto timed_out = unwrap(d.catalog->search_tracks({other, "late", {"beta"}, false, 5, std::nullopt, 1000ms}));
+    CHECK(timed_out.failure->code == ErrorCode::upstream_timeout);
+    std::this_thread::sleep_for(300ms); // the stopped work returns in the background
+
+    for (auto* catalog : {&c, &d}) {
+        catalog->beta->delay_ms = 0;
+        const auto before = catalog->beta->searches.load();
+        const auto again =
+            unwrap(catalog->catalog->search_tracks({catalog == &c ? owner : other, "late", {"beta"}, false, 5,
+                                                    std::nullopt, 1000ms}));
+        CHECK(source_result(again, "beta").status == SourceStatus::ok);
+        CHECK_FALSE(source_result(again, "beta").cache->hit);
+        CHECK(catalog->beta->searches.load() - before == 1);
+    }
+}
+
+TEST_CASE("a page that cannot get a cursor is not reported as a success", "[catalog]") {
+    auto limits = Catalog::defaults();
+    limits.handles.cursors = 4;
+    limits.per_owner_handle_share = 4; // one live cursor per principal
+    Catalog c{"cursor-capacity", limits};
+    const auto owner = c.principal();
+
+    const auto first = c.search(owner, {"alpha"}, "one");
+    REQUIRE(first.sources[0].page->next_cursor);
+
+    const auto second = c.search(owner, {"alpha"}, "two");
+    REQUIRE(second.failure);
+    CHECK(second.failure->code == ErrorCode::service_busy);
+    CHECK(second.failure->retryable);
+    const auto& alpha = source_result(second, "alpha");
+    CHECK(alpha.status == SourceStatus::failed);
+    CHECK(alpha.error->code == ErrorCode::service_busy);
+    CHECK_FALSE(alpha.page);
+    CHECK(second.items.empty());
+
+    // A page without more results needs no cursor; next to it the result is partial,
+    // still naming the source that could not continue.
+    c.beta->pages = false;
+    const auto mixed = c.search(owner, {"alpha", "beta"}, "three");
+    CHECK_FALSE(mixed.failure);
+    CHECK(mixed.partial);
+    CHECK(source_result(mixed, "alpha").error->code == ErrorCode::service_busy);
+    CHECK(source_result(mixed, "beta").status == SourceStatus::ok);
+    CHECK(mixed.items.size() == 1);
+}
+
+TEST_CASE("expired handles stay expired after they are purged", "[catalog]") {
+    int next = 0;
+    HandleTable<int> table{2, 2, [&] { return "h" + std::to_string(++next); }};
+    const auto start = std::chrono::system_clock::time_point{std::chrono::seconds{1'700'000'000}};
+    const auto later = start + 10s;
+
+    const auto old = unwrap(table.put("alice", 1, start + 5s, start));
+    CHECK(table.get("alice", old, later).error().code == ErrorCode::resource_expired);
+    // Creating any handle purges the expired one; it still reads as expired to its owner only.
+    (void)unwrap(table.put("bob", 2, later + 60s, later));
+    CHECK(table.size() == 1);
+    CHECK(table.get("alice", old, later).error().code == ErrorCode::resource_expired);
+    CHECK(table.get("alice", old, later, ErrorCode::cursor_expired).error().code == ErrorCode::cursor_expired);
+    CHECK(table.get("bob", old, later).error().code == ErrorCode::not_found);
+    CHECK(table.get("alice", "h99", later).error().code == ErrorCode::not_found);
+
+    // The record is bounded: only the most recent `capacity` expired ids are kept.
+    const auto a = unwrap(table.put("alice", 3, later + 1s, later)); // fills the table (capacity 2)
+    CHECK(table.put("alice", 4, later + 60s, later).error().code == ErrorCode::service_busy);
+    const auto after = later + 70s;
+    (void)unwrap(table.put("carol", 5, after + 60s, after)); // purges a and bob's; old falls out
+    CHECK(table.get("alice", a, after).error().code == ErrorCode::resource_expired);
+    CHECK(table.get("alice", old, after).error().code == ErrorCode::not_found);
+}
+
 TEST_CASE("results are cached per identity and identical calls merge", "[catalog]") {
     Catalog c{"cache"};
     const auto owner = c.principal();

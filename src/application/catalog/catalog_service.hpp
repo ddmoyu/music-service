@@ -68,7 +68,8 @@ struct SearchResult {
     std::vector<SourceResult> sources;
     bool partial{false};
     // Set when no source succeeded: every executed source timed out (UPSTREAM_TIMEOUT),
-    // other failures (UPSTREAM_FAILED), or nothing selected is usable
+    // every one lacked local capacity such as cursor handles (SERVICE_BUSY), other
+    // failures (UPSTREAM_FAILED), or nothing selected is usable
     // (CAPABILITY_UNSUPPORTED). The per-source results stay available.
     std::optional<domain::Error> failure;
 };
