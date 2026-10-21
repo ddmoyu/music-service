@@ -35,6 +35,7 @@ add_executable(music_service_unit_tests
     unit/domain/result_test.cpp
     unit/domain/task_status_test.cpp
     unit/application/ports_test.cpp
+    unit/application/task_events_test.cpp
     unit/application/transport_rules_test.cpp
     unit/infrastructure/config_test.cpp
     unit/infrastructure/filesystem_test.cpp
@@ -77,6 +78,7 @@ add_executable(music_service_integration_tests
     integration/accounts_test.cpp
     integration/catalog_test.cpp
     integration/downloads_test.cpp
+    integration/events_test.cpp
     integration/server_test.cpp
     integration/storage_test.cpp
     integration/transport_test.cpp

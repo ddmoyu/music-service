@@ -5,8 +5,11 @@
 #include "application/accounts/identity_admin.hpp"
 #include "application/catalog/asset_service.hpp"
 #include "application/catalog/catalog_service.hpp"
+#include "application/events/publishing_task_repository.hpp"
+#include "application/events/task_event_hub.hpp"
 #include "application/tasks/download_service.hpp"
 #include "application/transport/upstream_client.hpp"
+#include "event_server/httplib/event_server.hpp"
 #include "infrastructure/auth/access_tokens.hpp"
 #include "infrastructure/filesystem/paths.hpp"
 #include "infrastructure/secrets/file_secret_store.hpp"
@@ -75,7 +78,9 @@ struct ProcessHost::State {
     std::shared_ptr<runtime::BoundedExecutor> catalog_executor;
     std::shared_ptr<application::catalog::CatalogService> catalog;
     std::shared_ptr<application::catalog::AssetService> assets;
+    std::shared_ptr<application::events::TaskEventHub> events_hub;
     std::shared_ptr<application::tasks::DownloadService> downloads;
+    std::unique_ptr<event_server::EventServer> events;
     std::unique_ptr<api::ControlApi> control;
 
     StartupReport report;
@@ -124,6 +129,10 @@ struct ProcessHost::State {
             stopping = true;
             ready = false;
             log.info("shutdown.started");
+            if (events) {
+                events->stop(); // every stream ends; clients resynchronize after restart
+                events.reset();
+            }
             if (control) {
                 control->stop(); // no new requests; those in flight finish
                 control.reset();
@@ -137,6 +146,7 @@ struct ProcessHost::State {
                 catalog_executor->join();
             }
             downloads.reset();
+            events_hub.reset();
             assets.reset();
             catalog.reset();
             catalog_executor.reset();
@@ -280,13 +290,20 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
         config.lifetimes, config.handles, 4, state->registry, state->credentials, state->upstream, clock,
         [ids = inst.ids] { return ids->next("ast_"); }, config.catalog.total_budget);
 
+    // With SSE enabled, every committed task version is published to the owner's streams.
+    std::shared_ptr<application::ports::TaskRepository> tasks = inst.tasks;
+    if (config.events.enabled) {
+        state->events_hub =
+            std::make_shared<application::events::TaskEventHub>(config.event_limits, event_server::encode_task_event);
+        tasks = std::make_shared<application::events::PublishingTaskRepository>(inst.tasks, state->events_hub);
+    }
     std::vector<application::tasks::DestinationRule> rules;
     for (const auto& d : state->destinations) {
         rules.push_back({d.config.id, infrastructure::filesystem::path_to_utf8(d.root), d.config.principals,
                          d.config.accept_new_tasks});
     }
     state->downloads = std::make_shared<application::tasks::DownloadService>(
-        inst.tasks, state->registry, state->credentials, std::move(rules),
+        tasks, state->registry, state->credentials, std::move(rules),
         [](const application::tasks::DestinationRule& rule) {
             std::error_code ec;
             return std::filesystem::is_directory(infrastructure::filesystem::path_from_utf8(rule.canonical_root), ec);
@@ -304,12 +321,37 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
         },
         config.download_limits.max_batch_items);
 
+    if (config.events.enabled) {
+        state->events = std::make_unique<event_server::EventServer>(
+            event_server::EventServerOptions{config.events, config.event_stream, config.cors, state->report.instance_id},
+            event_server::EventServerServices{
+                state->authenticator, state->events_hub, [ids = inst.ids] { return ids->next("req_"); },
+                [raw = state.get()](const std::string& request_id, const std::string& method, const std::string& path,
+                                    int status, std::chrono::milliseconds elapsed) {
+                    raw->log.info("events.request", {{"request_id", request_id},
+                                                     {"method", method},
+                                                     {"path", path},
+                                                     {"status", status},
+                                                     {"elapsed_ms", static_cast<std::int64_t>(elapsed.count())}});
+                }});
+        auto events_port = state->events->bind();
+        if (!events_port) {
+            return fail(std::move(events_port).error(), "events_listener");
+        }
+        state->events->start();
+        state->report.events_base_url = base_url(config.events, events_port.value(), config.public_urls.events_base);
+    }
+
     api::ControlApiOptions api_options{config.control, config.http, config.cors, config.catalog,
                                        config.download_limits, config.media_limits, {}};
     api_options.info.version = std::string{service_version};
     api_options.info.instance_id = state->report.instance_id;
-    // Search is served (T13); downloads, files, media and SSE are declared once delivered.
+    // Search (T13), task queries (T14) and SSE (T18) are served; downloads, files and media
+    // are declared once delivered.
     api_options.info.features.search = true;
+    api_options.info.features.progress_polling = true;
+    api_options.info.features.progress_sse = state->events != nullptr;
+    api_options.info.events_base_url = state->report.events_base_url;
     State* raw = state.get();
     api::ControlApiServices services{
         state->authenticator,
@@ -341,7 +383,8 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
 
     state->ready = true;
     state->log.info("startup.ready", {{"instance_id", state->report.instance_id},
-                                      {"api_base_url", state->report.api_base_url}});
+                                      {"api_base_url", state->report.api_base_url},
+                                      {"events_base_url", state->report.events_base_url.value_or("")}});
     undo.state = nullptr;
     return std::unique_ptr<ProcessHost>{new ProcessHost(std::move(state))};
 }

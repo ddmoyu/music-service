@@ -106,6 +106,7 @@ domain::Result<cfg::ServiceConfig> load_config(const Arguments& args, const Host
     options.data_dir = args.data_dir;
     options.working_directory = fs::current_path();
     options.build.providers = provider_sources(host);
+    options.build.event_server = true;
     return infrastructure::config::load_service_config(options);
 }
 
@@ -384,7 +385,7 @@ int cmd_serve(const cfg::ServiceConfig& config, const Console& console, CommandH
                         {"instance_id", report.instance_id},
                         {"api_base_url", report.api_base_url},
                         {"media_base_url", nullptr},
-                        {"events_base_url", nullptr}};
+                        {"events_base_url", report.events_base_url ? nlohmann::json(*report.events_base_url) : nullptr}};
     console.out << line.dump() << std::endl;
     if (hooks.on_ready) {
         hooks.on_ready(report);

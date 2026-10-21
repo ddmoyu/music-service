@@ -15,6 +15,7 @@ target_link_libraries(music_service_server_core
         music_service::infrastructure
     PRIVATE
         music_service::project_warnings
+        music_service::event_server
         music_service::http_api
         music_service::providers
         music_service::runtime

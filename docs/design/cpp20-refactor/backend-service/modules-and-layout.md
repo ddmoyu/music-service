@@ -2,7 +2,7 @@
 
 业务职责见[功能模块](feature-modules.md)，操作和所有权见[内部契约](internal-contracts.md)。
 
-工程按本页结构建立在仓库根目录，当前进度见[源码说明](../../../../src/README.md)：domain、application（端口、配置与账号／传输用例）、infrastructure、runtime、providers 注册表、audio_processing 基线验证、控制入口 api 与 server 可执行程序已实现；downloads、media_server、event_server 仍用 INTERFACE 目标记录依赖，首次引入真实源码时转为普通库。下方的具体文件名表示后续实现位置。
+工程按本页结构建立在仓库根目录，当前进度见[源码说明](../../../../src/README.md)：domain、application（端口、配置与账号／传输用例）、infrastructure、runtime、providers 注册表、audio_processing 基线验证、控制入口 api、SSE 入口 event_server 与 server 可执行程序已实现；downloads、media_server 仍用 INTERFACE 目标记录依赖，首次引入真实源码时转为普通库。下方的具体文件名表示后续实现位置。
 
 ## 依赖方向
 

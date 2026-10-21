@@ -106,6 +106,7 @@ int status_for(ErrorCode code) {
     case ErrorCode::destination_unavailable:
         return 422;
     case ErrorCode::queue_limit_exceeded:
+    case ErrorCode::caller_limit_exceeded:
         return 429;
     case ErrorCode::upstream_failed:
     case ErrorCode::upstream_rate_limited:

@@ -37,6 +37,7 @@ enum class ErrorCode {
     idempotency_conflict,
     active_duplicate,
     queue_limit_exceeded,
+    caller_limit_exceeded, // a per-caller service limit such as event subscriptions
     cursor_expired,
     cursor_mismatch,
     instance_locked,

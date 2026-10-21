@@ -62,6 +62,8 @@ std::string_view to_string(ErrorCode code) noexcept {
         return "ACTIVE_DUPLICATE";
     case ErrorCode::queue_limit_exceeded:
         return "QUEUE_LIMIT_EXCEEDED";
+    case ErrorCode::caller_limit_exceeded:
+        return "CALLER_LIMIT_EXCEEDED";
     case ErrorCode::cursor_expired:
         return "CURSOR_EXPIRED";
     case ErrorCode::cursor_mismatch:
