@@ -1,6 +1,10 @@
 #include "application/catalog/catalog_service.hpp"
 
+#include "application/catalog/catalog_support.hpp"
+#include "application/ports/providers/provider.hpp"
+
 #include <algorithm>
+#include <any>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
@@ -14,8 +18,10 @@ namespace {
 using domain::Error;
 using domain::ErrorCode;
 using SteadyClock = std::chrono::steady_clock;
-
-constexpr std::string_view search_capability = "search_tracks";
+using support::item_bytes;
+using support::key_of;
+using support::public_error;
+using support::share_secret;
 
 std::string_view trim(std::string_view text) {
     const auto first = text.find_first_not_of(" \t\r\n\f\v");
@@ -30,51 +36,14 @@ std::size_t utf8_chars(std::string_view text) {
         std::count_if(text.begin(), text.end(), [](char c) { return (static_cast<unsigned char>(c) & 0xC0) != 0x80; }));
 }
 
-// Unambiguous cache and flight keys: length-prefixed parts.
-std::string key_of(std::initializer_list<std::string_view> parts) {
-    std::string key;
-    for (const auto part : parts) {
-        key += std::to_string(part.size());
-        key.push_back(':');
-        key.append(part);
-        key.push_back(';');
-    }
-    return key;
-}
-
-std::size_t track_bytes(const domain::Track& track) {
-    std::size_t bytes = 256 + track.title.size() + track.ref.id.value().size();
-    for (const auto& artist : track.artists) {
-        bytes += 64 + artist.name.size();
-    }
-    if (track.album) {
-        bytes += 64 + track.album->title.size();
-    }
-    return bytes;
-}
-
 bool is_timeout(const Error& error) {
     return error.code == ErrorCode::upstream_timeout || error.code == ErrorCode::deadline_exceeded;
-}
-
-// Only sanitized errors leave a source; internal details stay internal.
-Error public_error(Error error) {
-    if (error.code == ErrorCode::internal) {
-        return Error{ErrorCode::internal, "internal error", false, {}};
-    }
-    return error;
-}
-
-std::shared_ptr<const ports::SecretBytes> share_secret(std::optional<ports::SecretBytes>& secret) {
-    if (!secret) {
-        return nullptr;
-    }
-    return std::make_shared<const ports::SecretBytes>(std::move(*secret));
 }
 
 } // namespace
 
 struct CatalogService::CursorState {
+    std::string kind; // the search capability key: a playlist cursor never continues tracks
     std::string source;
     std::string query;
     std::uint32_t limit{0};
@@ -90,19 +59,24 @@ CatalogService::CatalogService(CatalogLimits limits, std::shared_ptr<const ports
                                std::function<std::string()> new_cursor_id)
     : limits_(std::move(limits)), providers_(std::move(providers)), credentials_(std::move(credentials)),
       executor_(std::move(executor)), clock_(std::move(clock)),
-      search_cache_(limits_.cache.catalog_entries, static_cast<std::size_t>(limits_.cache.catalog_bytes / 2),
+      entity_cache_(limits_.cache.catalog_entries, static_cast<std::size_t>(limits_.cache.catalog_bytes / 2),
                     limits_.cache.catalog_ttl),
       detail_cache_(limits_.cache.catalog_entries, static_cast<std::size_t>(limits_.cache.catalog_bytes / 2),
                     limits_.cache.catalog_ttl),
       cursors_(std::make_shared<HandleTable<CursorState>>(
           limits_.handles.cursors,
           std::max<std::size_t>(1, limits_.handles.cursors / std::max<std::size_t>(1, limits_.per_owner_handle_share)),
+          new_cursor_id)),
+      list_cursors_(std::make_shared<HandleTable<ListCursor>>(
+          limits_.handles.cursors,
+          std::max<std::size_t>(1, limits_.handles.cursors / std::max<std::size_t>(1, limits_.per_owner_handle_share)),
           std::move(new_cursor_id))) {}
 
-domain::Result<std::vector<std::string>> CatalogService::select_sources(const SearchRequest& request) {
+domain::Result<std::vector<std::string>> CatalogService::select_sources(const SearchRequest& request,
+                                                                       std::string_view key) {
     std::vector<std::string> sources;
     if (request.all_sources) {
-        ports::ProviderListQuery query{request.owner_id, std::string{search_capability}, true, 100, std::nullopt};
+        ports::ProviderListQuery query{request.owner_id, std::string{key}, true, 100, std::nullopt};
         while (true) {
             auto page = providers_->list(query);
             if (!page) {
@@ -138,7 +112,9 @@ domain::Result<std::vector<std::string>> CatalogService::select_sources(const Se
     return sources;
 }
 
-domain::Result<SearchResult> CatalogService::search_tracks(const SearchRequest& request) {
+template <class Item, class Call>
+domain::Result<BasicSearchResult<Item>> CatalogService::search_of(const SearchRequest& request,
+                                                                   std::string_view key, Call call) {
     const auto query = trim(request.q);
     if (query.empty()) {
         return Error::validation("q", "is required");
@@ -166,17 +142,18 @@ domain::Result<SearchResult> CatalogService::search_tracks(const SearchRequest& 
             return Error{ErrorCode::cursor_expired, "the cursor has expired", false, {}};
         }
         cursor = std::move(found->first);
-        if (cursor->source != request.sources.front() || cursor->query != query || cursor->limit != request.limit) {
+        if (cursor->kind != key || cursor->source != request.sources.front() || cursor->query != query ||
+            cursor->limit != request.limit) {
             return Error{ErrorCode::cursor_mismatch, "the cursor belongs to another source or query", false, {}};
         }
     }
 
-    auto selected = select_sources(request);
+    auto selected = select_sources(request, key);
     if (!selected) {
         return std::move(selected).error();
     }
     const auto& sources = selected.value();
-    SearchResult result;
+    BasicSearchResult<Item> result;
     if (sources.empty()) {
         result.failure = Error{ErrorCode::capability_unsupported, "no source is selected for search", false, {}};
         return result;
@@ -188,7 +165,7 @@ domain::Result<SearchResult> CatalogService::search_tracks(const SearchRequest& 
     struct Shared {
         std::mutex mutex;
         std::condition_variable changed;
-        std::vector<std::optional<SourceResult>> results;
+        std::vector<std::optional<BasicSourceResult<Item>>> results;
         std::deque<std::size_t> waiting;
         std::size_t running{0};
         std::stop_source stop;
@@ -207,14 +184,14 @@ domain::Result<SearchResult> CatalogService::search_tracks(const SearchRequest& 
 
     // Starts queued sources while fewer than fanout run; called with the lock held.
     std::function<void()> launch;
-    launch = [this, shared, &sources, copy, cursor, per_source, fanout]() {
+    launch = [this, shared, &sources, copy, cursor, per_source, fanout, key, &call]() {
         while (shared->running < fanout && !shared->waiting.empty()) {
             const auto index = shared->waiting.front();
             shared->waiting.pop_front();
             ++shared->running;
             auto submitted = executor_->submit([this, shared, source = sources[index], index, copy, cursor, per_source,
-                                                stop = shared->stop.get_token()](std::stop_token) {
-                auto outcome = run_search(copy, source, cursor, per_source, stop);
+                                                key, call, stop = shared->stop.get_token()](std::stop_token) {
+                auto outcome = run_search_of<Item>(copy, source, key, cursor, per_source, stop, call);
                 const std::lock_guard lock{shared->mutex};
                 if (!shared->results[index]) {
                     shared->results[index] = std::move(outcome);
@@ -224,7 +201,7 @@ domain::Result<SearchResult> CatalogService::search_tracks(const SearchRequest& 
             });
             if (!submitted) {
                 --shared->running;
-                SourceResult busy;
+                BasicSourceResult<Item> busy;
                 busy.source = sources[index];
                 busy.error = submitted.error();
                 shared->results[index] = std::move(busy);
@@ -251,7 +228,7 @@ domain::Result<SearchResult> CatalogService::search_tracks(const SearchRequest& 
         shared->waiting.clear();
         for (std::size_t i = 0; i < sources.size(); ++i) {
             if (!shared->results[i]) {
-                SourceResult late;
+                BasicSourceResult<Item> late;
                 late.source = sources[i];
                 late.elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now() - started);
                 late.error = Error{ErrorCode::upstream_timeout, "the source did not answer in time", true, {}};
@@ -287,7 +264,7 @@ domain::Result<SearchResult> CatalogService::search_tracks(const SearchRequest& 
         return *result.sources.front().error;
     }
     result.partial = any_ok && std::any_of(result.sources.begin(), result.sources.end(),
-                                           [](const SourceResult& s) { return s.status != SourceStatus::ok; });
+                                           [](const BasicSourceResult<Item>& s) { return s.status != SourceStatus::ok; });
     if (!any_ok) {
         if (!any_executed) {
             result.failure = Error{ErrorCode::capability_unsupported, "no selected source supports this search", false, {}};
@@ -303,13 +280,15 @@ domain::Result<SearchResult> CatalogService::search_tracks(const SearchRequest& 
     return result;
 }
 
-SourceResult CatalogService::run_search(const SearchRequest& request, const std::string& source,
-                                        const std::optional<CursorState>& cursor,
-                                        std::chrono::steady_clock::time_point deadline, std::stop_token stop) {
+template <class Item, class Call>
+BasicSourceResult<Item> CatalogService::run_search_of(const SearchRequest& request, const std::string& source,
+                                                      std::string_view key, const std::optional<CursorState>& cursor,
+                                                      std::chrono::steady_clock::time_point deadline,
+                                                      std::stop_token stop, const Call& call) {
     const auto started = SteadyClock::now();
-    SourceResult outcome;
+    BasicSourceResult<Item> outcome;
     outcome.source = source;
-    const auto finish = [&](SourceResult& r) -> SourceResult {
+    const auto finish = [&](BasicSourceResult<Item>& r) -> BasicSourceResult<Item> {
         r.elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now() - started);
         return std::move(r);
     };
@@ -319,7 +298,7 @@ SourceResult CatalogService::run_search(const SearchRequest& request, const std:
         return finish(outcome);
     };
 
-    if (auto spec = providers_->describe_capability(source, search_capability); !spec) {
+    if (auto spec = providers_->describe_capability(source, key); !spec) {
         const auto code = spec.error().code;
         outcome.status = code == ErrorCode::provider_disabled        ? SourceStatus::disabled
                          : code == ErrorCode::capability_unsupported ? SourceStatus::unsupported
@@ -327,7 +306,7 @@ SourceResult CatalogService::run_search(const SearchRequest& request, const std:
         outcome.error = spec.error();
         return finish(outcome);
     }
-    auto binding = credentials_->resolve_binding(request.owner_id, source, search_capability, std::nullopt);
+    auto binding = credentials_->resolve_binding(request.owner_id, source, key, std::nullopt);
     if (!binding) {
         return fail(std::move(binding).error());
     }
@@ -348,30 +327,26 @@ SourceResult CatalogService::run_search(const SearchRequest& request, const std:
         return fail(Error{ErrorCode::cursor_expired, "the source implementation changed", false, {}});
     }
     const auto provider_cursor = cursor ? std::optional<std::string>{cursor->provider_cursor} : std::nullopt;
-    const auto key = key_of({search_capability, identity, implementation, request.q, std::to_string(request.limit),
-                             provider_cursor.value_or("")});
+    const auto cache_key = key_of({key, identity, implementation, request.q, std::to_string(request.limit),
+                                   provider_cursor.value_or("")});
 
-    std::shared_ptr<const ports::TrackSearchPage> page;
+    std::shared_ptr<const std::any> stored;
     const auto now = clock_->now();
-    if (auto hit = search_cache_.get(key, now)) {
-        page = hit->value;
+    if (auto hit = entity_cache_.get(cache_key, now)) {
+        stored = hit->value;
         outcome.cache = CacheInfo{true, hit->created_at};
     } else {
         auto secret = share_secret(lease->secret);
-        auto fetched = search_flights_.join(key, deadline, [&]() -> SingleFlight<ports::TrackSearchPage>::Result {
+        auto fetched = entity_flights_.join(cache_key, deadline, [&]() -> SingleFlight<std::any>::Result {
             if (stop.stop_requested()) {
                 return Error{ErrorCode::canceled, "the request was canceled", false, {}};
             }
-            auto search = providers_->track_search(source);
-            if (!search) {
-                return std::move(search).error();
-            }
             const ports::ProviderContext context{{deadline, stop}, lease->identity, std::nullopt, secret};
-            auto found = search.value()->search_tracks(context, {request.q, request.limit, provider_cursor});
+            auto found = call(source, context, ports::SearchQuery{request.q, request.limit, provider_cursor});
             if (!found) {
                 return std::move(found).error();
             }
-            return std::make_shared<const ports::TrackSearchPage>(std::move(found).value());
+            return std::make_shared<const std::any>(std::move(found).value());
         });
         if (!fetched) {
             return fail(std::move(fetched).error());
@@ -381,24 +356,25 @@ SourceResult CatalogService::run_search(const SearchRequest& request, const std:
         if (stop.stop_requested() || SteadyClock::now() >= deadline) {
             return fail(Error{ErrorCode::upstream_timeout, "the source did not answer in time", true, {}});
         }
-        page = std::move(fetched).value();
+        stored = std::move(fetched).value();
         std::size_t bytes = 128;
-        for (const auto& track : page->page.items) {
-            bytes += track_bytes(track);
+        for (const auto& item : std::any_cast<const ports::CatalogPage<Item>&>(*stored).page.items) {
+            bytes += item_bytes(item);
         }
-        search_cache_.put(key, page, bytes, now);
+        entity_cache_.put(cache_key, stored, bytes, now);
         outcome.cache = CacheInfo{false, now};
     }
 
     if (stop.stop_requested()) {
         return fail(Error{ErrorCode::upstream_timeout, "the source did not answer in time", true, {}});
     }
+    const auto* page = &std::any_cast<const ports::CatalogPage<Item>&>(*stored);
     SourcePage source_page{request.limit, page->page.page.returned, page->page.page.total, page->page.page.has_more,
                            std::nullopt};
     if (page->next_cursor) {
         auto handle = cursors_->put(request.owner_id,
-                                    CursorState{source, request.q, request.limit, identity, binding->selection_version,
-                                                implementation, *page->next_cursor},
+                                    CursorState{std::string{key}, source, request.q, request.limit, identity,
+                                                binding->selection_version, implementation, *page->next_cursor},
                                     now + limits_.lifetimes.cursor, now);
         if (!handle) {
             // A page that says there is more but cannot be continued is not a success.
@@ -410,6 +386,50 @@ SourceResult CatalogService::run_search(const SearchRequest& request, const std:
     outcome.page = std::move(source_page);
     outcome.items = page->page.items;
     return finish(outcome);
+}
+
+domain::Result<SearchResult> CatalogService::search_tracks(const SearchRequest& request) {
+    return search_of<domain::Track>(
+        request, ports::capability::search_tracks,
+        [this](const std::string& source, const ports::ProviderContext& context,
+               const ports::SearchQuery& query) -> domain::Result<ports::TrackSearchPage> {
+            auto search = providers_->track_search(source);
+            if (!search) {
+                return std::move(search).error();
+            }
+            return search.value()->search_tracks(context, query);
+        });
+}
+
+namespace {
+
+// The provider call of one search capability.
+template <class Port, class Item> auto searcher(const ports::ProviderDirectory& providers) {
+    return [&providers](const std::string& source, const ports::ProviderContext& context,
+                        const ports::SearchQuery& query) -> domain::Result<ports::CatalogPage<Item>> {
+        auto search = providers.capability<Port>(source);
+        if (!search) {
+            return std::move(search).error();
+        }
+        return search.value()->search(context, query);
+    };
+}
+
+} // namespace
+
+domain::Result<BasicSearchResult<domain::Playlist>> CatalogService::search_playlists(const SearchRequest& request) {
+    return search_of<domain::Playlist>(request, ports::capability::search_playlists,
+                                       searcher<ports::PlaylistSearch, domain::Playlist>(*providers_));
+}
+
+domain::Result<BasicSearchResult<domain::Album>> CatalogService::search_albums(const SearchRequest& request) {
+    return search_of<domain::Album>(request, ports::capability::search_albums,
+                                    searcher<ports::AlbumSearch, domain::Album>(*providers_));
+}
+
+domain::Result<BasicSearchResult<domain::Artist>> CatalogService::search_artists(const SearchRequest& request) {
+    return search_of<domain::Artist>(request, ports::capability::search_artists,
+                                     searcher<ports::ArtistSearch, domain::Artist>(*providers_));
 }
 
 domain::Result<CatalogService::Detail> CatalogService::track_detail(const std::string& owner_id,
@@ -461,7 +481,7 @@ domain::Result<CatalogService::Detail> CatalogService::track_detail(const std::s
     if (!fetched) {
         return public_error(std::move(fetched).error());
     }
-    detail_cache_.put(key, fetched.value(), track_bytes(*fetched.value()), now);
+    detail_cache_.put(key, fetched.value(), item_bytes(*fetched.value()), now);
     return Detail{*fetched.value(), CacheInfo{false, now}};
 }
 

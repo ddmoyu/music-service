@@ -24,6 +24,21 @@ const std::map<std::string_view, std::type_index>& capability_ports() {
         {ports::capability_traits<ports::ILinkParser>::key, typeid(ports::ILinkParser)},
         {ports::capability_traits<ports::IAssetResolver>::key, typeid(ports::IAssetResolver)},
         {ports::capability_traits<ports::ILyrics>::key, typeid(ports::ILyrics)},
+        {ports::capability_traits<ports::PlaylistSearch>::key, typeid(ports::PlaylistSearch)},
+        {ports::capability_traits<ports::AlbumSearch>::key, typeid(ports::AlbumSearch)},
+        {ports::capability_traits<ports::ArtistSearch>::key, typeid(ports::ArtistSearch)},
+        {ports::capability_traits<ports::PlaylistDetail>::key, typeid(ports::PlaylistDetail)},
+        {ports::capability_traits<ports::AlbumDetail>::key, typeid(ports::AlbumDetail)},
+        {ports::capability_traits<ports::ChartDetail>::key, typeid(ports::ChartDetail)},
+        {ports::capability_traits<ports::PlaylistTracks>::key, typeid(ports::PlaylistTracks)},
+        {ports::capability_traits<ports::AlbumTracks>::key, typeid(ports::AlbumTracks)},
+        {ports::capability_traits<ports::ArtistTracks>::key, typeid(ports::ArtistTracks)},
+        {ports::capability_traits<ports::ChartTracks>::key, typeid(ports::ChartTracks)},
+        {ports::capability_traits<ports::ArtistAlbums>::key, typeid(ports::ArtistAlbums)},
+        {ports::capability_traits<ports::CategoryPlaylists>::key, typeid(ports::CategoryPlaylists)},
+        {ports::capability_traits<ports::ICategories>::key, typeid(ports::ICategories)},
+        {ports::capability_traits<ports::ICharts>::key, typeid(ports::ICharts)},
+        {ports::capability_traits<ports::IRecommendedPlaylists>::key, typeid(ports::IRecommendedPlaylists)},
     };
     return ports_by_key;
 }

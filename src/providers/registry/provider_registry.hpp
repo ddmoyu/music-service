@@ -98,6 +98,11 @@ public:
     asset_resolver(std::string_view source) const override {
         return require<ports::IAssetResolver>(source);
     }
+    [[nodiscard]] domain::Result<std::shared_ptr<void>> capability_object(std::string_view source,
+                                                                          std::string_view key,
+                                                                          std::type_index port) const override {
+        return require_erased(source, key, port);
+    }
     // The verifier bound to source + auth_profile + kind, created on first use.
     [[nodiscard]] domain::Result<std::shared_ptr<ports::ICredentialVerifier>>
     require_verifier(std::string_view source, std::string_view auth_profile,

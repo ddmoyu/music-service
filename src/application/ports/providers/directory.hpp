@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <typeindex>
 #include <vector>
 
 namespace music_service::application::ports {
@@ -106,6 +107,20 @@ public:
     virtual domain::Result<std::shared_ptr<ITrackDetail>> track_detail(std::string_view source) const = 0;
     virtual domain::Result<std::shared_ptr<ILinkParser>> link_parser(std::string_view source) const = 0;
     virtual domain::Result<std::shared_ptr<IAssetResolver>> asset_resolver(std::string_view source) const = 0;
+
+    // Any capability port by its interface, with the same errors; the key comes from
+    // capability_traits, so a key is only ever served by the port bound to it.
+    template <class Interface>
+    [[nodiscard]] domain::Result<std::shared_ptr<Interface>> capability(std::string_view source) const {
+        auto erased = capability_object(source, capability_traits<Interface>::key, std::type_index{typeid(Interface)});
+        if (!erased) {
+            return std::move(erased).error();
+        }
+        return std::static_pointer_cast<Interface>(std::move(erased).value());
+    }
+    // Type-checked: INTERNAL if the key is bound to another port.
+    virtual domain::Result<std::shared_ptr<void>> capability_object(std::string_view source, std::string_view key,
+                                                                    std::type_index port) const = 0;
 
     virtual domain::Result<std::shared_ptr<ICredentialVerifier>>
     require_verifier(std::string_view source, std::string_view auth_profile,

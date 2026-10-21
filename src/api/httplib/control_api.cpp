@@ -318,6 +318,103 @@ json track_json(const domain::Track& track) {
                 {"context_ref", nullptr}};
 }
 
+json optional_uint(const std::optional<std::uint64_t>& value) { return value ? json(*value) : json(nullptr); }
+
+json artists_json(const std::vector<domain::ArtistSummary>& artists) {
+    json out = json::array();
+    for (const auto& artist : artists) {
+        out.push_back({{"name", artist.name}, {"ref", optional_ref(artist.ref)}});
+    }
+    return out;
+}
+
+std::string_view listed_name(domain::ListedKind kind) {
+    switch (kind) {
+    case domain::ListedKind::playlist:
+        return "playlist";
+    case domain::ListedKind::track:
+        return "track";
+    case domain::ListedKind::album:
+        return "album";
+    case domain::ListedKind::artist:
+        return "artist";
+    }
+    return "playlist";
+}
+
+json playlist_json(const domain::Playlist& p) {
+    return json{{"ref", ref_json(p.ref)},
+                {"name", p.name},
+                {"creator", optional_string(p.creator)},
+                {"description", optional_string(p.description)},
+                {"artwork", optional_string(p.artwork)},
+                {"track_count", optional_uint(p.track_count)},
+                {"play_count", optional_uint(p.play_count)},
+                {"updated_at", optional_string(p.updated_at)}};
+}
+
+json album_json(const domain::Album& a) {
+    return json{{"ref", ref_json(a.ref)},
+                {"title", a.title},
+                {"artists", artists_json(a.artists)},
+                {"release_date", optional_string(a.release_date)},
+                {"track_count", optional_uint(a.track_count)},
+                {"artwork", optional_string(a.artwork)}};
+}
+
+json artist_json(const domain::Artist& a) {
+    return json{{"ref", ref_json(a.ref)}, {"name", a.name}, {"artwork", optional_string(a.artwork)}};
+}
+
+json chart_json(const domain::Chart& c) {
+    return json{{"ref", ref_json(c.ref)},
+                {"name", c.name},
+                {"description", optional_string(c.description)},
+                {"update_hint", optional_string(c.update_hint)},
+                {"updated_at", optional_string(c.updated_at)},
+                {"track_count", optional_uint(c.track_count)},
+                {"lists", listed_name(c.lists)}};
+}
+
+json lyrics_json(const domain::TrackLyrics& l) {
+    json karaoke = json::array();
+    for (const auto& line : l.karaoke) {
+        json words = json::array();
+        for (const auto& word : line.words) {
+            words.push_back({{"start_ms", word.start_ms}, {"duration_ms", word.duration_ms}, {"text", word.text}});
+        }
+        karaoke.push_back({{"start_ms", line.start_ms}, {"duration_ms", line.duration_ms}, {"words", std::move(words)}});
+    }
+    return json{{"lrc", optional_string(l.lrc)},
+                {"translated_lrc", optional_string(l.translated_lrc)},
+                {"karaoke", std::move(karaoke)},
+                {"unavailable", l.unavailable},
+                {"warnings", l.warnings}};
+}
+
+json page_json(const application::catalog::SourcePage& p) {
+    return json{{"limit", p.limit},
+                {"returned", p.returned},
+                {"total", optional_uint(p.total)},
+                {"has_more", p.has_more ? json(*p.has_more) : json(nullptr)},
+                {"next_cursor", optional_string(p.next_cursor)}};
+}
+
+json catalog_kind_json(const std::optional<ports::CatalogKind>& kind) {
+    if (!kind) {
+        return nullptr;
+    }
+    switch (*kind) {
+    case ports::CatalogKind::live:
+        return "live";
+    case ports::CatalogKind::built_in:
+        return "built_in";
+    case ports::CatalogKind::search_derived:
+        return "search_derived";
+    }
+    return nullptr;
+}
+
 json warnings_json(const std::vector<domain::ResourceWarning>& warnings) {
     json out = json::array();
     for (const auto warning : warnings) {
@@ -862,6 +959,7 @@ struct ControlApi::Impl {
         const auto catalog = accounts::scope::catalog_read;
         server.Get("/api/v1/search/tracks", guard(Access::scoped, catalog, [this](Call& call) { search_tracks(call); }));
         server.Get("/api/v1/tracks/detail", guard(Access::scoped, catalog, [this](Call& call) { track_detail(call); }));
+        catalog_routes(catalog);
         server.Post("/api/v1/links/parse", guard(Access::scoped, catalog, [this](Call& call) { parse_link(call); }));
         server.Post("/api/v1/assets/resolve", guard(Access::scoped, catalog, [this](Call& call) { resolve_asset(call); }));
         server.Post("/api/v1/assets/probe", guard(Access::scoped, catalog, [this](Call& call) { probe_asset(call); }));
@@ -1199,7 +1297,78 @@ struct ControlApi::Impl {
         return "failed";
     }
 
+    // T21: collections, catalogs and lyrics, all under catalog:read.
+    void catalog_routes(std::string_view scope) {
+        namespace cat = application::catalog;
+        const auto route = [&](const char* path, std::function<void(Call&)> handler) {
+            server.Get(path, guard(Access::scoped, scope, [handler = std::move(handler)](Call& call) { handler(call); }));
+        };
+        const auto c = [this] { return services.catalog; };
+        route("/api/v1/search/playlists", [this, c](Call& call) {
+            search_route(call, [c](const cat::SearchRequest& r) { return c()->search_playlists(r); }, playlist_json);
+        });
+        route("/api/v1/search/albums", [this, c](Call& call) {
+            search_route(call, [c](const cat::SearchRequest& r) { return c()->search_albums(r); }, album_json);
+        });
+        route("/api/v1/search/artists", [this, c](Call& call) {
+            search_route(call, [c](const cat::SearchRequest& r) { return c()->search_artists(r); }, artist_json);
+        });
+        const auto detail = [c](auto method) {
+            return [c, method](const std::string& owner, const std::string& source, const std::string& id) {
+                return ((*c()).*method)(owner, source, id);
+            };
+        };
+        route("/api/v1/playlists/detail",
+              [this, detail](Call& call) { detail_route(call, detail(&cat::CatalogService::playlist_detail), playlist_json); });
+        route("/api/v1/albums/detail",
+              [this, detail](Call& call) { detail_route(call, detail(&cat::CatalogService::album_detail), album_json); });
+        route("/api/v1/charts/detail",
+              [this, detail](Call& call) { detail_route(call, detail(&cat::CatalogService::chart_detail), chart_json); });
+        route("/api/v1/lyrics",
+              [this, detail](Call& call) { detail_route(call, detail(&cat::CatalogService::lyrics), lyrics_json); });
+        const auto list = [c](auto method) {
+            return [c, method](const cat::ListRequest& request) { return ((*c()).*method)(request); };
+        };
+        route("/api/v1/playlists/tracks",
+              [this, list](Call& call) { list_route(call, "id", list(&cat::CatalogService::playlist_tracks), track_json); });
+        route("/api/v1/albums/tracks",
+              [this, list](Call& call) { list_route(call, "id", list(&cat::CatalogService::album_tracks), track_json); });
+        route("/api/v1/artists/tracks",
+              [this, list](Call& call) { list_route(call, "id", list(&cat::CatalogService::artist_tracks), track_json); });
+        route("/api/v1/artists/albums",
+              [this, list](Call& call) { list_route(call, "id", list(&cat::CatalogService::artist_albums), album_json); });
+        route("/api/v1/charts/tracks",
+              [this, list](Call& call) { list_route(call, "id", list(&cat::CatalogService::chart_tracks), track_json); });
+        route("/api/v1/categories/playlists", [this, list](Call& call) {
+            list_route(call, "category_id", list(&cat::CatalogService::category_playlists), playlist_json);
+        });
+        route("/api/v1/recommendations/playlists", [this, list](Call& call) {
+            list_route(call, nullptr, list(&cat::CatalogService::recommend_playlists), playlist_json);
+        });
+        route("/api/v1/categories", [this, c](Call& call) {
+            directory_route(
+                call, [c](const std::string& owner, const std::string& source) { return c()->categories(owner, source); },
+                [](const domain::Category& category, const std::string& source) {
+                    return json{{"source", source},
+                                {"id", category.id},
+                                {"name", category.name},
+                                {"group", optional_string(category.group)},
+                                {"lists", listed_name(category.lists)}};
+                });
+        });
+        route("/api/v1/charts", [this, c](Call& call) {
+            directory_route(
+                call, [c](const std::string& owner, const std::string& source) { return c()->charts(owner, source); },
+                [](const domain::Chart& chart, const std::string&) { return chart_json(chart); });
+        });
+    }
+
     void search_tracks(Call& call) {
+        search_route(call, [this](const auto& r) { return services.catalog->search_tracks(r); }, track_json);
+    }
+
+    // GET /api/v1/search/{kind}: the same parameters, fan-out and per-source results for every kind.
+    template <class Search, class ToJson> void search_route(Call& call, const Search& search, const ToJson& to_json) {
         if (!only_params(call, {"q", "sources", "limit", "cursor", "page", "timeout_ms"})) {
             return;
         }
@@ -1244,15 +1413,15 @@ struct ControlApi::Impl {
             }
             request.timeout = std::chrono::milliseconds{timeout};
         }
-        auto searched = services.catalog->search_tracks(request);
+        auto searched = search(request);
         if (!searched) {
             call.fail(searched.error());
             return;
         }
         auto& result = searched.value();
         json items = json::array();
-        for (const auto& track : result.items) {
-            items.push_back(track_json(track));
+        for (const auto& item : result.items) {
+            items.push_back(to_json(item));
         }
         json sources = json::array();
         for (const auto& source : result.sources) {
@@ -1304,6 +1473,83 @@ struct ControlApi::Impl {
         }
         out = parsed;
         return true;
+    }
+
+    // GET .../detail and /lyrics: source and id in the query.
+    template <class Fetch, class ToJson> void detail_route(Call& call, const Fetch& fetch, const ToJson& to_json) {
+        if (!only_params(call, {"source", "id", "context_ref"})) {
+            return;
+        }
+        if (!call.req.has_param("source") || !call.req.has_param("id")) {
+            call.fail(bad_request("source", "source and id are required"));
+            return;
+        }
+        auto found = fetch(call.principal(), call.req.get_param_value("source"), call.req.get_param_value("id"));
+        found ? call.ok(to_json(found->value)) : call.fail(found.error());
+    }
+
+    // GET .../tracks, /artists/albums, /categories/playlists, /recommendations/playlists:
+    // one page of what an entity holds; id_param is the entity's parameter, if any.
+    template <class Fetch, class ToJson>
+    void list_route(Call& call, const char* id_param, const Fetch& fetch, const ToJson& to_json) {
+        std::initializer_list<std::string_view> with_id{"source", id_param ? id_param : "id", "limit", "cursor"};
+        std::initializer_list<std::string_view> without_id{"source", "limit", "cursor"};
+        if (!only_params(call, id_param ? with_id : without_id)) {
+            return;
+        }
+        if (!call.req.has_param("source") || (id_param && !call.req.has_param(id_param))) {
+            call.fail(bad_request("source", id_param ? std::string{"source and "} + id_param + " are required"
+                                                     : std::string{"source is required"}));
+            return;
+        }
+        application::catalog::ListRequest request;
+        request.owner_id = call.principal();
+        request.source = call.req.get_param_value("source");
+        if (id_param) {
+            request.id = call.req.get_param_value(id_param);
+        }
+        if (call.req.has_param("limit")) {
+            std::uint32_t limit = 0;
+            if (!read_uint_param(call, "limit", limit)) {
+                return;
+            }
+            request.limit = limit;
+        }
+        if (call.req.has_param("cursor")) {
+            request.cursor = call.req.get_param_value("cursor");
+        }
+        auto listed = fetch(request);
+        if (!listed) {
+            call.fail(listed.error());
+            return;
+        }
+        json items = json::array();
+        for (const auto& item : listed->items) {
+            items.push_back(to_json(item));
+        }
+        call.ok({{"items", std::move(items)}, {"page", page_json(listed->page)}});
+    }
+
+    // GET /api/v1/categories and /charts: a source's directory.
+    template <class Fetch, class ToJson> void directory_route(Call& call, const Fetch& fetch, const ToJson& to_json) {
+        if (!only_params(call, {"source"})) {
+            return;
+        }
+        if (!call.req.has_param("source")) {
+            call.fail(bad_request("source", "is required"));
+            return;
+        }
+        const auto source = call.req.get_param_value("source");
+        auto found = fetch(call.principal(), source);
+        if (!found) {
+            call.fail(found.error());
+            return;
+        }
+        json items = json::array();
+        for (const auto& item : found->items) {
+            items.push_back(to_json(item, source));
+        }
+        call.ok({{"items", std::move(items)}, {"catalog_kind", catalog_kind_json(found->catalog_kind)}});
     }
 
     void track_detail(Call& call) {
