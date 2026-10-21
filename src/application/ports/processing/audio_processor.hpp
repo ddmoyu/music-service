@@ -25,12 +25,30 @@ struct AudioExpectation {
     domain::Completeness completeness{domain::Completeness::unknown};
 };
 
+// An embedded picture: the bytes as the platform delivered them.
+struct Picture {
+    std::string mime_type; // "image/jpeg" or "image/png"
+    std::string data;
+};
+
+// What to write into the file's tags, from trusted platform metadata (the track detail),
+// never from client-supplied display fields. Empty values are not written.
+struct TrackMetadata {
+    std::string title;
+    std::vector<std::string> artists;
+    std::optional<std::string> album;
+    std::optional<std::string> lyrics; // unsynchronized text, or LRC kept as text
+    std::optional<Picture> cover;
+};
+
 struct ProcessingRequest {
     // The transfer-complete working file. Validation reads it and never modifies it, so a
     // retry can process the same file again (runtime-and-tasks.md, processing recovery).
+    // Tags are written to a copy beside it, which then becomes the output.
     std::filesystem::path input;
     AudioExpectation expected;
     domain::MetadataPolicy metadata_policy{domain::MetadataPolicy::best_effort};
+    std::optional<TrackMetadata> metadata; // none: nothing trusted to write
 };
 
 // Facts measured from the bytes. Unknown values stay empty, never estimated.
@@ -64,7 +82,9 @@ inline constexpr std::string_view bitrate_mismatch = "BITRATE_MISMATCH";
 inline constexpr std::string_view duration_mismatch = "DURATION_MISMATCH";
 inline constexpr std::string_view duration_shorter = "DURATION_SHORTER_THAN_TRACK";
 inline constexpr std::string_view damaged_data_skipped = "DAMAGED_DATA_SKIPPED";
-inline constexpr std::string_view metadata_not_written = "METADATA_NOT_WRITTEN";
+inline constexpr std::string_view metadata_not_written = "METADATA_NOT_WRITTEN"; // no tags at all
+inline constexpr std::string_view metadata_partial = "METADATA_PARTIAL"; // some items left out
+
 } // namespace processing_warning
 
 struct ProcessingReport {
@@ -81,7 +101,8 @@ struct ProcessingReport {
 
 // Required decryption and validation, optional tags (feature-modules.md 10). A failed
 // required step returns AUDIO_INVALID with details {"audio", reason}; such a file must not
-// be published. Cancellation and the deadline are checked while reading.
+// be published. Tags that metadata_policy=required asks for but cannot be written return
+// METADATA_FAILED. Cancellation and the deadline are checked while reading.
 class AudioProcessor {
 public:
     virtual ~AudioProcessor() = default;

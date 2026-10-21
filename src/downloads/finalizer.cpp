@@ -29,7 +29,9 @@ std::string metadata_status(const ports::ProcessingReport& report) {
     for (const auto& stage : report.stages) {
         if (stage.stage == "tags") {
             if (stage.outcome == ports::StageOutcome::done) {
-                return "complete";
+                const auto partial = std::find(report.warnings.begin(), report.warnings.end(),
+                                               ports::processing_warning::metadata_partial);
+                return partial != report.warnings.end() ? "partial" : "complete";
             }
             if (stage.outcome == ports::StageOutcome::failed) {
                 return "failed";

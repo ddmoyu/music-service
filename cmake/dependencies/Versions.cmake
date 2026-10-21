@@ -32,6 +32,12 @@ set(MUSIC_SERVICE_SQLITE_FILE_SHA3_256
     "sqlite3.h=15ef3f5dbc4a7a980f828fa0d1e473cee5a124e7bb77e9bc70fc0bfa3f9a2af8"
 )
 
+# TagLib: audio tags and properties (MP3, FLAC, MP4/M4A); its utfcpp submodule is
+# pinned by the tag. Dual LGPL-2.1/MPL-1.1, used under MPL-1.1 (static linking).
+set(MUSIC_SERVICE_TAGLIB_REPOSITORY "https://github.com/taglib/taglib.git")
+set(MUSIC_SERVICE_TAGLIB_TAG "v2.3.2")
+set(MUSIC_SERVICE_TAGLIB_COMMIT "deadc2990767dfbda0701e0ab35fdeea653db08f")
+
 # Catch2 v3: test framework, fetched only when BUILD_TESTING is ON. BSL-1.0.
 set(MUSIC_SERVICE_CATCH2_REPOSITORY "https://github.com/catchorg/Catch2.git")
 set(MUSIC_SERVICE_CATCH2_TAG "v3.16.1")

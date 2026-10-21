@@ -46,6 +46,19 @@ std::string mp3(std::size_t frames = 6738) {
     return bytes;
 }
 
+// The audio of a published file: without the ID3v2 tag the processor writes in front.
+std::string without_id3v2(const std::string& bytes) {
+    if (bytes.size() < 10 || bytes.compare(0, 3, "ID3") != 0) {
+        return bytes;
+    }
+    const auto size = (std::size_t{static_cast<unsigned char>(bytes[6]) & 0x7FU} << 21) |
+                      (std::size_t{static_cast<unsigned char>(bytes[7]) & 0x7FU} << 14) |
+                      (std::size_t{static_cast<unsigned char>(bytes[8]) & 0x7FU} << 7) |
+                      std::size_t{static_cast<unsigned char>(bytes[9]) & 0x7FU};
+    const auto footer = (static_cast<unsigned char>(bytes[5]) & 0x10U) != 0 ? 10U : 0U;
+    return bytes.substr(std::min(bytes.size(), 10 + size + footer));
+}
+
 std::optional<std::string> header(const ports::HttpRequest& request, std::string_view name) {
     for (const auto& item : request.headers) {
         if (item.name == name) {
@@ -339,13 +352,15 @@ TEST_CASE("S1 gate: Kuwo search to a published file over HTTP, SSE and media", "
     const auto file_id = task["result"]["file_id"].get<std::string>();
     CHECK(task["result"]["links"]["file"] == "/api/v1/files/" + file_id);
     const auto published = g.root / infrastructure::filesystem::path_from_utf8(artist + " - 晴天.mp3");
-    CHECK(read_file(published) == audio);
+    const auto stored = read_file(published);
+    CHECK(without_id3v2(stored) == audio); // the audio as received, behind the written tags
     CHECK_FALSE(fs::exists(g.root / ".music-service-work" / task_id));
 
     const auto described = api.Get("/api/v1/files/" + file_id);
     REQUIRE(described->status == 200);
     const auto file = body(described)["data"];
-    CHECK(file["size_bytes"] == audio.size());
+    CHECK(file["size_bytes"] == stored.size());
+    CHECK(file["metadata_status"] == "complete");
     CHECK(file["container"] == "mp3");
     CHECK(file["content_type"] == "audio/mpeg");
     CHECK(file["display_name"] == artist + " - 晴天.mp3");
@@ -364,8 +379,8 @@ TEST_CASE("S1 gate: Kuwo search to a published file over HTTP, SSE and media", "
     auto media = media_client(*service);
     const auto head_bytes = media.Get(ticket, httplib::Headers{{"Range", "bytes=0-15"}});
     REQUIRE(head_bytes->status == 206);
-    CHECK(head_bytes->get_header_value("Content-Range") == "bytes 0-15/" + std::to_string(audio.size()));
-    CHECK(head_bytes->body == audio.substr(0, 16));
+    CHECK(head_bytes->get_header_value("Content-Range") == "bytes 0-15/" + std::to_string(stored.size()));
+    CHECK(head_bytes->body == stored.substr(0, 16));
 
     // A29: "save to this device" fails on the client half-way; the task stays completed.
     {
@@ -376,7 +391,7 @@ TEST_CASE("S1 gate: Kuwo search to a published file over HTTP, SSE and media", "
             return received < 64 * 1024; // the client's disk is full
         });
         CHECK_FALSE(aborted);
-        CHECK(received < audio.size());
+        CHECK(received < stored.size());
     }
     CHECK(body(api.Get("/api/v1/downloads/" + task_id))["data"]["status"] == "completed");
     const auto until = std::chrono::steady_clock::now() + 5s;
@@ -387,7 +402,7 @@ TEST_CASE("S1 gate: Kuwo search to a published file over HTTP, SSE and media", "
     CHECK(body(api.Get("/api/v1/admin/status"))["data"]["media"]["responses"] == 0);
     const auto again = media.Get(ticket);
     REQUIRE(again->status == 200);
-    CHECK(again->body == audio);
+    CHECK(again->body == stored);
 
     // Only HTTPS to the hosts the package names; no secrets attached.
     const auto requests = upstream->requests();
@@ -427,7 +442,7 @@ TEST_CASE("S1 gate: Kuwo search to a published file over HTTP, SSE and media", "
     CHECK(media_client(*service).Get(ticket)->status == 404);
     const auto reread = media_client(*service).Get(path_of(body(fresh_access)["data"]["url"].get<std::string>()));
     REQUIRE(reread->status == 200);
-    CHECK(reread->body == audio);
+    CHECK(reread->body == stored);
 
     auto theirs = service->client(other_token);
     CHECK(theirs.Get("/api/v1/downloads/" + task_id)->status == 404);
@@ -524,7 +539,7 @@ TEST_CASE("S1 gate: a cancel stops the transfer, a shutdown checkpoint resumes a
     REQUIRE(access->status == 200);
     const auto whole = media_client(*service).Get(path_of(body(access)["data"]["url"].get<std::string>()));
     REQUIRE(whole->status == 200);
-    CHECK(whole->body == audio);
+    CHECK(without_id3v2(whole->body) == audio);
 }
 
 TEST_CASE("S1 gate: a client without SSE completes the loop over HTTP", "[gate][kuwo]") {
@@ -549,5 +564,5 @@ TEST_CASE("S1 gate: a client without SSE completes the loop over HTTP", "[gate][
     CHECK(listed[0]["task_id"] == task_id);
     const auto file = api.Get("/api/v1/files/" + done["result"]["file_id"].get<std::string>());
     REQUIRE(file->status == 200);
-    CHECK(body(file)["data"]["size_bytes"] == audio.size());
+    CHECK(body(file)["data"]["size_bytes"] > audio.size()); // the audio and its tags
 }

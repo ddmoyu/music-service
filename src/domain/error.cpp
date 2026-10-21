@@ -76,6 +76,8 @@ std::string_view to_string(ErrorCode code) noexcept {
         return "AUDIO_INVALID";
     case ErrorCode::finalization_failed:
         return "FINALIZATION_FAILED";
+    case ErrorCode::metadata_failed:
+        return "METADATA_FAILED";
     case ErrorCode::file_missing:
         return "FILE_MISSING";
     case ErrorCode::media_ticket_expired:

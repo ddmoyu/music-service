@@ -108,6 +108,7 @@ int status_for(ErrorCode code) {
     case ErrorCode::credentials_required:
     case ErrorCode::destination_unavailable:
     case ErrorCode::delivery_unavailable:
+    case ErrorCode::metadata_failed:
         return 422;
     case ErrorCode::queue_limit_exceeded:
     case ErrorCode::caller_limit_exceeded:

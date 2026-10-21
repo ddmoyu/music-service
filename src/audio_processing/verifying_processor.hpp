@@ -8,10 +8,13 @@
 
 namespace music_service::audio_processing {
 
-// Baseline processor "audio.verify" v1: identifies the container from the bytes and
-// validates the structure of the containers the first platforms deliver (MP3), keeps the
-// original encoding and writes no tags yet (T30). Other containers, HTML/JSON bodies and
-// cut-off files fail with AUDIO_INVALID.
+// Baseline processor "audio.verify" v2: identifies the container from the bytes,
+// validates the structure of MP3, FLAC and MP4/M4A and keeps the original encoding. Other
+// containers, HTML/JSON bodies and cut-off files fail with AUDIO_INVALID. Unless
+// metadata_policy is skip, the trusted metadata is written into a tagged copy beside the
+// input (tags/tag_writer), whose audio payload must measure the same as the input's; that
+// copy is the output. A required tag that cannot be written is METADATA_FAILED; with
+// best_effort the untagged input is the output and the report warns.
 class VerifyingProcessor final : public application::ports::AudioProcessor {
 public:
     [[nodiscard]] application::ports::ProcessingPlan plan() const override;

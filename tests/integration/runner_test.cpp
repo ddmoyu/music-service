@@ -60,6 +60,19 @@ std::string mp3(std::size_t frames = 1149) {
     return bytes;
 }
 
+// The audio of a published file: without the ID3v2 tag the processor writes in front.
+std::string without_id3v2(const std::string& bytes) {
+    if (bytes.size() < 10 || bytes.compare(0, 3, "ID3") != 0) {
+        return bytes;
+    }
+    const auto size = (std::size_t{static_cast<unsigned char>(bytes[6]) & 0x7FU} << 21) |
+                      (std::size_t{static_cast<unsigned char>(bytes[7]) & 0x7FU} << 14) |
+                      (std::size_t{static_cast<unsigned char>(bytes[8]) & 0x7FU} << 7) |
+                      std::size_t{static_cast<unsigned char>(bytes[9]) & 0x7FU};
+    const auto footer = (static_cast<unsigned char>(bytes[5]) & 0x10U) != 0 ? 10U : 0U;
+    return bytes.substr(std::min(bytes.size(), 10 + size + footer));
+}
+
 std::string read_bytes(const fs::path& path) {
     std::ifstream in(path, std::ios::binary);
     return {std::istreambuf_iterator<char>(in), {}};
@@ -373,7 +386,7 @@ TEST_CASE("a claimed task is downloaded, verified and published", "[downloads][r
     CHECK(progress["total_bytes"] == r.audio.size());
 
     // The published file holds exactly the bytes; the work directory is gone.
-    CHECK(read_bytes(r.root / "detail.mp3") == r.audio);
+    CHECK(without_id3v2(read_bytes(r.root / "detail.mp3")) == r.audio);
     CHECK_FALSE(fs::exists(r.root / ".music-service-work" / infrastructure::filesystem::path_from_utf8(id)));
     const auto asset = unwrap(r.publications->get_asset(r.owner, result["file_id"].get<std::string>()));
     CHECK(asset.relative_path == "detail.mp3");
@@ -382,7 +395,7 @@ TEST_CASE("a claimed task is downloaded, verified and published", "[downloads][r
     // The same name again gets the next candidate, never the existing file.
     r.create("src", "2");
     CHECK(r.run_next().outcome == RunOutcome::completed);
-    CHECK(read_bytes(r.root / "detail (2).mp3") == r.audio);
+    CHECK(without_id3v2(read_bytes(r.root / "detail (2).mp3")) == r.audio);
 }
 
 TEST_CASE("an unknown length stays null while transferring (A25)", "[downloads][runner]") {
@@ -523,7 +536,7 @@ TEST_CASE("an interrupted transfer resumes from flushed bytes with its validator
     REQUIRE(requests.size() == 2);
     CHECK(header(requests[1], "Range") == "bytes=100000-");
     CHECK(header(requests[1], "If-Range") == "\"v1\"");
-    CHECK(read_bytes(r.root / "detail.mp3") == r.audio);
+    CHECK(without_id3v2(read_bytes(r.root / "detail.mp3")) == r.audio);
     CHECK(r.get(id).attempt == 1); // transport retries stay within the attempt
 }
 
@@ -539,7 +552,7 @@ TEST_CASE("a 200 answer to a range request replaces the partial file", "[downloa
     };
     r.create();
     CHECK(r.run_next().outcome == RunOutcome::completed);
-    CHECK(read_bytes(r.root / "detail.mp3") == r.audio); // never appended to the old prefix
+    CHECK(without_id3v2(read_bytes(r.root / "detail.mp3")) == r.audio); // never appended to the old prefix
 }
 
 TEST_CASE("a 206 of another range or resource is not mixed into the file (A14)", "[downloads][runner]") {
@@ -567,7 +580,7 @@ TEST_CASE("a 206 of another range or resource is not mixed into the file (A14)",
         const auto requests = r.transport->requests();
         REQUIRE(requests.size() == 3);
         CHECK_FALSE(header(requests[2], "Range")); // started over without a range
-        CHECK(read_bytes(r.root / "detail.mp3") == r.audio);
+        CHECK(without_id3v2(read_bytes(r.root / "detail.mp3")) == r.audio);
     }
     SECTION("the validator changed") {
         Runs r{"range-etag"};
@@ -592,7 +605,7 @@ TEST_CASE("a 206 of another range or resource is not mixed into the file (A14)",
         };
         r.create();
         CHECK(r.run_next().outcome == RunOutcome::completed);
-        CHECK(read_bytes(r.root / "detail.mp3") == other); // only bytes of one resource
+        CHECK(without_id3v2(read_bytes(r.root / "detail.mp3")) == other); // only bytes of one resource
     }
 }
 
@@ -617,7 +630,7 @@ TEST_CASE("a 416 completes only with matching evidence, otherwise starts over (A
     REQUIRE(requests.size() == 3);
     CHECK(header(requests[1], "Range") == "bytes=64000-");
     CHECK_FALSE(header(requests[2], "Range"));
-    CHECK(read_bytes(r.root / "detail.mp3") == r.audio); // never published as 64000 bytes
+    CHECK(without_id3v2(read_bytes(r.root / "detail.mp3")) == r.audio); // never published as 64000 bytes
     CHECK(r.get(id).attempt == 1);
 }
 
@@ -663,7 +676,7 @@ TEST_CASE("an expired address is resolved again and the same resource resumes (A
     CHECK(last.url == "https://cdn.test/signed-2.mp3");
     CHECK(header(last, "Range") == "bytes=90000-"); // same track, quality and validator
     CHECK(header(last, "If-Range") == "\"v1\"");
-    CHECK(read_bytes(r.root / "detail.mp3") == r.audio);
+    CHECK(without_id3v2(read_bytes(r.root / "detail.mp3")) == r.audio);
     CHECK(r.get(id).attempt == 2);
 }
 
@@ -813,7 +826,7 @@ TEST_CASE("a shutdown keeps the checkpoint and the next run resumes it (A27)", "
     r.transport->answer = [&](const ports::HttpRequest& request) { return serve_range(request, r.audio); };
     CHECK(r.run_next().outcome == RunOutcome::completed);
     CHECK(header(r.transport->requests().back(), "Range") == "bytes=" + std::to_string(durable) + "-");
-    CHECK(read_bytes(r.root / "detail.mp3") == r.audio);
+    CHECK(without_id3v2(read_bytes(r.root / "detail.mp3")) == r.audio);
     CHECK(r.get(id).attempt == 1);
 }
 

@@ -149,7 +149,7 @@ auth_profiles 工厂与平台能力一起注册；UpstreamAdmissionPort 实例�
 | `music_service_provider_<source>` | application 端口、domain、该平台实际需要的 JSON／协议加密适配 |
 | `music_service_providers` | 聚合选中的平台 target、注册表与生成工厂绑定，不强制链接所有平台依赖 |
 | `music_service_downloads` | application 端口、domain；静态库，当前为发布、启动恢复与续传判定，JSON 仅用于编码不透明的证据与结果 |
-| `music_service_audio_processing` | application 端口、domain；静态库，当前只有容器识别与 MP3 结构校验，解密和标签依赖随 T30 接入 |
+| `music_service_audio_processing` | application 端口、domain、TagLib（私有）；静态库：容器识别，MP3／FLAC／MP4 结构校验与标签写入；解密只有端口，实现随需要它的平台接入 |
 | `music_service_infrastructure` | application 端口、httplib、SQLite、JSON、媒体适配等实际依赖 |
 | `music_service_runtime` | application 端口、domain；执行器、额度、取消与停机 |
 | `music_service_http_api` | application、控制 HTTP 适配 |

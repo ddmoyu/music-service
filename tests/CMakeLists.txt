@@ -7,10 +7,12 @@ target_link_libraries(music_service_dependency_tests PRIVATE
     music_service::project_warnings
     music_service::third_party_httplib
     music_service::third_party_sqlite
+    music_service::third_party_taglib
     nlohmann_json::nlohmann_json
     Catch2::Catch2WithMain
 )
 
+string(REGEX REPLACE "^v" "" taglib_version "${MUSIC_SERVICE_TAGLIB_TAG}")
 string(REGEX REPLACE "^v" "" httplib_version "${MUSIC_SERVICE_HTTPLIB_TAG}")
 string(REGEX REPLACE "^v" "" json_version "${MUSIC_SERVICE_JSON_TAG}")
 string(REGEX REPLACE "^v" "" mbedtls_version "${MUSIC_SERVICE_MBEDTLS_TAG}")
@@ -19,6 +21,7 @@ target_compile_definitions(music_service_dependency_tests PRIVATE
     MUSIC_SERVICE_EXPECTED_JSON_VERSION="${json_version}"
     MUSIC_SERVICE_EXPECTED_MBEDTLS_VERSION="${mbedtls_version}"
     MUSIC_SERVICE_EXPECTED_SQLITE_VERSION="${MUSIC_SERVICE_SQLITE_VERSION}"
+    MUSIC_SERVICE_EXPECTED_TAGLIB_VERSION="${taglib_version}"
 )
 catch_discover_tests(music_service_dependency_tests DISCOVERY_MODE PRE_TEST)
 
@@ -26,6 +29,7 @@ catch_discover_tests(music_service_dependency_tests DISCOVERY_MODE PRE_TEST)
 # against recorded fixtures and infrastructure basics. Uses temporary directories but
 # no network or databases (opt-in [online-*] cases aside).
 add_executable(music_service_unit_tests
+    unit/audio_processing/tagging_test.cpp
     unit/audio_processing/verifying_processor_test.cpp
     unit/downloads/resume_policy_test.cpp
     unit/domain/account_test.cpp
@@ -55,6 +59,7 @@ target_link_libraries(music_service_unit_tests PRIVATE
     music_service::infrastructure
     music_service::providers
     music_service::runtime
+    music_service::third_party_taglib
     nlohmann_json::nlohmann_json
     music_service::project_warnings
     Catch2::Catch2WithMain

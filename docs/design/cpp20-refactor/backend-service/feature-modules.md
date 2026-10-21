@@ -116,7 +116,7 @@ RetryPolicy 分类网络、资源、账号、协议和文件错误；ResumePolic
 
 AudioProcessor 执行必要解密、格式／长度验证和可选标签、歌词写入，返回产物与处理报告。默认保留原始编码。标签失败按 metadata_policy 处理；必要解密或验证失败始终阻止发布。
 
-首版基线处理器 `audio.verify` v1 只按字节识别容器并校验 MP3 帧结构，不读 URL 后缀或声明格式：HTML／JSON／文本或空正文、无法识别或尚未支持的容器、被截断（标签或末帧被切断、少于传输声明的总字节或 Xing／VBRI 声明的帧数）及损坏过多的文件返回任务错误 `AUDIO_INVALID`（details 给出原因，上游错误正文与截断可重试）。时长由帧数实测；与平台声明长度一致才作为整曲证据，明显更短视为试听，没有声明长度则完整性维持原判定。标签写入在 T30 加入前，metadata_policy=required 的任务在处理阶段返回 CAPABILITY_UNSUPPORTED，best_effort 附 METADATA_NOT_WRITTEN 警告。
+首版基线处理器 `audio.verify` v1 只按字节识别容器并校验 MP3 帧结构，不读 URL 后缀或声明格式：HTML／JSON／文本或空正文、无法识别或尚未支持的容器、被截断（标签或末帧被切断、少于传输声明的总字节或 Xing／VBRI 声明的帧数）及损坏过多的文件返回任务错误 `AUDIO_INVALID`（details 给出原因，上游错误正文与截断可重试）。时长由帧数实测；与平台声明长度一致才作为整曲证据，明显更短视为试听，没有声明长度则完整性维持原判定。T30 起为 `audio.verify` v2：另验证 FLAC 与 MP4／M4A 结构，并用 TagLib 把平台详情给出的标题、歌手、专辑（以及给出时的歌词与封面）写入工作文件旁的副本，副本的音频载荷须与原文件测量一致，发布的是副本；收到的文件保持不变，重处理从同一字节开始。skip 不写；best_effort 下没有可信元数据或写入失败时发布未加标签的文件并附 METADATA_NOT_WRITTEN，部分项无法写入附 METADATA_PARTIAL（metadata_status=partial）；required 下任一项无法写入返回 METADATA_FAILED，不发布。
 
 FileWorkspace 位于目标文件系统；AssetStore 管理路径预留与不可变文件；Finalizer 协调发布意图、重命名和数据库。可选侧文件报告独立结果，必需产物纳入恢复集合，多文件重命名不视为原子事务。
 

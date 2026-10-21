@@ -270,6 +270,7 @@ private:
     std::unique_ptr<ports::WorkFile> file_;
     Progress progress_;
     std::optional<ports::ProcessingReport> report_;
+    std::optional<ports::TrackMetadata> metadata_; // from the track detail, for the tags
 };
 
 template <class Write> domain::Result<ports::TaskRecord> Execution::write(Write&& call) {
@@ -548,32 +549,42 @@ std::optional<RunReport> Execution::resolve() {
 }
 
 // The publication name from the track's title and artists; the id when unknown.
+// The file name, and the trusted metadata its tags are written from.
 std::optional<RunReport> Execution::choose_name() {
     const auto key = track_key(*actual_);
-    if (checkpoint_ && checkpoint_->track == key && !checkpoint_->name.empty()) {
-        name_ = checkpoint_->name;
+    const bool named = checkpoint_ && checkpoint_->track == key && !checkpoint_->name.empty();
+    const auto policy = intent_->metadata_policy();
+    name_ = named ? checkpoint_->name : s_.file_name(actual_->source.value() + "-" + actual_->id.value());
+    if (named && policy == domain::MetadataPolicy::skip) {
         return std::nullopt;
     }
-    name_ = s_.file_name(actual_->source.value() + "-" + actual_->id.value());
     auto detail = s_.providers->track_detail(actual_->source.value());
     if (!detail) {
-        return std::nullopt;
+        return std::nullopt; // no detail capability: no name and nothing to tag with
     }
     const ports::ProviderContext call{context(), lease_->identity, std::nullopt, secret_};
     auto track = detail.value()->track_detail(call, *actual_);
     if (!track) {
-        if (stop_requested() || admission_deferred(track.error())) {
+        // The name is cosmetic, but required tags cannot be written without the detail.
+        if (stop_requested() || admission_deferred(track.error()) || policy == domain::MetadataPolicy::required) {
             return on_error(track.error(), resume_stage());
         }
-        return std::nullopt; // the name is cosmetic; the id stays
+        return std::nullopt;
     }
+    ports::TrackMetadata metadata;
+    metadata.title = track->title;
     std::string artists;
     for (const auto& artist : track->artists) {
         if (!artist.name.empty()) {
+            metadata.artists.push_back(artist.name);
             artists += (artists.empty() ? "" : ", ") + artist.name;
         }
     }
-    if (!track->title.empty()) {
+    if (track->album && !track->album->title.empty()) {
+        metadata.album = track->album->title;
+    }
+    metadata_ = std::move(metadata);
+    if (!named && !track->title.empty()) {
         name_ = s_.file_name(artists.empty() ? track->title : artists + " - " + track->title);
     }
     return std::nullopt;
@@ -933,7 +944,8 @@ std::optional<RunReport> Execution::process() {
          checkpoint_->total_bytes ? std::optional<std::int64_t>{static_cast<std::int64_t>(*checkpoint_->total_bytes)}
                                   : std::nullopt,
          audio_->completeness},
-        intent_->metadata_policy()};
+        intent_->metadata_policy(),
+        metadata_};
     const auto ctx = context();
 
     domain::Result<ports::ProcessingReport> report{
@@ -996,7 +1008,9 @@ RunReport Execution::publish() {
                     {"container", report_->facts.container},
                     {"bitrate_bps", nullable(report_->facts.bitrate_bps)},
                     {"duration_ms", nullable(report_->facts.duration_ms)}};
-    FinalizeRequest request{task_, s_.work_files->relative_path(task_.task_id, std::string{work_file}),
+    // The processor's output: the tagged copy, or the received file when nothing was written.
+    const auto output = report_->output.filename().u8string();
+    FinalizeRequest request{task_, s_.work_files->relative_path(task_.task_id, std::string{output.begin(), output.end()}),
                             name_ + "." + report_->facts.container, *report_, properties.dump()};
     auto published = s_.finalizer->publish(request);
     if (published) {

@@ -7,3 +7,4 @@
 - integration：SQLite 存储（迁移、单 writer、身份与凭证、目录绑定、任务与发布）、本机 HTTP(S) 上游、下载执行、SSE 与媒体入口；`kuwo_gate_test.cpp` 是 S1 关口（`[gate]`）：真实进程与真实酷我协议包，上游由录制样本和合成 MP3 的 CDN 应答，覆盖搜索到文件取回、客户端保存失败、重启、取消与停机续传。在线版本见 `packaging/e2e/kuwo_e2e.py`。
 - contract：公共 API、平台能力和扩展契约。
 - fixtures/providers：按平台与上下文版本组织的去凭证样本。
+- fixtures/audio：ffmpeg 生成的 3 秒正弦样本（`sine-3s.flac`：8 kHz 单声道 FLAC；`sine-3s.m4a`：8 kHz 单声道 AAC 24 kbit/s、faststart），生成参数见该目录说明，无版权内容。

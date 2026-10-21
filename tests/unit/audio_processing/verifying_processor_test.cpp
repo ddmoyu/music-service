@@ -127,7 +127,7 @@ TEST_CASE("a tagged CBR MP3 is measured from its frames", "[audio][mp3]") {
     auto report = processor.process(input, context());
     REQUIRE(report);
     CHECK(report->processor_id == "audio.verify");
-    CHECK(report->processor_version == 1);
+    CHECK(report->processor_version == 2);
     CHECK(report->output == input.input); // original encoding kept, nothing rewritten
     CHECK(report->facts.container == "mp3");
     CHECK(report->facts.codec == "mpeg1-layer3");
@@ -214,10 +214,14 @@ TEST_CASE("HTML, JSON, text and empty bodies are not published as audio", "[audi
 TEST_CASE("unsupported or unrecognized containers fail", "[audio][invalid]") {
     TempDir dir{"containers"};
     VerifyingProcessor processor;
-    auto flac = processor.process(request(dir.file("a.mp3", "fLaC" + std::string(64, '\0'))), context());
+    auto ogg = processor.process(request(dir.file("a.mp3", "OggS" + std::string(64, '\0'))), context());
+    REQUIRE_FALSE(ogg);
+    CHECK(reason(ogg.error()) == "unsupported_container:ogg");
+    CHECK_FALSE(ogg.error().retryable);
+    // A FLAC marker without a STREAMINFO block is not a FLAC stream.
+    auto flac = processor.process(request(dir.file("a.flac", "fLaC" + std::string(64, '\0'))), context());
     REQUIRE_FALSE(flac);
-    CHECK(reason(flac.error()) == "unsupported_container:flac");
-    CHECK_FALSE(flac.error().retryable);
+    CHECK(reason(flac.error()) == "damaged");
 
     auto binary = processor.process(request(dir.file("b.mp3", std::string(4096, '\x01'))), context());
     REQUIRE_FALSE(binary);
@@ -388,7 +392,7 @@ TEST_CASE("validation stops on cancellation and the deadline", "[audio][cancel]"
     CHECK(late.error().code == domain::ErrorCode::deadline_exceeded);
 }
 
-TEST_CASE("metadata policy is honored while tags are not written", "[audio][metadata]") {
+TEST_CASE("without trusted metadata nothing is written", "[audio][metadata]") {
     TempDir dir{"metadata"};
     VerifyingProcessor processor;
     auto input = request(dir.file("song.mp3", frames(100)));
@@ -397,11 +401,19 @@ TEST_CASE("metadata policy is honored while tags are not written", "[audio][meta
     auto report = processor.process(input, context());
     REQUIRE(report);
     CHECK(report->warnings.empty());
+    CHECK(report->output == input.input);
+
+    input.metadata_policy = domain::MetadataPolicy::best_effort;
+    report = processor.process(input, context());
+    REQUIRE(report);
+    CHECK(has_warning(*report, ports::processing_warning::metadata_not_written));
+    CHECK(report->output == input.input);
 
     input.metadata_policy = domain::MetadataPolicy::required;
     auto required = processor.process(input, context());
     REQUIRE_FALSE(required);
-    CHECK(required.error().code == domain::ErrorCode::capability_unsupported);
+    CHECK(required.error().code == domain::ErrorCode::metadata_failed);
+    CHECK(reason(required.error()) == "no_metadata");
 }
 
 TEST_CASE("processors are found by id and version only", "[audio][catalog]") {
@@ -410,9 +422,14 @@ TEST_CASE("processors are found by id and version only", "[audio][catalog]") {
     REQUIRE(found);
     CHECK((*found)->plan().processor_id == "audio.verify");
 
-    auto unknown = catalog.find(ports::ProcessingPlan{"audio.verify", 2});
+    CHECK((*found)->plan().processor_version == 2);
+    auto unknown = catalog.find(ports::ProcessingPlan{"audio.verify", 1});
     REQUIRE_FALSE(unknown);
     CHECK(unknown.error().code == domain::ErrorCode::capability_unsupported);
+    // A required decryption no decryptor provides is never skipped.
+    auto encrypted = catalog.find(ports::ProcessingPlan{"audio.verify", 2, "platform.cipher"});
+    REQUIRE_FALSE(encrypted);
+    CHECK(encrypted.error().code == domain::ErrorCode::capability_unsupported);
 
     auto duplicate = ProcessorCatalog::create({std::make_shared<VerifyingProcessor>(), std::make_shared<VerifyingProcessor>()});
     CHECK_FALSE(duplicate);

@@ -7,6 +7,7 @@
 #include <mbedtls/version.h>
 #include <nlohmann/json.hpp>
 #include <sqlite3.h>
+#include <taglib.h>
 
 #include <string>
 #include <string_view>
@@ -21,6 +22,10 @@ TEST_CASE("pinned dependency versions", "[dependencies]") {
                               std::to_string(NLOHMANN_JSON_VERSION_MINOR) + "." +
                               std::to_string(NLOHMANN_JSON_VERSION_PATCH);
     CHECK(json_version == MUSIC_SERVICE_EXPECTED_JSON_VERSION);
+
+    const auto taglib_version = std::to_string(TAGLIB_MAJOR_VERSION) + "." + std::to_string(TAGLIB_MINOR_VERSION) +
+                                "." + std::to_string(TAGLIB_PATCH_VERSION);
+    CHECK(taglib_version == MUSIC_SERVICE_EXPECTED_TAGLIB_VERSION);
 }
 
 TEST_CASE("json round-trips UTF-8 text", "[dependencies][json]") {

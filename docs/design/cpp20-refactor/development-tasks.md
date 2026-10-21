@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-21。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T19 **已完成**，T20 **受阻**（仅容器内的在线下载闭环，见实施记录），T29 **已完成**，S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-21。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T19 **已完成**，T20 **受阻**（仅容器内的在线下载闭环，见实施记录），T29 **已完成**，T30 **待验收**（Linux CI 待运行；侧文件未做，见实施记录），S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,7 +262,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-T20（S1 酷我端到端关口）除容器内的在线下载闭环外均已通过：须在能访问酷我音源接口的网络上运行 `packaging/docker/e2e.sh` 后转为已完成，S1 随之通过。T29 的实现只依赖 T17 的执行代码，已先行交付；下一项为 T30（标签库选定 TagLib v2.3.2，按 MPL-1.1 静态链接），之后为 S2 的 T21。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+T20（S1 酷我端到端关口）除容器内的在线下载闭环外均已通过：须在能访问酷我音源接口的网络上运行 `packaging/docker/e2e.sh` 后转为已完成，S1 随之通过。T29 的实现只依赖 T17 的执行代码，已先行交付；T30（标签库 TagLib v2.3.2，按 MPL-1.1 静态链接）已交付标签与 FLAC／M4A 验证，侧文件留作子任务 T30.s；下一项为 S2 的 T21，T31 待 T30 完成后开始。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
@@ -447,6 +447,18 @@ T20（S1 酷我端到端关口）除容器内的在线下载闭环外均已通�
 | Windows 证据（2026-10-21） | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 205/205 通过（3 项在线用例按设计跳过）；GCC 16.2 在 -O2 严格警告下检查改动的源码与测试 0 条警告 |
 | Linux 证据（CI 运行 39525823045、39526810353） | ubuntu-24.04，GCC 13.3.0：205/205 通过，Windows 与容器任务同时通过。首次运行在测试替身 mock_providers.hpp 中有 4 条 -Wmissing-field-initializers（ResolvedAudio 新字段未初始化），由 23c2271 修复后复跑 0 条项目警告 |
 | 已知限制 | 只验证 MP3（酷我标准品质的实际容器）；FLAC／M4A／Ogg／WAV／ADTS 的结构验证、标签写入与解密归 T30 及具体平台；不做完整解码证明；整曲判定依赖平台声明时长；处理器由 T17 的 Runner 在 processing 阶段调用，结果写入任务记录后才参与已完成结果复用的证据复核 |
+
+### T30 容器、标签与解密处理扩展：待验收（2026-10-22，Windows 通过，Linux CI 待运行）
+
+| 项目 | 记录 |
+| --- | --- |
+| 交付 | 固定依赖 TagLib v2.3.2（`deadc299…`，子模块 utfcpp v4.2.0；静态库，只启用 MPEG、MP4、Vorbis／FLAC；无 zlib、绑定、示例和测试；utfcpp 只取固定子模块；MSVC 以 /utf-8 编译；依赖测试核对版本）。`audio_processing`：`format/flac`（STREAMINFO、元数据块链、首帧同步、按最小帧长判截断）、`format/mp4`（顶层盒铺满文件、ftyp／moov／mdat、soun 轨、mvhd 时长、stsd 编码）、`tags/tag_writer`（TagLib 写入并逐项读回）。处理器升级为 `audio.verify` v2（ProcessingPlan 缺省版本 2，并可声明解密步骤）：验证 MP3／FLAC／MP4，标签写入输入旁的副本 `tagged.<ext>` 并作为产物。端口：ProcessingRequest 增加 TrackMetadata（标题、歌手列表、专辑、歌词、封面），新增 AudioDecryptor 端口（无内置实现），警告 METADATA_PARTIAL，错误码 METADATA_FAILED（422）。Runner 在需要标签时总是读取平台详情（续传时不再因已有文件名而跳过），把元数据交给处理器，并发布处理器报告的产物而非固定的工作文件；Finalizer 的 metadata_status 增加 partial |
+| 规则落实 | 收到的工作文件只读，重处理与崩溃恢复从同一字节开始；副本写入后重新测量，帧数／样本数、音频字节和时长与原文件不同即丢弃（载荷保真）。MP3 只写 ID3v2.4，已有 ID3v1、APE 与自定义帧保持原样；只改给出的项，其他字段保留；对已加标签的文件再次处理得到逐字节相同的结果。skip 不写；best_effort 无可信元数据或写入失败时发布未加标签的文件并附 METADATA_NOT_WRITTEN（metadata_status=failed），部分项写不进附 METADATA_PARTIAL（partial）；required 无元数据、写入失败或部分项写不进均为 METADATA_FAILED，不发布，详情读取失败按其错误重试或失败。处理计划声明的解密没有对应处理器时目录查找返回 CAPABILITY_UNSUPPORTED，从不跳过 |
+| 覆盖的验收 | A18（可选标签失败：副本无法创建时 best_effort 发布已验证的原文件、阶段 failed、警告一致；required 返回 METADATA_FAILED）；A19 的真实文件部分（FLAC 元数据被截断、FLAC 音频大部分缺失、M4A 末尾缺 100 字节均为可重试的 AUDIO_INVALID truncated，不发布；声明解密而无处理器不发布）；A35 的标签部分（required 不接受没有满足标签要求的结果：无元数据即失败）。MP3／FLAC／M4A 三种样本写入标题、两位歌手、专辑、歌词与 PNG 封面后用 TagLib 读回一致；FLAC 实测 8000 Hz、单声道、24000 样本、3000 ms，M4A 为 aac、约 3000 ms；关口用例中酷我发布文件的 metadata_status 为 complete，去掉 ID3v2 后与 CDN 字节一致 |
+| 真实样本（2026-10-22，Windows，匿名） | `kuwo_e2e.py` 在线闭环通过（3.3 秒）：rid 78932517 发布为 2,830,362 字节（原 2,829,338 字节加 ID3v2.4 标签），ffprobe 读到 title=晴天、artist=蓝心羽，时长不变（176.77 秒）；该曲详情没有专辑，因此未写专辑 |
+| Windows 证据（2026-10-22） | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 274 项中 271 通过、3 项在线用例按设计跳过；GCC 16.2 在 -O2 严格警告下检查新增与改动的源码和测试（TagLib 作系统头）0 条项目警告 |
+| Linux 证据 | 待 CI 运行；通过后补记运行号并改为已完成 |
+| 已知限制 | 侧文件（.lrc 歌词、封面图片）未实现：需要 Finalizer 发布多个产物并纳入恢复集合，留作子任务 T30.s，与 T31 的侧文件一致性一起做；歌词与封面目前没有来源（平台能力归 T21／T23），只在样本中验证写入；FLAC 不逐帧遍历，截断只能由传输总长、STREAMINFO 最小帧长与时长发现；MP4 不检查 stco 偏移是否落在 mdat 内；Ogg、WAV、ADTS 仍为 unsupported_container；没有解密实现（N08／N09）；发布包体积与 TagLib 许可文件随包分发在 T37／T40 落实 |
 
 ### T29 续传、重试与速率策略增强：已完成（2026-10-21，提交 d057b74）
 
