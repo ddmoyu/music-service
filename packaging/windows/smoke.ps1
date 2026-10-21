@@ -30,14 +30,18 @@ function Assert([bool]$Condition, [string]$Message) {
 function Start-Service-Process([string]$Tag) {
     $out = Join-Path $work "stdout-$Tag.txt"
     $err = Join-Path $work "stderr-$Tag.txt"
-    $process = Start-Process -FilePath $bin -ArgumentList @('--config', $config, 'serve') -PassThru -NoNewWindow `
+    # Start-Process joins the arguments with spaces without quoting them, so a path with
+    # spaces (a temp directory under such a user profile) must be quoted here.
+    $process = Start-Process -FilePath $bin -ArgumentList @('--config', "`"$config`"", 'serve') -PassThru -NoNewWindow `
         -RedirectStandardOutput $out -RedirectStandardError $err
     for ($i = 0; $i -lt 100; $i++) {
-        if ((Test-Path $out) -and ((Get-Content $out -Raw) -match '"event":"ready"')) { break }
+        if ((Test-Path $out) -and ("$(Get-Content $out -Raw)" -match '"event":"ready"')) { break }
+        if ($process.HasExited) { break }
         Start-Sleep -Milliseconds 100
     }
     Get-Content $out | Out-Host
-    Assert ((Get-Content $out -Raw) -match '"event":"ready"') "service $Tag did not become ready"
+    if (Test-Path $err) { Get-Content $err | Out-Host }
+    Assert ("$(Get-Content $out -Raw)" -match '"event":"ready"') "service $Tag did not become ready"
     return $process
 }
 
