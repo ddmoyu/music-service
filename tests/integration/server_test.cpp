@@ -235,8 +235,14 @@ TEST_CASE("the service serves the control API and stops in order", "[server]") {
         CHECK(body(admin.Get("/api/v1/credential-defaults/aud"))["data"]["selection_version"] == 1);
         CHECK(body(admin.Get("/api/v1/providers?capability=resolve_audio"))["data"]["items"][0]["credentials"]
                   ["default_credential_id"] == id);
-        CHECK(error_code(admin.Put("/api/v1/credential-defaults/cat", json{{"credential_id", id}}.dump(),
-                                   "application/json")) == "VALIDATION_FAILED");
+        // An invalid selection in a well-formed request is 422, not 400.
+        const auto other_source =
+            admin.Put("/api/v1/credential-defaults/cat", json{{"credential_id", id}}.dump(), "application/json");
+        CHECK(other_source->status == 422);
+        CHECK(error_code(other_source) == "VALIDATION_FAILED");
+        const auto missing_id = admin.Put("/api/v1/credential-defaults/aud", "{}", "application/json");
+        CHECK(missing_id->status == 400);
+        CHECK(error_code(missing_id) == "VALIDATION_FAILED");
         CHECK(admin.Put("/api/v1/credential-defaults/aud", R"({"credential_id":"cre_nobody"})", "application/json")
                   ->status == 404);
         const auto revoked = body(admin.Delete("/api/v1/credentials/" + id));
@@ -244,6 +250,10 @@ TEST_CASE("the service serves the control API and stops in order", "[server]") {
         const auto cleared = body(admin.Get("/api/v1/credential-defaults/aud"))["data"];
         CHECK(cleared["credential_id"].is_null());
         CHECK(cleared["selection_version"] == 2);
+        const auto revoked_default =
+            admin.Put("/api/v1/credential-defaults/aud", json{{"credential_id", id}}.dump(), "application/json");
+        CHECK(revoked_default->status == 422);
+        CHECK(error_code(revoked_default) == "VALIDATION_FAILED");
         CHECK(body(admin.Delete("/api/v1/credential-defaults/aud"))["data"]["selection_version"] == 2);
 
         // Search, details, links and resolve over HTTP.
@@ -375,10 +385,16 @@ TEST_CASE("destination bindings cannot move or disappear while in use", "[server
     const auto removed = d.run({"serve"});
     CHECK(removed.code == server::exit_failed);
     CHECK(removed.err.find("DESTINATION_IN_USE") != std::string::npos);
+    // check-config refuses what serve refuses.
+    const auto checked = d.run({"check-config"});
+    CHECK(checked.code == server::exit_failed);
+    CHECK(checked.err.find("DESTINATION_IN_USE") != std::string::npos);
+    CHECK(checked.out.find("configuration is valid") == std::string::npos);
 
     destinations = json::array({{{"id", "dst_main"}, {"name", "主目录"}, {"root", original_root},
                                  {"principals", {"prn_local"}}}});
     d.write_config();
+    CHECK(d.run({"check-config"}).code == server::exit_ok); // dst_new is unused
     {
         RunningService service{d, std::make_shared<infrastructure::observability::MemorySink>()};
         CHECK(service.stop().code == server::exit_ok);

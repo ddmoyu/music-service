@@ -716,21 +716,23 @@ domain::Result<std::vector<ports::DestinationBinding>> SqliteDestinationReposito
 }
 
 domain::Result<bool> SqliteDestinationRepository::in_use(const std::string& id) {
-    return ctx_.database->read([&](Connection& db) -> domain::Result<bool> {
-        auto s = db.prepare("SELECT EXISTS (SELECT 1 FROM download_tasks WHERE destination_id = ?)"
-                            " OR EXISTS (SELECT 1 FROM file_assets WHERE destination_id = ?)"
-                            " OR EXISTS (SELECT 1 FROM finalization_intents"
-                            " WHERE destination_id = ?)");
-        if (!s) {
-            return std::move(s).error();
-        }
-        s->bind(1, id).bind(2, id).bind(3, id);
-        auto row = s->step();
-        if (!row) {
-            return std::move(row).error();
-        }
-        return s->integer(0) != 0;
-    });
+    return ctx_.database->read([&](Connection& db) { return destination_in_use(db, id); });
+}
+
+domain::Result<bool> destination_in_use(Connection& db, const std::string& id) {
+    auto s = db.prepare("SELECT EXISTS (SELECT 1 FROM download_tasks WHERE destination_id = ?)"
+                        " OR EXISTS (SELECT 1 FROM file_assets WHERE destination_id = ?)"
+                        " OR EXISTS (SELECT 1 FROM finalization_intents"
+                        " WHERE destination_id = ?)");
+    if (!s) {
+        return std::move(s).error();
+    }
+    s->bind(1, id).bind(2, id).bind(3, id);
+    auto row = s->step();
+    if (!row) {
+        return std::move(row).error();
+    }
+    return s->integer(0) != 0;
 }
 
 } // namespace music_service::infrastructure::storage::sqlite

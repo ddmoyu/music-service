@@ -6,6 +6,7 @@
 #include "infrastructure/filesystem/data_layout.hpp"
 #include "infrastructure/filesystem/paths.hpp"
 #include "infrastructure/observability/logger.hpp"
+#include "infrastructure/storage/sqlite/account_repositories.hpp"
 #include "infrastructure/storage/sqlite/connection.hpp"
 #include "providers/registry/builtin_bundles.hpp"
 #include "server/instance.hpp"
@@ -20,6 +21,7 @@
 #endif
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <map>
 #include <optional>
@@ -299,7 +301,8 @@ int cmd_token(const Arguments& args, const cfg::ServiceConfig& config, const Con
 }
 
 // Validates configuration, build capabilities, paths and, when a database exists,
-// the destination bindings, reading it without changing anything.
+// the destination bindings, reading it without changing anything. It refuses what
+// serve would refuse: a changed root, or a removed destination still in use.
 int cmd_check_config(const cfg::ServiceConfig& config, const Console& console) {
     const auto data_dir = fs::weakly_canonical(config.data_dir);
     bool ok = true;
@@ -325,6 +328,7 @@ int cmd_check_config(const cfg::ServiceConfig& config, const Console& console) {
             print_error(console, statement.error());
             return exit_failed;
         }
+        std::vector<std::string> removed;
         while (true) {
             auto row = statement->step();
             if (!row) {
@@ -335,10 +339,28 @@ int cmd_check_config(const cfg::ServiceConfig& config, const Console& console) {
                 break;
             }
             const auto id = statement->text(0);
+            const bool configured = std::any_of(config.destinations.begin(), config.destinations.end(),
+                                                [&](const auto& d) { return d.id == id; });
+            if (!configured) {
+                removed.push_back(id);
+                continue;
+            }
             const auto it = roots.find(id);
             if (it != roots.end() && it->second != statement->text(1)) {
                 console.err << "error: DESTINATION_ROOT_CHANGED: destination " << id << " is bound to "
                             << statement->text(1) << '\n';
+                ok = false;
+            }
+        }
+        for (const auto& id : removed) {
+            auto used = sqlite::destination_in_use(connection.value(), id);
+            if (!used) {
+                print_error(console, used.error());
+                return exit_failed;
+            }
+            if (used.value()) {
+                console.err << "error: DESTINATION_IN_USE: destination " << id
+                            << " was removed from the configuration but tasks, files or intents still use it\n";
                 ok = false;
             }
         }

@@ -90,4 +90,8 @@ private:
     RepositoryContext ctx_;
 };
 
+// Whether tasks, files or finalization intents still refer to a destination. Shared
+// by the repository and the read-only configuration check.
+domain::Result<bool> destination_in_use(Connection& db, const std::string& id);
+
 } // namespace music_service::infrastructure::storage::sqlite

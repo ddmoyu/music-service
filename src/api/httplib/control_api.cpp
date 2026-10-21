@@ -1670,7 +1670,17 @@ struct ControlApi::Impl {
             return;
         }
         auto selection = services.credentials->set_default(call.principal(), call.req.matches[1], *credential_id);
-        selection ? call.ok(selection_json(selection.value())) : call.fail(selection.error());
+        if (!selection) {
+            // The request is well-formed; a credential of another source, revoked or
+            // otherwise unusable is an invalid selection (422), not a bad request.
+            auto error = from_domain(selection.error());
+            if (selection.error().code == ErrorCode::validation_failed) {
+                error.status = 422;
+            }
+            call.fail(error);
+            return;
+        }
+        call.ok(selection_json(selection.value()));
     }
 
     void clear_default(Call& call) {
