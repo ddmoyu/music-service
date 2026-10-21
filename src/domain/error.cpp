@@ -70,6 +70,8 @@ std::string_view to_string(ErrorCode code) noexcept {
         return "INSTANCE_LOCKED";
     case ErrorCode::file_system:
         return "FILE_SYSTEM_ERROR";
+    case ErrorCode::audio_invalid:
+        return "AUDIO_INVALID";
     case ErrorCode::internal:
         return "INTERNAL_ERROR";
     }

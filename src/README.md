@@ -8,12 +8,12 @@
 
 | 目录 | 职责 | 当前状态 |
 | --- | --- | --- |
-| `domain` | Result 与错误码、平台引用、曲目与分页、品质判定、账号绑定与授权身份、任务状态迁移与取消规则、下载意图与指纹 | 静态库，T02 |
-| `application` | `tasks/`：下载意图准备（固定账号绑定、目标目录、默认值）、幂等创建与重放、活动去重、已完成结果复用复核、取消、手动重试、列表与有限批次；`catalog/`：搜索（多来源有界并发、逐源结果与部分成功）、单曲详情、分享链接解析、音源解析与有限探测；缓存、在途合并、游标与 asset 句柄均按完整授权身份分区；`transport/`：URL 规范化、每跳请求与重定向规则、按 origin 逐跳入场的 UpstreamClient；`accounts/`：服务身份与 token 离线管理、token 认证、平台凭证（Cookie 增删改、校验、默认选择、账号绑定、租用、孤立秘密回收）；`ports/`：平台能力与 ProviderBundle 契约、ProviderDirectory、授权校验端口、token 生成与交付、上游入场与租约、时钟、上游 HTTP、任务／发布／身份／凭证／目录绑定仓储、SecretStore 等出站端口；`config/`：生效配置 ServiceConfig；用例按任务陆续加入 | 静态库，T02／T03／T08／T09／T13／T14 |
+| `domain` | Result 与错误码、平台引用、曲目与分页、品质判定、按字节的容器识别（含 HTML／JSON 错误体）、账号绑定与授权身份、任务状态迁移与取消规则、下载意图与指纹 | 静态库，T02 |
+| `application` | `tasks/`：下载意图准备（固定账号绑定、目标目录、默认值）、幂等创建与重放、活动去重、已完成结果复用复核、取消、手动重试、列表与有限批次；`catalog/`：搜索（多来源有界并发、逐源结果与部分成功）、单曲详情、分享链接解析、音源解析与有限探测；缓存、在途合并、游标与 asset 句柄均按完整授权身份分区；`transport/`：URL 规范化、每跳请求与重定向规则、按 origin 逐跳入场的 UpstreamClient；`accounts/`：服务身份与 token 离线管理、token 认证、平台凭证（Cookie 增删改、校验、默认选择、账号绑定、租用、孤立秘密回收）；`ports/`：平台能力与 ProviderBundle 契约、ProviderDirectory、授权校验端口、token 生成与交付、上游入场与租约、时钟、上游 HTTP、音频处理（AudioProcessor 与处理计划）、任务／发布／身份／凭证／目录绑定仓储、SecretStore 等出站端口；`config/`：生效配置 ServiceConfig；用例按任务陆续加入 | 静态库，T02／T03／T08／T09／T13／T14 |
 | `infrastructure` | `transport/`：cpp-httplib + Mbed TLS 上游传输；`auth/`：token 生成、哈希与安全交付文件；`config/`：配置加载与校验；`observability/`：结构化日志、脱敏、关联 ID、指标；`clock.hpp`；`filesystem/`：路径约束、安全文件原语、实例锁、数据目录与目标根；`secrets/`：文件 SecretStore；`storage/`：SQLite 数据库、迁移与各仓储；后续加入上游传输 | 静态库，T03～T05、T08、T09 |
 | `providers` | `registry/`：ProviderRegistry（bundle 契约校验、按需创建能力对象、授权 profile 校验器、providers 分页）与按 `MUSIC_SERVICE_PROVIDERS` 生成的内置清单；`kuwo/`：酷我协议包（搜索、详情、链接、标准品质音源） | 静态库，T07／T12 |
 | `downloads` | 持久任务调度、Runner、重试／续传、发布与恢复 | 待实现 |
-| `audio_processing` | 格式验证、解密、标签 | 待实现 |
+| `audio_processing` | `format/`：有界窗口读取与 MP3 帧结构校验（标签跳过、截断、损坏、Xing／VBRI 帧数、实测时长与码率）；基线处理器 audio.verify v1 与按 id／版本查找的 ProcessorCatalog；解密与标签写入随 T30 及平台加入 | 静态库，T15 |
 | `runtime` | 有界执行器、统一上游入场账本（AdmissionLedger）、截止定时器、停机序列 | 静态库，T06 |
 | `api` | 控制入口（cpp-httplib）：Bearer 认证与 scope、JSON 信封与错误映射、请求 ID、CORS、请求体与类型限制；health、info、providers、limits、destinations、credentials、credential-defaults、admin/status 路由 | 静态库，T10 |
 | `media_server`、`event_server` | 媒体与 SSE 两个 HTTP 入口的协议适配 | 待实现（T19／T18） |

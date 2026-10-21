@@ -1,6 +1,7 @@
 #include "application/catalog/asset_service.hpp"
 
 #include "application/transport/http_rules.hpp"
+#include "domain/assets/container.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -36,24 +37,11 @@ std::optional<std::int64_t> content_range_total(std::string_view value) {
 
 // Container from the first bytes; the URL suffix is never evidence.
 std::optional<std::string> sniff(std::string_view head) {
-    const auto starts = [&](std::string_view magic) { return head.substr(0, magic.size()) == magic; };
-    if (starts("ID3")) {
-        return "mp3";
+    const auto sniffed = domain::sniff_content(head);
+    if (!sniffed.container) {
+        return std::nullopt;
     }
-    if (head.size() >= 2 && static_cast<unsigned char>(head[0]) == 0xFF &&
-        (static_cast<unsigned char>(head[1]) & 0xE0) == 0xE0) {
-        return "mp3";
-    }
-    if (starts("fLaC")) {
-        return "flac";
-    }
-    if (starts("OggS")) {
-        return "ogg";
-    }
-    if (head.size() >= 8 && head.substr(4, 4) == "ftyp") {
-        return "m4a";
-    }
-    return std::nullopt;
+    return std::string{domain::to_string(*sniffed.container)};
 }
 
 } // namespace

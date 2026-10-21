@@ -1,6 +1,7 @@
 # Value types and pure rules. No I/O and no third-party dependencies.
 add_library(music_service_domain STATIC
     error.cpp
+    assets/container.cpp
     assets/quality.cpp
     catalog/refs.cpp
     identity/account.cpp

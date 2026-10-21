@@ -109,6 +109,7 @@ int status_for(ErrorCode code) {
         return 429;
     case ErrorCode::upstream_failed:
     case ErrorCode::upstream_rate_limited:
+    case ErrorCode::audio_invalid: // the upstream delivered something that is not the audio
         return 502;
     case ErrorCode::service_busy:
     case ErrorCode::storage_unavailable:

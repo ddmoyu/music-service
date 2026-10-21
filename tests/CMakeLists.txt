@@ -26,7 +26,9 @@ catch_discover_tests(music_service_dependency_tests DISCOVERY_MODE PRE_TEST)
 # against recorded fixtures and infrastructure basics. Uses temporary directories but
 # no network or databases (opt-in [online-*] cases aside).
 add_executable(music_service_unit_tests
+    unit/audio_processing/verifying_processor_test.cpp
     unit/domain/account_test.cpp
+    unit/domain/container_test.cpp
     unit/domain/download_intent_test.cpp
     unit/domain/quality_test.cpp
     unit/domain/refs_test.cpp
@@ -45,6 +47,7 @@ add_executable(music_service_unit_tests
 )
 target_link_libraries(music_service_unit_tests PRIVATE
     music_service::application
+    music_service::audio_processing
     music_service::infrastructure
     music_service::providers
     music_service::runtime

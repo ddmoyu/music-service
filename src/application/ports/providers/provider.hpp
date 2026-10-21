@@ -1,5 +1,6 @@
 #pragma once
 
+#include "application/ports/processing/processing_plan.hpp"
 #include "application/ports/runtime/operation_context.hpp"
 #include "application/ports/storage/secret_store.hpp"
 #include "domain/assets/quality.hpp"
@@ -102,6 +103,8 @@ struct ResolvedAudio {
     std::string url;
     std::vector<std::pair<std::string, std::string>> request_headers;
     std::optional<std::chrono::system_clock::time_point> expires_at;
+    std::optional<std::int64_t> duration_ms; // length the platform declares for this resource
+    ProcessingPlan processing{};             // required decryption and validation
 };
 
 class IAssetResolver {

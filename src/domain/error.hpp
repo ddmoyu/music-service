@@ -41,6 +41,7 @@ enum class ErrorCode {
     cursor_mismatch,
     instance_locked,
     file_system,
+    audio_invalid, // required decryption or validation of a downloaded file failed
     internal,
 };
 

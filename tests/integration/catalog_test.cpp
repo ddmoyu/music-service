@@ -110,7 +110,9 @@ public:
             script_->low_quality ? 128000 : 320000,
             "https://cdn.example/" + track.id.value() + ".mp3",
             {{"User-Agent", "x"}, {"Cookie", "account=" + account_of(context)}},
-            expires};
+            expires,
+            std::nullopt,
+            ports::ProcessingPlan{}};
     }
 
     domain::Result<ports::ParsedLink> parse_link(std::string_view link) override {

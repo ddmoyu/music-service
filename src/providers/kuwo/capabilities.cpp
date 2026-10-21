@@ -212,15 +212,21 @@ public:
         if (evidence->bitrate_kbps && *evidence->bitrate_kbps >= 8) {
             bitrate_bps = *evidence->bitrate_kbps * 1000;
         }
-        return ports::ResolvedAudio{track,
-                                    quality,
-                                    completeness,
-                                    evidence->format.empty() ? std::nullopt
-                                                             : std::optional<std::string>{evidence->format},
-                                    bitrate_bps,
-                                    std::move(evidence->url),
-                                    {{"User-Agent", std::string{protocol::user_agent}}},
-                                    std::nullopt};
+        ports::ResolvedAudio audio{track,
+                                   quality,
+                                   completeness,
+                                   evidence->format.empty() ? std::nullopt
+                                                            : std::optional<std::string>{evidence->format},
+                                   bitrate_bps,
+                                   std::move(evidence->url),
+                                   {{"User-Agent", std::string{protocol::user_agent}}},
+                                   std::nullopt,
+                                   std::nullopt,
+                                   ports::ProcessingPlan{}};
+        if (evidence->duration_seconds && *evidence->duration_seconds > 0) {
+            audio.duration_ms = *evidence->duration_seconds * 1000;
+        }
+        return audio;
     }
 
 private:
