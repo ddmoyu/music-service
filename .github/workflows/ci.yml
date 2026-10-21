@@ -36,8 +36,6 @@ jobs:
       - name: Kuwo online loop
         continue-on-error: true
         shell: pwsh
-        env:
-          PYTHONIOENCODING: utf-8
         run: python -I packaging/e2e/kuwo_e2e.py --binary out/build/windows-msvc-debug/src/server/music-service.exe
 
   linux-gcc:

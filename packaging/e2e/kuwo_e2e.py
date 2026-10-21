@@ -262,8 +262,14 @@ def run(service, track_id: str) -> dict:
         {"q": KEYWORD, "sources": "kuwo", "limit": 10}))[2]
     hits = [t for t in search["items"] if t["ref"]["source"] == "kuwo"]
     check(len(hits) > 0, f"search '{KEYWORD}' returns {len(hits)} Kuwo tracks")
-    detail = api.json("GET", f"/api/v1/tracks/detail?source=kuwo&id={track_id}")[2]
-    check(bool(detail["title"]), f"detail of {track_id}: {detail['title']}")
+    # The song page is refused from some regions; the download names the file by source-id then.
+    status, _, data = api.call("GET", f"/api/v1/tracks/detail?source=kuwo&id={track_id}")
+    if status == 200:
+        detail = json.loads(data)["data"]
+        check(bool(detail["title"]), f"detail of {track_id}: {detail['title']}")
+    else:
+        report["detail_unavailable"] = json.loads(data)["error"]
+        print(f"  --  detail of {track_id} unavailable here: HTTP {status} {report['detail_unavailable']['code']}")
     asset = api.json("POST", "/api/v1/assets/resolve", {"track": {"source": "kuwo", "id": track_id}})[2]
     check(asset["actual_quality"] == "standard" and asset["completeness"] == "full",
           f"resolve: standard, full, {asset['container']} {asset['bitrate_bps']} bit/s")
@@ -345,6 +351,9 @@ def run(service, track_id: str) -> dict:
 
 
 def main() -> int:
+    # -I ignores PYTHONIOENCODING; a Windows console would fail on the Chinese titles.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--binary")
     parser.add_argument("--port", type=int, default=17652, help="control port; media and events use the next two")
