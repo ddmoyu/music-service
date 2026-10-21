@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T15 **已完成**，S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T15、T18 **已完成**，S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,7 +262,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-下一项为 **T18**（事件、SSE 与 HTTP 同步）与 **T16**（安全发布与最小重启恢复）；T17、T19 随后按前置推进。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+下一项为 **T16**（安全发布与最小重启恢复），随后 T17（持久调度与最小下载执行）与 T19（已完成文件访问与票据）按前置推进。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
@@ -447,4 +447,15 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 | Windows 证据（2026-10-21） | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 205/205 通过（3 项在线用例按设计跳过）；GCC 16.2 在 -O2 严格警告下检查改动的源码与测试 0 条警告 |
 | Linux 证据（CI 运行 39525823045、39526810353） | ubuntu-24.04，GCC 13.3.0：205/205 通过，Windows 与容器任务同时通过。首次运行在测试替身 mock_providers.hpp 中有 4 条 -Wmissing-field-initializers（ResolvedAudio 新字段未初始化），由 23c2271 修复后复跑 0 条项目警告 |
 | 已知限制 | 只验证 MP3（酷我标准品质的实际容器）；FLAC／M4A／Ogg／WAV／ADTS 的结构验证、标签写入与解密归 T30 及具体平台；不做完整解码证明；整曲判定依赖平台声明时长；处理器由 T17 的 Runner 在 processing 阶段调用，结果写入任务记录后才参与已完成结果复用的证据复核 |
+
+### T18 事件、SSE 与 HTTP 同步：已完成（2026-10-21，提交 c20ca47）
+
+| 项目 | 记录 |
+| --- | --- |
+| 交付 | `application/events`：TaskEventHub（按 principal 订阅；event_limits 的全局／每 principal 订阅上限，超出为新错误码 CALLER_LIMIT_EXCEEDED／429；每订阅事件数、排队字节与单事件大小上限；同任务未发送版本被较新版本替换、旧版本忽略；溢出或超大事件关闭该订阅并要求重同步；发布只持短锁、不等待订阅者）与 PublishingTaskRepository（任务仓储装饰器，在创建、批次、取消、领取与 Runner 状态写入提交返回后发布，幂等重放、复用与失败写入不发布）。`event_server`（由 INTERFACE 改为静态库）：独立 cpp-httplib 监听与线程池上的 `GET /events/v1/downloads`，发头前完成 Bearer、downloads:read、查询参数与订阅额度检查并用 JSON 信封返回 401／403／400／429（Retry-After）／503；成功返回 text/event-stream、Cache-Control: no-store、X-Accel-Buffering: no，首帧 stream.ready {instance_id, sync_required:true}，之后 task.updated {task_id, version, status, progress, updated_at} 与注释心跳；CORS 预检只放行配置的 Origin。ProcessHost 在 events.enabled 时组装事件中心、装饰任务仓储并在控制入口前启动 SSE 监听，停止时先关闭全部订阅；info 声明 progress_sse、progress_polling 与 events_base_url，启动行输出 events_base_url |
+| 规则落实 | 只有已提交的公开版本会通知；发布失败只关闭受影响流，不回滚任务。每条连接一个 worker，等待以 0.5 秒切片进行，客户端断开后由写循环及时发现并释放订阅额度。心跳间隔复核 token 与 scope，撤销后结束流；连接达到 max_connection_seconds 正常结束；写空闲使用 write_idle_seconds；服务停止时关闭全部流。不发送事件 id、不重放，Last-Event-ID 不当作恢复成功，每次连接都以 stream.ready 要求客户端重新同步。HTTP 查询不依赖 SSE；SSE 当前默认关闭，T20 起随下载闭环默认启用 |
+| 覆盖的验收 | A06 的事件部分（跨 principal 无事件泄漏）；A07（订阅满额 429 时控制 API 的 info 与下载创建仍及时返回，关闭的流释放额度）；A08（慢订阅者有界：1000 次发布不阻塞，超限关闭并要求重同步，其他订阅不受影响）；A09（断线期间取消，重连后 stream.ready 并经 HTTP 查到终态）；A10（先订阅、后查询，事件与 HTTP 快照按 task_id／version 合并）；A11（迟到的旧版本不覆盖终态，队列内旧版本被替换且终态保留）；A21（停止服务结束流，重启后 instance_id 变化，持久状态经 HTTP 同步，无重复任务）；A28（未启用 SSE 时 info 声明降级，下载创建、查询、取消全部可用）。另覆盖 401／403／400／404、CORS 预检、心跳、连接期限、撤销结束流、批次每个新建任务只通知一次、重放与复用不通知 |
+| Windows 证据（2026-10-21） | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 217/217 通过（3 项在线用例按设计跳过）；SSE 集成用例连续 6 次无失败（最长为 10 秒连接期限用例）；GCC 16.2 在 -O2 严格警告下检查改动的源码与测试 0 条警告 |
+| Linux 证据（CI 运行 39527819025） | ubuntu-24.04，GCC 13.3.0，glibc 2.39：0 条项目警告，217/217 通过；Windows 与容器任务同时通过 |
+| 已知限制 | 进度事件按 progress_interval_ms 节流与 progress 字段的实际内容随 T17 Runner 写入；SSE 默认关闭，T20 启用并在容器冒烟中验证；没有持久事件日志，断线期间的变化只能通过 HTTP 同步取得；代理无缓冲与浏览器 fetch 客户端由 T20 及前端仓库按协议验证 |
 
