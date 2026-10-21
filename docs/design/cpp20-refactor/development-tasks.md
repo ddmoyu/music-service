@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T14 **已完成**，S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-20。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T15 **已完成**，S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,7 +262,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-下一项为 **T15**（最小音频文件验证），T18（事件、SSE 与 HTTP 同步）可并行；T16、T17、T19 随后按前置推进。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+下一项为 **T18**（事件、SSE 与 HTTP 同步）与 **T16**（安全发布与最小重启恢复）；T17、T19 随后按前置推进。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
@@ -435,4 +435,16 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 | Windows 证据（2026-10-21） | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 191/191 通过（2 项在线用例按设计跳过）；下载与服务集成测试连续 8 次无失败；GCC 16.2 在 -O2 严格警告下检查改动文件 0 条警告 |
 | Linux 证据（CI 运行 39455698718） | ubuntu-24.04，GCC 13.3.0，glibc 2.39：0 条项目警告，191/191 通过；Windows 与容器任务同时通过 |
 | 已知限制 | 执行、进度与结果写入归 T17；完成结果的复用目前只校验文件存在与版本，品质／试听／元数据证据随 T15～T17 的结果记录补充；任务快照中 actual_track、actual_quality、stage 与 warnings 在执行加入前为空 |
+
+### T15 最小音频文件验证：已完成（2026-10-21，提交 3b257a5、23c2271）
+
+| 项目 | 记录 |
+| --- | --- |
+| 交付 | `domain/assets/container`：只按前导字节识别容器（MP3／ADTS AAC／FLAC／Ogg／MP4／WAV），并把 HTML／XML、JSON、文本与空正文识别为非音频；资产探测改用它（ADTS 不再被当作 MP3）。`application/ports/processing`：AudioProcessor 端口、ProcessingPlan（processor_id＋版本，ResolvedAudio 默认 `audio.verify` v1）、AudioExpectation、AudioFacts、阶段与警告报告；ResolvedAudio 增加平台声明时长（酷我取 duration）。`audio_processing`（由 INTERFACE 改为静态库）：64 KiB 窗口随机读取、MP3 帧逐帧遍历（跳过 ID3v2／ID3v1／APEv2／Lyrics3v2，首帧须与后续帧成链，Xing／Info／VBRI 头帧不计入音频）、基线处理器 VerifyingProcessor 与按 id／版本查找的 ProcessorCatalog；新增任务错误码 AUDIO_INVALID |
+| 规则落实 | 处理器只读工作文件，output 即原文件，保留原始编码。HTML／JSON／文本／空正文为 AUDIO_INVALID（not_audio:*、empty，可重试）；无法识别为 unrecognized，已识别但尚未验证的容器为 unsupported_container:*（均不可重试），不能作为成功音频发布。截断：ID3v2 标签或末帧被切断、文件小于传输声明总字节、帧数少于 Xing／VBRI 声明（truncated，可重试）；大于声明为 size_mismatch。帧间或尾部非帧字节超过 4 KiB 且超过 1% 为 damaged，较少时跳过并警告 DAMAGED_DATA_SKIPPED。时长由帧数 × 每帧采样 / 采样率实测，不从大小或 URL 推算；与平台声明时长相差在 max(3 秒, 3%) 内才作为整曲证据，明显更短改判 preview（再由 evaluate_resource 按 allow_preview 拒绝），更长仅警告；未提供声明时长时完整性维持原判定，已知 preview 不会被升级。另报告容器／码率与声明不符的警告。读取期间检查取消与截止时间。标签写入在 T30 前不实现：metadata_policy=required 在处理阶段返回 CAPABILITY_UNSUPPORTED，best_effort 附 METADATA_NOT_WRITTEN |
+| 覆盖的验收 | A19 的必要验证部分（验证失败不得发布）；HTML／JSON／文本／空正文、截断（末帧、标签、声明大小、Xing 帧数）、损坏、未支持容器、未知长度维持 unknown、短片段判为试听并被默认策略拒绝、CBR／VBR／MPEG-2 实测、取消与截止、处理器按 id／版本查找与重复注册拒绝；容器识别的领域样本覆盖 ADTS 与非法 MPEG 头 |
+| 真实样本（2026-10-21，Windows，匿名） | 酷我 rid 78932517 标准品质（mobi 接口声明 mp3、128 kbit/s、176 秒），经 HTTPS 下载 2,829,338 字节（Content-Type audio/mpeg）：mpeg1-layer3、44100 Hz、实测 128000 bit/s、6768 帧、176,796 ms，completeness=full，仅有 METADATA_NOT_WRITTEN 警告；截取前 2,000,000 字节的副本返回 AUDIO_INVALID truncated。样本只保存在本机临时目录，未入库；复现方式为设置 MUSIC_SERVICE_AUDIO_SAMPLE（及 MUSIC_SERVICE_AUDIO_SAMPLE_MS）运行 `[online-audio]` 用例 |
+| Windows 证据（2026-10-21） | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 205/205 通过（3 项在线用例按设计跳过）；GCC 16.2 在 -O2 严格警告下检查改动的源码与测试 0 条警告 |
+| Linux 证据（CI 运行 39525823045、39526810353） | ubuntu-24.04，GCC 13.3.0：205/205 通过，Windows 与容器任务同时通过。首次运行在测试替身 mock_providers.hpp 中有 4 条 -Wmissing-field-initializers（ResolvedAudio 新字段未初始化），由 23c2271 修复后复跑 0 条项目警告 |
+| 已知限制 | 只验证 MP3（酷我标准品质的实际容器）；FLAC／M4A／Ogg／WAV／ADTS 的结构验证、标签写入与解密归 T30 及具体平台；不做完整解码证明；整曲判定依赖平台声明时长；处理器由 T17 的 Runner 在 processing 阶段调用，结果写入任务记录后才参与已完成结果复用的证据复核 |
 
