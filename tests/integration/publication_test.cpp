@@ -57,13 +57,19 @@ public:
         if (before_move) {
             before_move();
         }
-        return inner_->move(d, from, to);
+        auto moved = inner_->move(d, from, to);
+        if (moved && flush_fails) {
+            // Renamed, then the directory flush failed, as rename_no_replace reports it.
+            return domain::Error{ErrorCode::file_system, "flush directory failed", false, {}};
+        }
+        return moved;
     }
     domain::Result<void> remove_workspace(const std::string& d, const std::string& t) override {
         return inner_->remove_workspace(d, t);
     }
 
     std::function<void()> before_move;
+    bool flush_fails{false};
 
 private:
     std::shared_ptr<ports::DestinationFiles> inner_;
@@ -151,6 +157,7 @@ struct Publishing {
         report.processor_version = 1;
         report.facts.container = "mp3";
         report.facts.size_bytes = static_cast<std::int64_t>(bytes.size());
+        report.facts.sha256 = test::unwrap(real_files->fingerprint("dst_main", work_file(task)))->sha256;
         report.completeness = domain::Completeness::full;
         report.stages = {{"decrypt", ports::StageOutcome::skipped},
                          {"validate", ports::StageOutcome::done},
@@ -258,7 +265,9 @@ TEST_CASE("a file that failed or skipped validation is not published (A19)", "[p
     skipped.stages[1].outcome = ports::StageOutcome::skipped;
     auto changed = report;
     changed.facts.size_bytes += 1; // the bytes are not the ones that were verified
-    for (const auto& bad : {failed, skipped, changed}) {
+    auto unhashed = report;
+    unhashed.facts.sha256.clear(); // nothing names the verified bytes
+    for (const auto& bad : {failed, skipped, changed, unhashed}) {
         const auto refused = p.publish(task, "Song.mp3", bad);
         REQUIRE_FALSE(refused);
         CHECK(refused.error().code == ErrorCode::audio_invalid);
@@ -267,6 +276,16 @@ TEST_CASE("a file that failed or skipped validation is not published (A19)", "[p
     CHECK_FALSE(fs::exists(p.at("Song.mp3")));
     CHECK(read_bytes(p.at(p.work_file(task))) == "<html>error</html>");
     CHECK(p.publications->pending()->empty());
+
+    // Rewritten with as many other bytes after validation: same size, other hash.
+    write_bytes(p.at(p.work_file(task)), std::string(18, '\0'));
+    const auto rewritten = p.publish(task, "Song.mp3", report);
+    REQUIRE_FALSE(rewritten);
+    CHECK(rewritten.error().code == ErrorCode::audio_invalid);
+    CHECK(rewritten.error().details.front().reason == "changed_after_validation");
+    CHECK_FALSE(fs::exists(p.at("Song.mp3")));
+    CHECK(p.publications->pending()->empty());
+    write_bytes(p.at(p.work_file(task)), "<html>error</html>");
 
     // A failed tag stage under best_effort is a warning, not a refusal.
     auto tags_failed = report;
@@ -341,6 +360,39 @@ TEST_CASE("a destination write failure fails the task without completing it (A17
     REQUIRE_FALSE(offline);
     CHECK(offline.error().code == ErrorCode::destination_unavailable);
     CHECK(p.get(other.task_id).status == TaskStatus::processing);
+}
+
+TEST_CASE("a move whose flush failed keeps the intent for recovery", "[publication][recovery]") {
+    Publishing p{"flush-failure"};
+    const auto task = p.processing("1");
+    const auto report = p.processed(task, "bytes");
+    p.files->flush_fails = true;
+    const auto unconfirmed = p.publish(task, "Song.mp3", report);
+    REQUIRE_FALSE(unconfirmed);
+    CHECK(downloads::is_move_unconfirmed(unconfirmed.error()));
+    // Not failed: the file is at the target, the work file is gone, the intent remains.
+    CHECK(p.get(task.task_id).status == TaskStatus::finalizing);
+    CHECK(p.publications->pending()->size() == 1);
+    CHECK(read_bytes(p.at("Song.mp3")) == "bytes");
+    CHECK_FALSE(fs::exists(p.at(p.work_file(task))));
+
+    // Recovery moving the work file fails the same way: it waits instead of failing.
+    const auto stalled = p.crash_after_intent("2", "two", "Two.mp3");
+    const auto deferred = p.recover();
+    REQUIRE(deferred.tasks.size() == 2);
+    CHECK(deferred.count(RecoveryAction::completed) == 1); // the first one's target matches
+    CHECK(deferred.count(RecoveryAction::deferred) == 1);
+    CHECK(p.get(stalled.task_id).status == TaskStatus::finalizing);
+    CHECK(p.publications->pending()->size() == 1);
+
+    p.restart();
+    const auto done = p.recover();
+    REQUIRE(done.tasks.size() == 1);
+    CHECK(done.tasks[0].action == RecoveryAction::completed);
+    CHECK(p.get(task.task_id).status == TaskStatus::completed);
+    CHECK(p.get(stalled.task_id).status == TaskStatus::completed);
+    CHECK(read_bytes(p.at("Two.mp3")) == "two");
+    CHECK(p.publications->pending()->empty());
 }
 
 TEST_CASE("recovery completes publications from the intent (A20)", "[publication][recovery]") {

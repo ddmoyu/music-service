@@ -45,6 +45,9 @@ struct AudioFacts {
     std::int64_t size_bytes{0};  // the whole file
     std::int64_t audio_bytes{0}; // audio frames, without tags
     std::uint64_t frames{0};
+    // SHA-256 (lowercase hex) of the output bytes the checks were made on; publication
+    // refuses a file whose bytes no longer match it.
+    std::string sha256;
 };
 
 enum class StageOutcome { done, skipped, failed };

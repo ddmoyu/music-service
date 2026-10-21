@@ -138,6 +138,11 @@ TEST_CASE("a tagged CBR MP3 is measured from its frames", "[audio][mp3]") {
     CHECK_FALSE(report->facts.variable_bitrate);
     CHECK(std::llabs(*report->facts.bitrate_bps - 128000) < 500);
     CHECK(report->facts.size_bytes == static_cast<std::int64_t>(fs::file_size(input.input)));
+    // The checked bytes are named by their SHA-256: equal bytes, equal hash; others differ.
+    CHECK(report->facts.sha256.size() == 64);
+    CHECK(processor.process(input, context())->facts.sha256 == report->facts.sha256);
+    auto other = request(dir.file("other.mp3", id3v2(2048) + frames(thirty_seconds + 1) + id3v1()));
+    CHECK(processor.process(other, context())->facts.sha256 != report->facts.sha256);
     // A matching length is full-length evidence even when resolve could not tell.
     CHECK(report->completeness == domain::Completeness::full);
     CHECK(has_warning(*report, ports::processing_warning::metadata_not_written));

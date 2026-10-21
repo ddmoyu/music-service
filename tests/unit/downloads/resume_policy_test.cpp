@@ -80,6 +80,21 @@ TEST_CASE("other validators resume when no strong tag is available", "[downloads
     const auto by_hash = decide_resume(PartialFile{600, 600, hashed}, hashed);
     CHECK(by_hash.resume);
     CHECK_FALSE(by_hash.if_range);
+
+    // A known hash that changed is other bytes: an equal date or tag does not resume them.
+    auto rehashed = resource();
+    rehashed.etag.reset();
+    rehashed.content_hash = "md5:0123";
+    auto replaced = rehashed;
+    replaced.content_hash = "md5:4567";
+    const auto by_date_only = decide_resume(PartialFile{600, 600, rehashed}, replaced);
+    CHECK_FALSE(by_date_only.resume);
+    CHECK(by_date_only.reason == "content_hash_changed");
+    auto tagged = resource();
+    tagged.content_hash = "md5:0123";
+    auto tagged_replaced = tagged;
+    tagged_replaced.content_hash = "md5:4567";
+    CHECK(decide_resume(PartialFile{600, 600, tagged}, tagged_replaced).reason == "content_hash_changed");
 }
 
 TEST_CASE("candidate names are deterministic and keep the extension", "[downloads][publication]") {

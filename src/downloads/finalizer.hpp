@@ -57,8 +57,9 @@ struct FinalizerOptions {
 };
 
 // Publishes a verified work file (internal-contracts.md 7, runtime-and-tasks.md step 7-8):
-//   1. refuses a report with a failed required stage or bytes that changed since they
-//      were verified (A19) - nothing is reserved or moved then;
+//   1. refuses a report with a failed required stage, or without the SHA-256 of the
+//      verified bytes, or a file whose size or SHA-256 no longer matches them (A19) -
+//      nothing is reserved or moved then;
 //   2. reserves the first free candidate name, skipping names an unknown file or another
 //      reservation holds, and commits processing -> finalizing with the intent; a cancel
 //      committed first wins and the task is left to the runner (A12);
@@ -66,8 +67,9 @@ struct FinalizerOptions {
 //      reservation moves to the next candidate, so nothing is overwritten;
 //   4. commits the asset and completed state, then removes the work directory.
 // A rename or directory failure fails the task with FINALIZATION_FAILED and keeps the work
-// file for diagnosis (A17). If the final commit fails, the task stays finalizing and
-// startup recovery completes it from the intent.
+// file for diagnosis (A17). If the final commit fails, or the move failed after the target
+// appeared (its durability is unknown), the task stays finalizing and startup recovery
+// completes it from the intent.
 class Finalizer {
 public:
     Finalizer(std::shared_ptr<ports::PublicationRepository> publications,
@@ -83,6 +85,11 @@ private:
 
 // The task error recorded when a publication cannot complete.
 std::string finalization_error_json(std::string_view reason, const domain::Error& cause);
+
+// The "publication" detail of a move that failed after the target appeared (e.g. the
+// directory flush after the rename failed): the intent is kept for recovery to check.
+inline constexpr std::string_view move_unconfirmed = "move_unconfirmed";
+bool is_move_unconfirmed(const domain::Error& error);
 
 // Moves the work file to the reservation, relocating it past unknown files, as step 3
 // above. Used by the Finalizer and by recovery.

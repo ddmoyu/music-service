@@ -4,8 +4,13 @@
 #include "audio_processing/format/mp3.hpp"
 #include "domain/assets/container.hpp"
 
+#include <mbedtls/sha256.h>
+
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cstdlib>
+#include <optional>
 #include <utility>
 
 namespace music_service::audio_processing {
@@ -25,6 +30,46 @@ Error invalid(std::string reason, std::string message, bool retryable) {
 // Declared lengths are whole seconds and encoders add padding: a few seconds or 3%.
 std::int64_t duration_tolerance_ms(std::int64_t declared_ms) {
     return std::max<std::int64_t>(3000, declared_ms * 3 / 100);
+}
+
+// SHA-256 of every byte through the reader that the checks then use, so the report names
+// the bytes that were checked. Cancellation and the deadline are checked between windows.
+domain::Result<std::string> sha256_of(format::ByteReader& reader, const ports::OperationContext& context) {
+    mbedtls_sha256_context sha;
+    mbedtls_sha256_init(&sha);
+    mbedtls_sha256_starts(&sha, 0);
+    std::optional<Error> failure;
+    for (std::int64_t offset = 0; offset < reader.size();) {
+        if (context.stop.stop_requested()) {
+            failure = Error{ErrorCode::canceled, "audio validation was canceled", false, {}};
+            break;
+        }
+        if (context.expired(std::chrono::steady_clock::now())) {
+            failure = Error{ErrorCode::deadline_exceeded, "audio validation exceeded its deadline", true, {}};
+            break;
+        }
+        auto bytes = reader.read(offset, format::ByteReader::window_bytes);
+        if (!bytes || bytes->empty()) {
+            failure = bytes ? Error{ErrorCode::file_system, "the working file changed while it was read", true, {}}
+                            : std::move(bytes).error();
+            break;
+        }
+        mbedtls_sha256_update(&sha, reinterpret_cast<const unsigned char*>(bytes->data()), bytes->size());
+        offset += static_cast<std::int64_t>(bytes->size());
+    }
+    std::array<unsigned char, 32> digest{};
+    mbedtls_sha256_finish(&sha, digest.data());
+    mbedtls_sha256_free(&sha);
+    if (failure) {
+        return std::move(*failure);
+    }
+    static constexpr char digits[] = "0123456789abcdef";
+    std::string hex;
+    for (const auto byte : digest) {
+        hex += digits[byte >> 4U];
+        hex += digits[byte & 0x0FU];
+    }
+    return hex;
 }
 
 } // namespace
@@ -74,6 +119,11 @@ domain::Result<ports::ProcessingReport> VerifyingProcessor::process(const ports:
                    : invalid("size_mismatch", "the file is longer than the transfer announced", true);
     }
 
+    // Hashed before the checks: bytes changed later no longer match at publication.
+    auto digest = sha256_of(*reader, context);
+    if (!digest) {
+        return std::move(digest).error();
+    }
     auto structure = format::scan_mp3(*reader, context);
     if (!structure) {
         return std::move(structure).error();
@@ -95,6 +145,7 @@ domain::Result<ports::ProcessingReport> VerifyingProcessor::process(const ports:
     facts.size_bytes = size;
     facts.audio_bytes = structure->audio_bytes;
     facts.frames = structure->frames;
+    facts.sha256 = std::move(digest).value(); // the output is the input, unchanged
 
     const auto warn = [&](std::string_view code) { report.warnings.emplace_back(code); };
     if (structure->skipped_bytes > 0) {

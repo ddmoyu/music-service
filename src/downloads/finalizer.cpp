@@ -133,6 +133,14 @@ domain::Result<std::string> move_to_reservation(ports::PublicationRepository& pu
             return reserved;
         }
         if (moved.error().code != ErrorCode::conflict) {
+            // The rename may have happened before flushing (or unlinking the source) failed:
+            // then the intent must survive, so recovery can compare the target with it.
+            auto arrived = files.exists(intent.destination_id, reserved);
+            if (arrived && arrived.value()) {
+                auto cause = std::move(moved).error();
+                cause.details.push_back({"publication", std::string{move_unconfirmed}});
+                return cause;
+            }
             return std::move(moved).error();
         }
         // An unknown file holds the name: keep it, and move the reservation instead.
@@ -164,6 +172,12 @@ domain::Result<std::string> move_to_reservation(ports::PublicationRepository& pu
         }
     }
     return domain::Error{ErrorCode::conflict, "no free target name", false, {}};
+}
+
+bool is_move_unconfirmed(const domain::Error& error) {
+    return std::any_of(error.details.begin(), error.details.end(), [](const domain::ErrorDetail& detail) {
+        return detail.field == "publication" && detail.reason == move_unconfirmed;
+    });
 }
 
 domain::Result<ports::CompletedPublication> commit_publication(ports::PublicationRepository& publications,
@@ -198,7 +212,7 @@ domain::Result<ports::CompletedPublication> Finalizer::publish(const FinalizeReq
     if (!task.execution_id) {
         return domain::Error{ErrorCode::version_conflict, "task has no running execution", true, {}};
     }
-    if (required_stage_failed(request.report) || !validated(request.report)) {
+    if (required_stage_failed(request.report) || !validated(request.report) || request.report.facts.sha256.empty()) {
         return audio_refused("not_validated");
     }
     auto bytes = files_->fingerprint(task.destination_id, request.workspace_file);
@@ -210,7 +224,8 @@ domain::Result<ports::CompletedPublication> Finalizer::publish(const FinalizeReq
                              {{"workspace_file", "missing"}}};
     }
     const auto file = *bytes.value();
-    if (file.size_bytes != static_cast<std::uint64_t>(request.report.facts.size_bytes)) {
+    if (file.size_bytes != static_cast<std::uint64_t>(request.report.facts.size_bytes) ||
+        file.sha256 != request.report.facts.sha256) {
         return audio_refused("changed_after_validation");
     }
     if (request.target_path.empty()) {
@@ -249,6 +264,9 @@ domain::Result<ports::CompletedPublication> Finalizer::publish(const FinalizeReq
                                       options_.max_name_candidates);
     if (!placed) {
         auto cause = std::move(placed).error();
+        if (is_move_unconfirmed(cause)) {
+            return cause; // still finalizing with the intent; recovery checks the target
+        }
         const auto reason = cause.code == ErrorCode::conflict ? "target_conflict" : "move_failed";
         auto failed = publications_->abandon(task.task_id, *task.execution_id, finalizing->version,
                                              domain::TaskStatus::failed, finalization_error_json(reason, cause));

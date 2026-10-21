@@ -91,6 +91,9 @@ RecoveredTask Recovery::recover(const ports::PendingPublication& pending) {
         if (offline(placed.error())) {
             return {task.task_id, RecoveryAction::deferred, "destination_unavailable"};
         }
+        if (is_move_unconfirmed(placed.error())) {
+            return {task.task_id, RecoveryAction::deferred, std::string{move_unconfirmed}};
+        }
         const auto reason = placed.error().code == ErrorCode::conflict ? "target_conflict" : "move_failed";
         return give_up(task, reason, placed.error(), false);
     }

@@ -38,6 +38,10 @@ ResumeDecision decide_resume(const std::optional<PartialFile>& partial, const Re
     if (strong(recorded.etag) && strong(current.etag) && *recorded.etag != *current.etag) {
         return restart("etag_changed"); // a changed tag outweighs any other validator
     }
+    if (recorded.content_hash && current.content_hash && !recorded.content_hash->empty() &&
+        !current.content_hash->empty() && *recorded.content_hash != *current.content_hash) {
+        return restart("content_hash_changed"); // known other bytes, whatever the date says
+    }
     std::optional<std::string> if_range;
     if (strong(recorded.etag) && same(recorded.etag, current.etag)) {
         if_range = current.etag;
