@@ -162,10 +162,12 @@ TEST_CASE("kuwo audio answers become evidence, substitutes included", "[provider
     CHECK(standard.bitrate_kbps == 128);
     CHECK(standard.duration_seconds == 176);
     CHECK_FALSE(standard.substitute);
+    CHECK(standard.regular);
 
     // Paid song: an 11 s clip of another rid.
     const auto clip = unwrap(parsing::parse_audio(fixture("audio-228908-substitute.json"), "228908"));
     CHECK(clip.substitute);
+    CHECK_FALSE(clip.regular);
     CHECK(clip.duration_seconds == 11);
 
     const auto missing = parsing::parse_audio(fixture("audio-missing.json"), "999999999999");
@@ -216,14 +218,30 @@ TEST_CASE("kuwo search requests go through the upstream client", "[providers][ku
     CHECK(page.page.page.has_more == true);
     CHECK(page.next_cursor == "1");
 
-    upstream->respond(200, fixture("search-qingtian-pn0-rn3.json"));
-    (void)unwrap(search->search_tracks(context(), {"晴天", 3, std::string{"1"}}));
+    auto second_page = fixture("search-qingtian-pn0-rn3.json");
+    const auto pn = second_page.find(R"("PN": "0")");
+    REQUIRE(pn != std::string::npos);
+    second_page.replace(pn, 9, R"("PN": "1")");
+    upstream->respond(200, second_page);
+    CHECK(unwrap(search->search_tracks(context(), {"晴天", 3, std::string{"1"}})).next_cursor == "2");
     CHECK(upstream->calls[1].request.url.find("&pn=1&rn=3&") != std::string::npos);
+
+    // An answer for another page is not taken as the requested one.
+    upstream->respond(200, fixture("search-qingtian-pn0-rn3.json"));
+    const auto wrong_page = search->search_tracks(context(), {"晴天", 3, std::string{"1"}});
+    CHECK(wrong_page.error().code == ErrorCode::upstream_failed);
+    CHECK(detail_reason(wrong_page.error(), "protocol") == "search response is for another page");
 
     CHECK(search->search_tracks(context(), {"晴天", 3, std::string{"x"}}).error().code == ErrorCode::cursor_mismatch);
     CHECK(search->search_tracks(context(), {"  ", 3, std::nullopt}).error().code == ErrorCode::validation_failed);
     CHECK(search->search_tracks(context(), {"a", 51, std::nullopt}).error().code == ErrorCode::validation_failed);
-    CHECK(upstream->calls.size() == 2); // invalid input never reaches the network
+    CHECK(upstream->calls.size() == 3); // invalid input never reaches the network
+
+    upstream->respond(429, "slow down");
+    const auto limited = search->search_tracks(context(), {"晴天", 3, std::nullopt});
+    CHECK(limited.error().code == ErrorCode::upstream_rate_limited);
+    CHECK(limited.error().retryable);
+    CHECK(detail_reason(limited.error(), "http_status") == "429");
 
     upstream->respond(503, "busy");
     const auto unavailable = search->search_tracks(context(), {"晴天", 3, std::nullopt});
@@ -299,6 +317,25 @@ TEST_CASE("kuwo resolves standard quality and reports substitutes as previews", 
     upstream->respond(200, fixture("audio-missing.json"));
     CHECK(resolver->resolve_audio(context(), test::track("kuwo", "999999999999"), {}).error().code ==
           ErrorCode::upstream_failed);
+
+    // Without a readable type the address is not declared as the whole song.
+    for (const auto* type : {"", R"("type":null,)", R"("type":"x",)", R"("type":false,)"}) {
+        INFO(type);
+        upstream->respond(200, std::string{R"({"code":200,"data":{)"} + type +
+                                   R"("url":"http://kw-lv.kuwo.cn/a.mp3","rid":78932517,"bitrate":128,)"
+                                   R"("format":"mp3","duration":176}})");
+        const auto unconfirmed = unwrap(resolver->resolve_audio(context(), free_song, {}));
+        CHECK(unconfirmed.completeness == domain::Completeness::unknown);
+        CHECK(unconfirmed.actual_quality == domain::Quality::standard);
+        const auto verdict =
+            unwrap(domain::evaluate_resource({}, {unconfirmed.actual_quality, unconfirmed.completeness}));
+        CHECK(verdict.warnings == std::vector{domain::ResourceWarning::full_length_unverified});
+    }
+
+    upstream->respond(429, "slow down");
+    const auto limited = resolver->resolve_audio(context(), free_song, {});
+    CHECK(limited.error().code == ErrorCode::upstream_rate_limited);
+    CHECK(limited.error().retryable);
 }
 
 // Live probe of the real service, opt-in: MUSIC_SERVICE_KUWO_ONLINE=1. Kuwo may limit

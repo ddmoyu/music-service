@@ -18,7 +18,18 @@ using domain::ErrorCode;
 
 constexpr std::size_t max_query_bytes = 200;
 
-Error http_status_error(int status) {
+Error http_status_error(const ports::HttpResponseHead& head) {
+    const auto status = head.status;
+    if (status == 429) {
+        // The upstream client already fed Retry-After to admission; pass it on as a hint.
+        Error error{ErrorCode::upstream_rate_limited, "kuwo is limiting requests", true, {}};
+        error.details.push_back({"http_status", "429"});
+        if (auto wait = head.header("Retry-After"); wait && !wait->empty() &&
+                                                    wait->find_first_not_of("0123456789") == std::string::npos) {
+            error.details.push_back({"retry_after_seconds", std::move(*wait)});
+        }
+        return error;
+    }
     Error error{ErrorCode::upstream_failed, "kuwo answered with an unexpected status", status >= 500, {}};
     error.details.push_back({"http_status", std::to_string(status)});
     return error;
@@ -93,11 +104,17 @@ public:
             return std::move(response).error();
         }
         if (response->head.status != 200) {
-            return http_status_error(response->head.status);
+            return http_status_error(response->head);
         }
         auto parsed = parsing::parse_search(response->body);
         if (!parsed) {
             return std::move(parsed).error();
+        }
+        // Another page would repeat or skip results under this cursor.
+        if (parsed->page != page) {
+            Error error{ErrorCode::upstream_failed, "the kuwo response could not be read", false, {}};
+            error.details.push_back({"protocol", "search response is for another page"});
+            return error;
         }
         ports::TrackSearchPage result;
         const auto returned = static_cast<std::uint32_t>(parsed->tracks.size());
@@ -134,7 +151,7 @@ public:
             return Error{ErrorCode::not_found, "kuwo has no such song", false, {}};
         }
         if (response->head.status != 200) {
-            return http_status_error(response->head.status);
+            return http_status_error(response->head);
         }
         return parsing::parse_track_page(response->body, *rid);
     }
@@ -185,7 +202,7 @@ public:
             return std::move(response).error();
         }
         if (response->head.status != 200) {
-            return http_status_error(response->head.status);
+            return http_status_error(response->head);
         }
         auto evidence = parsing::parse_audio(response->body, *rid);
         if (!evidence) {
@@ -203,8 +220,9 @@ public:
                 quality = domain::Quality::standard;
             }
             // Same rid, regular type and a positive duration: the upstream declares the
-            // whole song. Audio verification (T15) checks the bytes.
-            if (evidence->duration_seconds && *evidence->duration_seconds > 0) {
+            // whole song. Without a readable type it stays unknown. Audio verification
+            // (T15) checks the bytes.
+            if (evidence->regular && evidence->duration_seconds && *evidence->duration_seconds > 0) {
                 completeness = domain::Completeness::full;
             }
         }

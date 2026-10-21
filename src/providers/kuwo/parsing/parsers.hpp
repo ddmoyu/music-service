@@ -38,6 +38,9 @@ struct AudioEvidence {
     // The address belongs to another rid or is marked as a substitute (type 1): Kuwo
     // hands out a short clip instead of the song.
     bool substitute{false};
+    // Same rid and type 0: the upstream marks the address as the song itself. A
+    // missing or unreadable type leaves this false without making it a substitute.
+    bool regular{false};
 };
 
 domain::Result<AudioEvidence> parse_audio(std::string_view body, std::string_view requested_rid);
