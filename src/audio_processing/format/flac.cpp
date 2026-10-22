@@ -123,7 +123,7 @@ domain::Result<FlacStructure> scan_flac(ByteReader& reader, const application::p
             flac.sample_rate_hz = static_cast<std::int32_t>(packed >> 44);
             flac.channels = static_cast<std::int32_t>(((packed >> 41) & 0x7U) + 1);
             flac.bits_per_sample = static_cast<std::int32_t>(((packed >> 36) & 0x1FU) + 1);
-            const auto samples = packed & 0xFFFFFFFFFULL;
+            const std::uint64_t samples = packed & std::uint64_t{0xFFFFFFFFF};
             if (flac.sample_rate_hz == 0) {
                 return invalid("damaged", "the FLAC sample rate is zero", false);
             }
