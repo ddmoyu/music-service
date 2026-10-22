@@ -102,7 +102,8 @@ add_executable(music_service_integration_tests
     integration/transport_test.cpp
 )
 if("fivesing" IN_LIST MUSIC_SERVICE_PROVIDERS)
-    target_sources(music_service_integration_tests PRIVATE integration/fivesing_gate_test.cpp)
+    target_sources(music_service_integration_tests PRIVATE integration/fivesing_gate_test.cpp
+                                                           integration/s2_gate_test.cpp)
 endif()
 target_link_libraries(music_service_integration_tests PRIVATE
     music_service::application

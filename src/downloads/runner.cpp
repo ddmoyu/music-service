@@ -130,6 +130,10 @@ struct Checkpoint {
     std::optional<std::string> etag;
     std::optional<std::string> last_modified;
     bool complete{false}; // the whole resource is in the work file
+    // The provider implementation (id@version) whose address the bytes came from. An
+    // upgraded implementation may map the same track and quality to another resource,
+    // so its bytes are never continued; empty in checkpoints from earlier builds.
+    std::string implementation;
 
     [[nodiscard]] std::string encode() const {
         return json{{"file", work_file},
@@ -140,7 +144,8 @@ struct Checkpoint {
                     {"total_bytes", nullable(total_bytes)},
                     {"etag", nullable(etag)},
                     {"last_modified", nullable(last_modified)},
-                    {"complete", complete}}
+                    {"complete", complete},
+                    {"implementation", implementation}}
             .dump();
     }
 
@@ -168,6 +173,7 @@ struct Checkpoint {
                 c.last_modified = j["last_modified"].get<std::string>();
             }
             c.complete = j.value("complete", false);
+            c.implementation = j.value("implementation", "");
         } catch (const json::exception&) {
             return std::nullopt;
         }
@@ -264,6 +270,7 @@ private:
     bool task_deadline_first_{false}; // the absolute deadline ends this execution first
 
     std::optional<ports::ResolvedAudio> audio_;
+    std::string implementation_; // id@version of the provider that resolved audio_
     std::vector<domain::ResourceWarning> warnings_;
     std::optional<Checkpoint> checkpoint_;
     std::string name_;
@@ -308,6 +315,9 @@ std::string Execution::execution_json() const {
         warnings.push_back(std::string{domain::to_string(w)});
     }
     json out{{"actual_track", ref_json(*actual_)}, {"warnings", std::move(warnings)}};
+    if (!implementation_.empty()) {
+        out["implementation"] = implementation_;
+    }
     if (audio_) {
         out["actual_quality"] =
             audio_->actual_quality ? json(std::string{domain::to_string(*audio_->actual_quality)}) : json(nullptr);
@@ -530,6 +540,12 @@ std::optional<RunReport> Execution::resolve() {
     if (!resolver) {
         return fail(resolver.error());
     }
+    // Read before resolving: the registry is immutable, so the description names the
+    // implementation the resolver belongs to.
+    auto view = s_.providers->describe(actual_->source.value());
+    if (!view) {
+        return fail(view.error());
+    }
     const ports::ProviderContext call{context(), lease_->identity, std::nullopt, secret_};
     auto audio = resolver.value()->resolve_audio(call, *actual_, intent_->requirement());
     if (!audio) {
@@ -545,6 +561,7 @@ std::optional<RunReport> Execution::resolve() {
     }
     warnings_ = verdict->warnings;
     audio_ = std::move(audio).value();
+    implementation_ = view->implementation_id + "@" + view->implementation_version;
     return std::nullopt;
 }
 
@@ -592,9 +609,10 @@ std::optional<RunReport> Execution::choose_name() {
 
 std::optional<RunReport> Execution::enter_downloading() {
     const auto quality = audio_->actual_quality ? std::string{domain::to_string(*audio_->actual_quality)} : "unknown";
-    // Bytes of another track or quality are never continued.
-    if (!checkpoint_ || checkpoint_->track != track_key(*actual_) || checkpoint_->quality != quality) {
-        checkpoint_ = Checkpoint{track_key(*actual_), quality, name_, 0, {}, {}, {}, false};
+    // Bytes of another track, quality or provider implementation are never continued.
+    if (!checkpoint_ || checkpoint_->track != track_key(*actual_) || checkpoint_->quality != quality ||
+        checkpoint_->implementation != implementation_) {
+        checkpoint_ = Checkpoint{track_key(*actual_), quality, name_, 0, {}, {}, {}, false, implementation_};
     }
     checkpoint_->name = name_;
     if (task_.status == TaskStatus::downloading) {
