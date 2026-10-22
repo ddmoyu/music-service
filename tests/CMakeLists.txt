@@ -72,6 +72,10 @@ target_link_libraries(music_service_unit_tests PRIVATE
 target_compile_definitions(music_service_unit_tests PRIVATE
     MUSIC_SERVICE_TEST_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
 )
+if(TARGET music_service::external)
+    target_sources(music_service_unit_tests PRIVATE unit/providers/helper_protocol_test.cpp)
+    target_link_libraries(music_service_unit_tests PRIVATE music_service::external)
+endif()
 catch_discover_tests(music_service_unit_tests DISCOVERY_MODE PRE_TEST)
 
 # Fault injection through a replaced global allocator; kept out of the unit tests.
@@ -124,4 +128,18 @@ target_link_libraries(music_service_integration_tests PRIVATE
 target_compile_definitions(music_service_integration_tests PRIVATE
     MUSIC_SERVICE_TEST_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
 )
+# External helpers (T26): the runner against a stand-in helper program.
+if(TARGET music_service::external)
+    add_executable(music_service_fake_helper support/fake_helper.cpp)
+    target_link_libraries(music_service_fake_helper PRIVATE
+        music_service::project_options
+        music_service::project_warnings
+    )
+    target_sources(music_service_integration_tests PRIVATE integration/external_helper_test.cpp)
+    target_link_libraries(music_service_integration_tests PRIVATE music_service::external)
+    add_dependencies(music_service_integration_tests music_service_fake_helper)
+    target_compile_definitions(music_service_integration_tests PRIVATE
+        MUSIC_SERVICE_FAKE_HELPER="$<TARGET_FILE:music_service_fake_helper>"
+    )
+endif()
 catch_discover_tests(music_service_integration_tests DISCOVERY_MODE PRE_TEST)

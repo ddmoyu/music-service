@@ -23,6 +23,7 @@ namespace ports = application::ports;
 // Shared services handed to every factory.
 struct ProviderServices {
     std::shared_ptr<ports::UpstreamHttp> upstream;
+    std::shared_ptr<ports::ExternalHelper> helper{}; // empty unless external_adapters.enabled
 };
 
 // The listing types live with the ProviderDirectory port.

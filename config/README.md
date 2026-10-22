@@ -30,7 +30,7 @@
 | `upstream` | `short_workers`、`queue`、`per_source_short`、`per_principal`、`per_origin`、`max_total_connections`、`max_response_bytes`、`redirect_max`、`connect_timeout_seconds` |
 | `catalog` | `total_budget_ms`、`max_budget_ms`、`per_source_budget_ms`、`fanout`、`max_sources_per_request`、`default_sources` |
 | `providers.<source>` | `enabled`、`implementation`（native／external）、`options`（对象，由平台包校验；没有校验器的平台只接受空对象）、`app_profile_id`、`rate_limit_group` |
-| `external_adapters` | `enabled`、`max_processes` |
+| `external_adapters` | `enabled`、`max_processes`、`adapters.<id>`：`source`、`program`（相对路径按配置文件目录解析，不查 PATH）、`args`（固定参数）、`tool_version`（握手须完全一致）、`operations`（目前只有 extract_audio）、`extractors`（不得含 generic）、`domains`（允许的主机及其子域）、`max_connections`（工具自身连接上界，不超过 upstream 的 per_source_short／per_origin／per_principal／max_total_connections）、`startup_timeout_ms`、`operation_timeout_ms`、`stop_grace_ms`、`max_stderr_bytes` |
 | `downloads` | `workers`、`per_source`、`max_attempts`、`transport_retries`、`max_file_bytes` |
 | `retry` | `initial_backoff_ms`、`multiplier` |
 | `download_limits` | `per_principal_active`、`global_active`、`max_batch_items` |

@@ -30,7 +30,7 @@
 | `catalog` | 总查询预算 10 秒／上限 15 秒，每来源 5 秒，单请求 fanout=4、max_sources_per_request=8；default_sources 随发行 preset 生成，S1 为 [kuwo] |
 | `providers` | 按 source 配置 enabled、implementation、options、app_profile_id 和稳定配额组；app profile 包含版本及 app_secret_ref，按 bundle 的授权 schema 校验，不预设平台总数上限 |
 | `app_profiles` | 默认空；按稳定 ID 配置允许的 source／auth_profile、version、公开应用参数、app_secret_ref、scope 范围和 rate_limit_group；只由管理配置建立，秘密不直接写入配置 |
-| `external_adapters` | 默认关闭；启用后 max_processes=2，明确程序路径／版本、允许能力、协议响应和执行预算，不能由普通 API 指定命令 |
+| `external_adapters` | 默认关闭；启用后 max_processes=2，明确程序路径／版本、允许能力、协议响应和执行预算，不能由普通 API 指定命令。每个 adapter 绑定一个 source，固定程序、参数、工具版本、操作、extractor 与域名范围，声明 max_connections（默认 1）；启动 10 秒、操作 60 秒、停止宽限 3 秒、stderr 保留 8 KiB |
 | `downloads` | workers=3 为 Runner 执行槽；per_source=2 为实际音源传输上限，由统一入场管理；max_attempts=3，transport_retries=2，文件最大 2 GiB。只启用一个来源时（S1）实际传输并发为 2，调度器依据入场就绪提示不领取已知受限来源的任务，避免第三个执行槽反复领取后延后 |
 | `retry` | 传输重试退避初值 1 秒、倍增系数 2，并加抖动；仍受逻辑尝试和任务 deadline 约束 |
 | `download_limits` | 每 principal 非终态任务最多 500，全局 2000，批次最多 100 |

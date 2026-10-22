@@ -25,6 +25,10 @@ target_link_libraries(music_service_server_core
         music_service::third_party_httplib
         nlohmann_json::nlohmann_json
 )
+if(TARGET music_service::external)
+    target_link_libraries(music_service_server_core PRIVATE music_service::external)
+    target_compile_definitions(music_service_server_core PRIVATE MUSIC_SERVICE_HAS_EXTERNAL_ADAPTERS)
+endif()
 
 add_executable(music_service_server main.cpp)
 if(WIN32)

@@ -3,10 +3,12 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <map>
 #include <string>
+#include <vector>
 
 using namespace music_service;
 using infrastructure::config::BuildCapabilities;
@@ -293,4 +295,54 @@ TEST_CASE("a real file with BOM and non-ASCII paths loads", "[config]") {
     CHECK(config->logging.format == "text");
     CHECK(config->config_file == file.lexically_normal());
     fs::remove_all(test_root());
+}
+
+TEST_CASE("external adapters fix the program, its scope and its connection bound", "[config][helper]") {
+    auto build = full_build();
+    build.external_adapters = true;
+    const auto good = load(R"({
+        "external_adapters": {"enabled": true, "max_processes": 1, "adapters": {
+            "ytdlp": {"source": "kuwo", "program": "helpers/ytdlp-wrapper", "args": ["--json", ""],
+                      "tool_version": "2026.09.01", "operations": ["extract_audio"],
+                      "extractors": ["youtube"], "domains": ["youtube.com", "googlevideo.com"],
+                      "max_connections": 2, "startup_timeout_ms": 5000, "operation_timeout_ms": 30000,
+                      "stop_grace_ms": 1000, "max_stderr_bytes": 4096}}}
+    })",
+                           options({}, build));
+    REQUIRE(good);
+    const auto& adapter = good->external_adapters.adapters.at("ytdlp");
+    // Relative programs resolve against the configuration file's directory.
+    CHECK(adapter.program == (config_path().parent_path() / "helpers" / "ytdlp-wrapper").lexically_normal());
+    CHECK(adapter.args == std::vector<std::string>{"--json", ""});
+    CHECK(adapter.max_connections == 2);
+    CHECK(adapter.operation_timeout == std::chrono::milliseconds{30000});
+
+    const auto bad = load(R"({
+        "external_adapters": {"enabled": true, "adapters": {
+            "Bad Id": {"source": "kuwo", "program": "/opt/h", "tool_version": "1",
+                       "operations": ["extract_audio"], "extractors": ["youtube"], "domains": ["youtube.com"]},
+            "wide": {"source": "nosuch", "program": "/opt/h", "tool_version": "1",
+                     "operations": ["download_everything"], "extractors": ["Generic"],
+                     "domains": ["*.example.com", "localhost"], "max_connections": 3,
+                     "operation_timeout_ms": 1000, "stop_grace_ms": 2000},
+            "empty": {"source": "kuwo", "program": "/opt/h", "tool_version": "1"},
+            "partial": {"args": "--yes"}}}
+    })",
+                          options({}, build));
+    REQUIRE_FALSE(bad);
+    const auto& error = bad.error();
+    CHECK(has_problem(error, "/external_adapters/adapters/Bad Id"));
+    CHECK(has_problem(error, "/external_adapters/adapters/wide/source"));
+    CHECK(has_problem(error, "/external_adapters/adapters/wide/operations"));
+    CHECK(has_problem(error, "/external_adapters/adapters/wide/extractors"));
+    CHECK(has_problem(error, "/external_adapters/adapters/wide/domains"));
+    CHECK(has_problem(error, "/external_adapters/adapters/wide/max_connections"));
+    CHECK(has_problem(error, "/external_adapters/adapters/wide/stop_grace_ms"));
+    CHECK(has_problem(error, "/external_adapters/adapters/empty/operations"));
+    CHECK(has_problem(error, "/external_adapters/adapters/empty/extractors"));
+    CHECK(has_problem(error, "/external_adapters/adapters/empty/domains"));
+    CHECK(has_problem(error, "/external_adapters/adapters/partial/args"));
+    CHECK(has_problem(error, "/external_adapters/adapters/partial/source"));
+    CHECK(has_problem(error, "/external_adapters/adapters/partial/program"));
+    CHECK(has_problem(error, "/external_adapters/adapters/partial/tool_version"));
 }
