@@ -367,15 +367,6 @@ void read_document(Reader& r, const json& doc, const std::filesystem::path& base
                           r.fail(p, "application profiles are not supported by this build yet");
                       }
                   }},
-                 {"external_adapters",
-                  [&](const json& v, const std::string& p) {
-                      auto& e = c.external_adapters;
-                      r.object(v, p,
-                               {
-                                   {"enabled", [&](const json& x, const std::string& q) { r.boolean(x, q, e.enabled); }},
-                                   {"max_processes", [&](const json& x, const std::string& q) { r.number(x, q, e.max_processes, 1, 64); }},
-                               });
-                  }},
                  {"downloads",
                   [&](const json& v, const std::string& p) {
                       auto& d = c.downloads;

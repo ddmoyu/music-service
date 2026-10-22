@@ -41,7 +41,7 @@ PrincipalService 识别服务调用方；CredentialService 选择该 principal �
 
 每个平台包含能力描述、协议构造器、能力实现、响应解析器和上下文处理器。Registry 启动时注册并冻结，分别表达禁用、不支持和临时不可用。
 
-平台标识与清单开放扩展，ProviderBundle 组合小能力接口；目录型、音源型及仅链接解析型均可接入。原生实现按需实例化；可选外部 helper 通过同样的端口和有界执行契约接入。具体注册、兼容和验收见[多平台适配与扩展](provider-extensibility.md)。
+平台标识与清单开放扩展，ProviderBundle 组合小能力接口；目录型、音源型及仅链接解析型均可接入。全部为原生实现，按需实例化；不接入外部 helper 或第三方下载工具。具体注册、兼容和验收见[多平台适配与扩展](provider-extensibility.md)。
 
 Provider 完成单平台用例，共享调用者截止时间与连接额度；不执行跨平台匹配、下载调度或 SQL。配置不可变，Cookie、参数和解析缓冲按请求隔离。
 

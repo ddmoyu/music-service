@@ -21,7 +21,6 @@
 | 短上游请求池／聚合 fan-out | upstream、catalog | 有界排队，按来源／principal 公平推进，共享请求截止 |
 | 下载执行槽／实际上游传输 | downloads | 持久任务排 SQLite；执行槽与实际 source 的网络额度分别管理 |
 | processing 池 | processing | 有界队列；下载可等处理，处理不能反向等下载 |
-| 可选 helper | external_adapters | 联合预留进程与已验证网络上界，真实退出后释放 |
 | 媒体响应／上游池 | media_limits、media_upstream | 已获响应额度才建流，不排长队；本地文件不占上游池 |
 | 全部上游物理连接 | upstream | 活动与空闲连接都受总上限约束，不能靠释放操作租约无限缓存连接 |
 | SQLite writer／读取连接 | storage | 单 writer、有限读取，短事务、有界排队与超时 |
@@ -38,7 +37,7 @@
 
 平台数不决定线程数。注册表按需创建能力对象；平台、操作、origin 与共享应用账号配额组均可施加额度，跨源任务按实际请求的 source 计入。429 的 Retry-After、退避和熔断按实际影响范围记录，单个账号失效不能停用其他账号。配置和缓存要求见[平台扩展](provider-extensibility.md#8-大量平台的运行方式)。
 
-外部工具不得在已占满的同一个池内等待它依赖的任务；外部进程名额在派发前获取，超时先请求停止再按收尾预算终止进程树，真实退出后才归还。原生传输与外部传输的网络预算必须分别可计量；外部 profile 须声明并验证工具内部连接／重试上限，按其上界预留公共连接额度，无法控制时不声明满足严格总连接上限的传输能力。
+服务不启动外部进程：所有上游 I/O 都由服务自己的传输执行并逐操作入场，连接总数因此可以严格计量。
 
 ### 上游入场与租约
 
@@ -47,9 +46,9 @@
 | downloads/Scheduler | principal 公平性、持久任务领取、到期唤醒、下载执行槽；不拥有平台连接计数 |
 | runtime/admission | 唯一的上游额度账本、可运行等待项、来源／origin／共享应用组冷却及租约 |
 | 应用服务／Runner | 准备具体操作、授权上下文与恢复位置；决定是否继续、延后或按业务规则失败 |
-| HttpTransport／外部执行器 | 校验租约与实际目标匹配、执行 I/O、报告限流反馈；不另外建立平台 semaphore |
+| HttpTransport | 校验租约与实际目标匹配、执行 I/O、报告限流反馈；不另外建立平台 semaphore |
 
-每次网络操作提交 AdmissionRequest：principal、实际 source、operation、traffic_class（short／download／media／auth）、AuthIdentityKey、规范化 origin、稳定 rate_limit_group、deadline，以及所需连接数／helper 进程数。auth 也使用短请求池及其限额。应用配额组由可信管理配置和平台描述确定，不接受客户端任意覆盖，不随 credential_version 或 app_token_version 改变。
+每次网络操作提交 AdmissionRequest：principal、实际 source、operation、traffic_class（short／download／media／auth）、AuthIdentityKey、规范化 origin、稳定 rate_limit_group、deadline，以及所需连接数。auth 也使用短请求池及其限额。应用配额组由可信管理配置和平台描述确定，不接受客户端任意覆盖，不随 credential_version 或 app_token_version 改变。
 
 UpstreamAdmissionPort.try_acquire 返回 Granted（独占 UpstreamLease）、Deferred（受阻维度与最早重试时刻）或截止／取消错误。满足所有相关额度且有可用执行容量时才同时预留，失败不留下部分租约；执行器提交失败立即撤销未开始预留。配额检查与内存账本更新不跨网络、磁盘或 DB 等待。缓存命中和纯解析不申请网络额度。
 
@@ -59,7 +58,7 @@ UpstreamAdmissionPort.try_acquire 返回 Granted（独占 UpstreamLease）、Def
 
 短请求协调者把 Deferred 操作放入原有有界待执行队列，按 principal／可运行来源公平推进，不新增无界队列；容量不足或总截止时间到达时走既有 429／503／超时规则。媒体建流不排长队，无额度即在发头前拒绝；已发头时终止流。下载按下节持久延后，不占 worker 等待。额度归还可唤醒等待者，冷却到期用定时器，不以反复占用 worker 的忙轮询实现。
 
-并发租约在实际 I/O 结束后才可归还；请求停止、HTTP 已返回或 worker 句柄超时都不等于操作结束。客户端连接可复用但不是额度本身，新操作仍须新租约；物理连接池同时计入活动与空闲连接上限，不能归还操作租约后无限保留空闲 socket。Retry-After 冷却与速率窗口独立于并发租约，释放连接不会重置它们。helper 按声明上界一次预留，由实际执行器消耗；其内部已预留连接不再重复申请，结束后才释放，超出声明上界的实现不能启用。
+并发租约在实际 I/O 结束后才可归还；请求停止、HTTP 已返回或 worker 句柄超时都不等于操作结束。客户端连接可复用但不是额度本身，新操作仍须新租约；物理连接池同时计入活动与空闲连接上限，不能归还操作租约后无限保留空闲 socket。Retry-After 冷却与速率窗口独立于并发租约，释放连接不会重置它们。
 
 T06 实现（`src/runtime/admission`）：S0 维度为全局连接（upstream.max_total_connections）、principal（upstream.per_principal）、来源×流量类别（short／auth 用 upstream.per_source_short，download 用 downloads.per_source，media 用 media_limits.upstream）与 origin（upstream.per_origin）。容量不足的 Deferred 给出受限维度和短暂的重试提示；冷却按配额组（未配置时按来源）记录，以上游 Retry-After 为准并设上限，只延长不缩短。readiness 只读判断，供调度器跳过受限项。
 

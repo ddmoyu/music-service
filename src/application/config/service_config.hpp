@@ -106,11 +106,6 @@ struct ProviderConfig {
     std::optional<std::string> rate_limit_group;
 };
 
-struct ExternalAdapters {
-    bool enabled{false};
-    std::uint32_t max_processes{2};
-};
-
 struct Downloads {
     std::uint32_t workers{3};
     std::uint32_t per_source{2};
@@ -242,7 +237,6 @@ struct ServiceConfig {
     Upstream upstream;
     Catalog catalog;
     std::map<std::string, ProviderConfig> providers;
-    ExternalAdapters external_adapters;
     Downloads downloads;
     Retry retry;
     DownloadLimits download_limits;

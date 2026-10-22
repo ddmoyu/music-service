@@ -31,12 +31,12 @@ audio_processing、runtime → application/ports + domain
 
 - domain 保存值对象和规则；application 定义用例及端口。
 - providers 实现平台协议；downloads 编排执行；infrastructure 适配网络、存储、文件和秘密。
-- 每个平台以 ProviderBundle 组合能力；原生平台与可选外部 helper 共用端口，平台内部不持有任务队列或 SQL。扩展契约见[多平台适配](provider-extensibility.md)。
+- 每个平台以 ProviderBundle 组合能力；平台全部为原生实现，不调用外部程序；平台内部不持有任务队列或 SQL。扩展契约见[多平台适配](provider-extensibility.md)。
 - api、media_server、event_server 只做协议转换与入场控制，共享应用服务。
 - application/media 管理媒体授权，audio_processing 处理文件，media_server 传输字节。
 - application/tasks 在事务外归一下载意图；domain 定义指纹纯规则，Repository 原子保存和去重，downloads 只执行持久意图。
 - application/accounts 选择账号、生成完整身份键、合并刷新并协调提交；providers/<source>/auth 实现注册的授权协议，infrastructure 不放平台刷新分支。
-- downloads/Scheduler 负责持久任务和执行槽；runtime/admission 实现进程内唯一的 UpstreamAdmissionPort，Transport／helper 按操作租约执行，不各自计数。
+- downloads/Scheduler 负责持久任务和执行槽；runtime/admission 实现进程内唯一的 UpstreamAdmissionPort，Transport 按操作租约执行，不各自计数。
 - 跨模块使用项目类型和 Result<T>；C++20 不依赖 C++23 的 std::expected。
 - Windows／POSIX 原生接口限定在进程、文件、权限、网络、秘密等适配实现；业务公共头不暴露系统类型，入口不引入 GUI 或桌面运行时。
 
@@ -77,7 +77,6 @@ music-service/
     providers/
       registry/                    # 构建清单生成工厂绑定，运行时冻结
       common/                      # 平台共用编码／OAuth 协议工具，不存账号或业务状态
-      external/                    # 可选 helper 协议适配，不存第二套下载队列
       kuwo/                        # 首个闭环平台
         CMakeLists.txt             # 独立平台 target 与注册项
         descriptor.cpp
@@ -112,7 +111,6 @@ music-service/
       filesystem/
       secrets/
       auth/                        # 服务 token 校验等通用实现，不放平台 OAuth 协议
-      external_tools/              # 可选进程、协议、取消与版本检查
     runtime/
       executors/
       admission/                   # 唯一上游额度账本、联合入场与冷却
@@ -167,6 +165,6 @@ auth_profiles 工厂与平台能力一起注册；UpstreamAdmissionPort 实例�
 
 
 
-增加平台包及构建注册项 → 实现所需能力端口与 descriptor → 离线验证解析和签名 → 验证账号及在线行为 → 在发行 preset 启用。首版静态注册，不加载动态 C++ 插件；按需加入的外部工具使用版本化 helper 协议。新增已存在能力的平台不改通用路由、任务状态机或新增平台专表，具体模板和验收见[扩展设计](provider-extensibility.md#9-新平台交付模板与验收)。
+增加平台包及构建注册项 → 实现所需能力端口与 descriptor → 离线验证解析和签名 → 验证账号及在线行为 → 在发行 preset 启用。首版静态注册，不加载动态 C++ 插件，也不调用外部工具。新增已存在能力的平台不改通用路由、任务状态机或新增平台专表，具体模板和验收见[扩展设计](provider-extensibility.md#9-新平台交付模板与验收)。
 
 能力缺失标记 unsupported；目录来源、品质降级、试听和第三方 relay 依赖保留在描述与结果中。

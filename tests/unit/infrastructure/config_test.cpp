@@ -142,6 +142,7 @@ TEST_CASE("features the build lacks cannot be enabled", "[config]") {
         "events": {"enabled": true},
         "features": {"media_proxy": true, "transcoding": true},
         "external_adapters": {"enabled": true},
+        "providers": {"kuwo": {"implementation": "external"}},
         "app_profiles": {"spotify_app": {}}
     })");
     REQUIRE_FALSE(config);
@@ -149,7 +150,9 @@ TEST_CASE("features the build lacks cannot be enabled", "[config]") {
     CHECK(has_problem(error, "/events/enabled"));
     CHECK(has_problem(error, "/features/media_proxy"));
     CHECK(has_problem(error, "/features/transcoding"));
-    CHECK(has_problem(error, "/external_adapters/enabled"));
+    // External helper programs do not exist in any build.
+    CHECK(has_problem(error, "/external_adapters"));
+    CHECK(has_problem(error, "/providers/kuwo/implementation"));
     CHECK(has_problem(error, "/app_profiles"));
 }
 

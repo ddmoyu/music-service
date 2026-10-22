@@ -30,13 +30,12 @@
 | `catalog` | 总查询预算 10 秒／上限 15 秒，每来源 5 秒，单请求 fanout=4、max_sources_per_request=8；default_sources 随发行 preset 生成，S1 为 [kuwo] |
 | `providers` | 按 source 配置 enabled、implementation、options、app_profile_id 和稳定配额组；app profile 包含版本及 app_secret_ref，按 bundle 的授权 schema 校验，不预设平台总数上限 |
 | `app_profiles` | 默认空；按稳定 ID 配置允许的 source／auth_profile、version、公开应用参数、app_secret_ref、scope 范围和 rate_limit_group；只由管理配置建立，秘密不直接写入配置 |
-| `external_adapters` | 默认关闭；启用后 max_processes=2，明确程序路径／版本、允许能力、协议响应和执行预算，不能由普通 API 指定命令 |
 | `downloads` | workers=3 为 Runner 执行槽；per_source=2 为实际音源传输上限，由统一入场管理；max_attempts=3，transport_retries=2，文件最大 2 GiB。只启用一个来源时（S1）实际传输并发为 2，调度器依据入场就绪提示不领取已知受限来源的任务，避免第三个执行槽反复领取后延后 |
 | `retry` | 传输重试退避初值 1 秒、倍增系数 2，并加抖动；仍受逻辑尝试和任务 deadline 约束 |
 | `download_limits` | 每 principal 非终态任务最多 500，全局 2000，批次最多 100 |
 | `download_timeouts` | 连接 10 秒、读取空闲 30 秒、一次逻辑尝试 10 分钟（不含该尝试因 admission 暂停的时间）、首次开始逻辑尝试后绝对预算 30 分钟；首次尝试开始前的排队和 admission 延后不计入，开始后的等待计入且不因重新领取或重启而重置 |
 | `idempotency` | 幂等记录至少保留 24 小时，过期后由后台清理 |
-| `processing` | workers=2，queue=16；外部工具如启用，必须另设可取消的时间上限 |
+| `processing` | workers=2，queue=16；处理全部在进程内完成，不调用外部程序 |
 | `media_limits` | 全局响应 10／每 principal 4，其中播放上游最多 6、本地文件最多 8；播放器拖动时新 Range 请求常在旧连接关闭前到达，每 principal 额度需容纳“播放 + 拖动重叠 + 另存文件” |
 | `media_upstream` | workers=6；仅在线代理启用时建立，已取得媒体额度才派发，不排长队 |
 | `media_stream` | bridge_buffer=256 KiB，connect_timeout=5 秒，read/write idle=30 秒，单流最长 30 分钟 |
@@ -52,7 +51,7 @@
 
 T03 已按本表实现加载与校验（`src/infrastructure/config`），JSON 键名见[配置键名](../../../../config/README.md)。media、events 的缺省值跟随构建：构建包含对应模块时默认启用（T20 起），否则关闭；file_access 未设置时跟随 media.enabled。环境变量和命令行给出的相对路径相对于进程工作目录，文件中的相对路径相对于配置文件目录。端口 0 仅允许 loopback 地址；监听非 loopback 地址时必须配置对应的 public_urls。
 
-上述 source／origin／共享应用组及 helper 预算由 runtime/admission 统一执行，Transport 和平台包不得各建一套计数。配额组标识与凭证版本分开：多个平台或应用 profile 共用同一上游配额时配置为同组，token 刷新不新建配额。用户默认凭证保存在 SQLite，通过 API 提交后立即生效；启动配置不包含用户默认账号。既有任务使用保存的绑定和策略，不因默认选择或配置重启而静默迁移。
+上述 source／origin／共享应用组预算由 runtime/admission 统一执行，Transport 和平台包不得各建一套计数。配额组标识与凭证版本分开：多个平台或应用 profile 共用同一上游配额时配置为同组，token 刷新不新建配额。用户默认凭证保存在 SQLite，通过 API 提交后立即生效；启动配置不包含用户默认账号。既有任务使用保存的绑定和策略，不因默认选择或配置重启而静默迁移。
 
 app_profile 的 version 是管理配置中的正整数，应用身份或授权配置变化必须递增；SecretStore 引用不可原地覆盖秘密而维持同一版本。下载意图中的目标／命名／元数据配置版本则由加载后的有效配置和规则 schema 生成确定性摘要，保存对应非秘密快照；不使用整个配置文件的时间戳，也不让无关日志配置变化导致重复下载。
 
@@ -89,7 +88,6 @@ app_profile 的 version 是管理配置中的正整数，应用身份或授权�
   "upstream": {"short_workers": 8, "queue": 64, "per_source_short": 2, "max_total_connections": 16},
   "catalog": {"default_sources": ["kuwo"], "max_sources_per_request": 8},
   "providers": {"kuwo": {"enabled": true, "implementation": "native"}},
-  "external_adapters": {"enabled": false, "max_processes": 2},
   "downloads": {"workers": 3, "per_source": 2, "max_attempts": 3, "transport_retries": 2},
   "features": {"file_access": true, "media_proxy": false, "direct_media_urls": false, "automatic_fallback": false, "transcoding": false},
   "logging": {"format": "json", "level": "info"}
@@ -219,7 +217,7 @@ SSE 退出时停止接受订阅，唤醒等待并关闭现有流，注销订阅�
 | 服务生命周期 | 前台运行是共同入口；Linux／容器处理 SIGTERM／SIGINT，Windows 服务停止与控制台退出接入同一收尾流程；无需交互输入，失败使用非零退出码 |
 | 网络与代理 | 显式配置监听、公开地址和出站代理；验证 IPv4、启用时的 IPv6、DNS、TLS 和代理行为，不依赖交互用户的浏览器或系统代理设置 |
 | 时间与资源 | 持久时间与日志时间使用明确时区，建议 UTC；超时和预算使用单调时钟；线程、连接与缓存按部署配置限额，在低内存设备及容器 CPU／内存限制下验证 |
-| 可选外部工具 | 如启用 FFmpeg，提供匹配操作系统与架构的工具或配置其路径；安全传参、可取消退出，不把 bash、PowerShell 或特定桌面软件作为共同运行依赖 |
+| 外部工具 | 无：服务不调用 FFmpeg 或其他外部程序，也不把 bash、PowerShell 或特定桌面软件作为运行依赖 |
 | 交付与升级 | 发布包列明系统、架构、运行库、功能和依赖；在无开发工具的干净环境验证启动、HTTPS、下载、恢复和退出；升级前备份，数据库迁移后不承诺任意降级 |
 
 `data_dir` 中的 SQLite WAL 数据库须位于受支持的本地文件系统，不放 SMB／NFS 共享目录；部署在 NAS 上也不等于数据库可放网络共享。下载目录可单独指向经验证的挂载目录，并验证断开与重命名行为。[SQLite WAL 限制](https://sqlite.org/wal.html)

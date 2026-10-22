@@ -76,7 +76,7 @@
 
 原问题：任务执行槽与上游额度职责交叉，跨来源和重定向时计量、等待与释放不明确。
 
-已确定：downloads/Scheduler 管理持久领取、公平性和执行槽；runtime/admission 是唯一额度账本，通过 UpstreamAdmissionPort 对实际 source、origin、流量类别和稳定应用组联合发放租约。Transport／helper 校验并消耗租约，真实结束才归还，重定向／刷新独立入场。
+已确定：downloads/Scheduler 管理持久领取、公平性和执行槽；runtime/admission 是唯一额度账本，通过 UpstreamAdmissionPort 对实际 source、origin、流量类别和稳定应用组联合发放租约。Transport 校验并消耗租约，真实结束才归还，重定向／刷新独立入场。
 
 规范：[入场与租约](runtime-and-tasks.md#上游入场与租约)、[任务延后](runtime-and-tasks.md#入队与调度)、[端口](internal-contracts.md#34-上游入场端口)。Deferred 不占 worker 等待；下载使用 waiting_retry + wait_reason=admission 持久延后，不额外消耗逻辑 attempt，重新领取更换 execution_id，deadline 不延长；验收 A42～A45。
 
@@ -94,7 +94,7 @@
 | api／media_server／event_server | 各自协议和连接生命周期 | 保留独立监听／线程池；共用身份、CORS、错误等规则，无需复制业务服务 |
 | src/server | 配置、组装、启动与退出 | 具体实现仅在此连接 |
 
-最小安全发布与重启恢复已直接列入 [S1 完成条件](README.md#功能分期)，S3 扩展故障覆盖。多平台、外部 helper、OAuth 与复杂匹配按需交付；新增验收及实施阶段以[验收关口](flows-and-acceptance.md#8-验证层次与实施关口)为准。逻辑职责不强制对应一个类、库或线程池。
+最小安全发布与重启恢复已直接列入 [S1 完成条件](README.md#功能分期)，S3 扩展故障覆盖。多平台、OAuth 与复杂匹配按需交付；新增验收及实施阶段以[验收关口](flows-and-acceptance.md#8-验证层次与实施关口)为准。逻辑职责不强制对应一个类、库或线程池。
 
 ## 范围限制
 

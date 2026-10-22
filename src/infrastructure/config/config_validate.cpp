@@ -179,9 +179,6 @@ void check_features(const cfg::ServiceConfig& c, const BuildCapabilities& build,
     if (f.transcoding && !build.transcoding) {
         p.add("/features/transcoding", "is not supported by this build");
     }
-    if (c.external_adapters.enabled && !build.external_adapters) {
-        p.add("/external_adapters/enabled", "is not supported by this build");
-    }
     if (c.auth.mode != "bearer") {
         p.add("/auth/mode", "must be bearer");
     }
@@ -200,11 +197,9 @@ void check_providers(const cfg::ServiceConfig& c, const BuildCapabilities& build
         if (build.providers.find(source) == build.providers.end()) {
             p.add(field, "is not included in this build");
         }
-        if (provider.implementation != "native" && provider.implementation != "external") {
-            p.add(field + "/implementation", "must be native or external");
-        }
-        if (provider.implementation == "external" && !c.external_adapters.enabled) {
-            p.add(field + "/implementation", "external requires external_adapters.enabled");
+        // Every platform is parsed by the service's own code; no external tools.
+        if (provider.implementation != "native") {
+            p.add(field + "/implementation", "must be native");
         }
         if (provider.app_profile_id && !build.app_profiles) {
             p.add(field + "/app_profile_id", "application profiles are not supported yet");

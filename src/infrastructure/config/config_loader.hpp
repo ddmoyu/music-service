@@ -20,7 +20,6 @@ struct BuildCapabilities {
     bool direct_media_urls{false};
     bool automatic_fallback{false};
     bool transcoding{false};
-    bool external_adapters{false};
     bool app_profiles{false};
     std::set<std::string, std::less<>> providers;
 };

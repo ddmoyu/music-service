@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | 1 | [系统总览 SVG](overview-1.svg)／[PNG](overview-1.png) | 外部客户端、三入口、单进程、存储与上游 |
 | 2 | [编译依赖 SVG](detail-1.svg) | CMake 依赖方向与待实现组装 |
-| 3 | [用例与平台 SVG](detail-2.svg) | 应用规则、Provider、授权与外部适配 |
+| 3 | [用例与平台 SVG](detail-2.svg) | 应用规则、Provider 与授权（图中的外部适配部分已不在计划内） |
 | 4 | [下载时序 SVG](detail-3.svg) | 创建、入场、执行、发布与通知 |
 | 5 | [资源调度 SVG](detail-4.svg) | 线程池、额度、持久延后与背压 |
 | 6 | [发布与恢复 SVG](detail-5.svg) | 取消竞争、文件移动与 DB 提交窗口 |

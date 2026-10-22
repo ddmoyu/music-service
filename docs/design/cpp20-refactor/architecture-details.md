@@ -76,9 +76,8 @@ flowchart TB
         registry["ProviderRegistry：描述与类型化能力选择"]
         native["原生 ProviderBundle：酷我优先，其他逐个接入"]
         auth["可选授权工厂：Verifier、Refresher、ApplicationTokenProvider"]
-        helper["可选 external adapter：版本化 helper 协议"]
     end
-    transport["网络与进程适配：每次操作获取匹配的上游租约"]
+    transport["网络适配：每次操作获取匹配的上游租约"]
     secrets[("SecretStore：秘密快照与不可变 secret_ref")]
     credentials[("CredentialRepository：绑定、引用与版本")]
     upstream["平台 API、授权端点与 CDN"]
@@ -93,11 +92,9 @@ flowchart TB
     catalog -->|"按能力调用"| registry
     assets -->|"按实际目标能力调用"| registry
     registry --> native
-    registry -.-> helper
     accounts -.->|"按注册的 auth_profile 选择"| auth
     native --> transport
     auth --> transport
-    helper -.-> transport
     transport --> upstream
 ```
 
@@ -105,7 +102,7 @@ AccountBinding 固定账号选择；AuthIdentityKey 包含绑定与本次完整�
 
 Provider 只解释平台请求、签名、响应及能力，不拥有通用换源策略、任务队列或文件发布。目录源和实际音频源分开保存：未来目录型来源由 MatchService 明确选择目标后，再调用目标来源 IAssetResolver，不能在 Provider 内部偷偷跨源递归。
 
-首版静态注册原生平台。helper 默认关闭，启用后也共用公共 Runner、临时工作区、取消、配额与 Finalizer；不引入第二套持久队列。授权工厂、处理器注册、扩展传输类型和新增平台验收详见[多平台扩展](backend-service/provider-extensibility.md)。
+首版静态注册原生平台，不调用外部下载工具或程序。授权工厂、处理器注册、扩展传输类型和新增平台验收详见[多平台扩展](backend-service/provider-extensibility.md)。
 
 ## 图 4：从接收下载到发布文件
 
@@ -201,7 +198,7 @@ flowchart TB
 
 允许的等待方向是控制 → 短请求、下载 → processing／DB。禁止反向等待、同池提交后阻塞等子任务，以及持锁或持数据库事务等 I/O。processing 可以占用下载执行槽，但不能继续占用下载网络租约。
 
-Deferred 持久延后之前必须确认旧 I/O 结束；DB 提交失败不能先释放执行所有权。重定向每跳重新校验和入场；停止信号、HTTP 已返回和真正 I/O 结束不是同一时刻。外部 helper 按已验证的连接上界联合预留，实际退出后归还。完整规则见[运行时](backend-service/runtime-and-tasks.md)。
+Deferred 持久延后之前必须确认旧 I/O 结束；DB 提交失败不能先释放执行所有权。重定向每跳重新校验和入场；停止信号、HTTP 已返回和真正 I/O 结束不是同一时刻。完整规则见[运行时](backend-service/runtime-and-tasks.md)。
 
 ## 图 6：文件发布、取消与崩溃恢复
 

@@ -29,8 +29,7 @@
 | `admission` | `global`、`per_principal` |
 | `upstream` | `short_workers`、`queue`、`per_source_short`、`per_principal`、`per_origin`、`max_total_connections`、`max_response_bytes`、`redirect_max`、`connect_timeout_seconds` |
 | `catalog` | `total_budget_ms`、`max_budget_ms`、`per_source_budget_ms`、`fanout`、`max_sources_per_request`、`default_sources` |
-| `providers.<source>` | `enabled`、`implementation`（native／external）、`options`（对象，由平台包校验；没有校验器的平台只接受空对象）、`app_profile_id`、`rate_limit_group` |
-| `external_adapters` | `enabled`、`max_processes` |
+| `providers.<source>` | `enabled`、`implementation`（只能为 native：所有平台由服务原生实现，不调用外部工具）、`options`（对象，由平台包校验；没有校验器的平台只接受空对象）、`app_profile_id`、`rate_limit_group` |
 | `downloads` | `workers`、`per_source`、`max_attempts`、`transport_retries`、`max_file_bytes` |
 | `retry` | `initial_backoff_ms`、`multiplier` |
 | `download_limits` | `per_principal_active`、`global_active`、`max_batch_items` |

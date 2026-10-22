@@ -51,7 +51,7 @@
 
 ### 3.1 能力接口
 
-每种能力独立声明，如 ITrackSearch、ITrackDetail、IPlaylistSearch、IAlbumSearch、ICollectionItems、IDiscovery、ILinkParser、IAssetResolver、ILyrics。Registry 提供 Descriptor 与受类型约束的能力访问；不存在能力时返回 unsupported，不通过 dynamic_cast 失败或空指针推断业务错误。ProviderBundle 注册、按需实例化、外部适配协议与新增平台流程见[多平台扩展](provider-extensibility.md)。
+每种能力独立声明，如 ITrackSearch、ITrackDetail、IPlaylistSearch、IAlbumSearch、ICollectionItems、IDiscovery、ILinkParser、IAssetResolver、ILyrics。Registry 提供 Descriptor 与受类型约束的能力访问；不存在能力时返回 unsupported，不通过 dynamic_cast 失败或空指针推断业务错误。ProviderBundle 注册、按需实例化与新增平台流程见[多平台扩展](provider-extensibility.md)。
 
 Provider 输入仅使用统一查询和自己的内部解析上下文；输出使用领域对象、SourcePage、内部 ResolvedAsset 或 ProviderError。ProviderError 保留平台码、HTTP 状态、可重试提示和去敏诊断，应用层决定它对当前用例意味着什么。
 
@@ -64,7 +64,7 @@ Provider 输入仅使用统一查询和自己的内部解析上下文；输出�
 | 上游失败 | 不把响应解析错误当成零结果，不把所有 HTTP 403 当成永久账号失败 |
 | 平台适配更换 | 换协议实现不修改 TrackRef 和已有任务身份 |
 
-ProviderBundle 的声明必须与能力工厂一致；Registry 启动冻结。Context 与 task 私有快照记录 schema／implementation 版本；变更后通过受控迁移或重新解析恢复，不能盲读旧结构。Provider 和外部 helper 不拥有任务队列、数据库或最终文件发布职责。
+ProviderBundle 的声明必须与能力工厂一致；Registry 启动冻结。Context 与 task 私有快照记录 schema／implementation 版本；变更后通过受控迁移或重新解析恢复，不能盲读旧结构。Provider 不拥有任务队列、数据库或最终文件发布职责。
 
 目录型平台的匹配由 MatchService／ResolveService 编排，不通过平台内部跨源递归调用。ResolveService 先处理合法的 match_selection，再检查实际目标 IAssetResolver；原曲无音源能力不妨碍手动选择目标。
 
@@ -82,7 +82,7 @@ ClientLease 按完整 AuthIdentityKey、origin、代理和 TLS 策略隔离。�
 
 ### 3.3 扩展传输与文件处理
 
-ResolvedAsset 携带类型化传输计划和处理计划。TransferExecutor 按 HttpAsset／已启用 ExternalTransfer 分派；AudioProcessor 按 processor_id 与版本调用已注册处理器，不按平台字符串分支。外部进程遵守同一取消、临时文件、大小和恢复规则，结束后才释放实际执行额度；不把任意命令字符串作为计划内容。首版仅启用 HttpAsset，额外传输形态通过独立能力验证后开放。
+ResolvedAsset 携带类型化传输计划和处理计划。TransferExecutor 按传输计划类型分派；AudioProcessor 按 processor_id 与版本调用已注册处理器，不按平台字符串分支。计划中不包含任何命令或外部程序。首版仅启用 HttpAsset，额外传输形态由服务自己实现并经独立验证后开放。
 
 ### 3.4 上游入场端口
 
@@ -122,7 +122,7 @@ version 用于状态与进度并发控制，execution_id 用于区分执行世�
 | ProviderRegistry | CompositionRoot 构造的不可变对象 | 进程收尾 |
 | OperationState | 应用用例与执行器共享 | HTTP 返回后，迟到工作退出才释放最后引用 |
 | ClientLease | 执行实际 I/O 的 worker 独占 | 请求真实结束并回收／关闭连接 |
-| UpstreamLease | 入场管理者发放，实际操作独占 | I/O／helper 真实结束后归还；未派发可以撤销 |
+| UpstreamLease | 入场管理者发放，实际操作独占 | I/O 真实结束后归还；未派发可以撤销 |
 | TaskRunner | 调度器管理句柄，Runner 持自身执行状态 | 进入终态、等待重试或安全停机 |
 | FileWorkspace | 当前 Runner 独占 | 成功发布／用户取消清理／交给恢复流程 |
 | StreamBridge | 上游 worker 与媒体 responder 共享 | 双方退出，剩余缓冲释放 |

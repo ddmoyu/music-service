@@ -29,13 +29,15 @@ namespace music_service::application::ports {
 // Bumped when the bundle contract changes incompatibly; the registry refuses others.
 inline constexpr std::uint32_t provider_contract_version = 1;
 
-enum class ExecutionMode { native, external };
+// Platforms are always implemented natively in the service; no external download
+// tools or helper programs (development-tasks.md, 平台实现原则).
+enum class ExecutionMode { native };
 enum class CredentialRequirement { none, optional, required };
 enum class Pagination { none, cursor, page };
 enum class CatalogKind { live, built_in, search_derived };
 
-inline std::string_view to_string(ExecutionMode value) noexcept {
-    return value == ExecutionMode::external ? "external" : "native";
+inline std::string_view to_string(ExecutionMode) noexcept {
+    return "native";
 }
 inline std::string_view to_string(CredentialRequirement value) noexcept {
     switch (value) {

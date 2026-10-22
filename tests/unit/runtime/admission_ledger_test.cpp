@@ -230,10 +230,6 @@ TEST_CASE("invalid and expired requests are errors, not deferrals", "[runtime][a
     expired.deadline = f.clock->steady_now();
     CHECK(ledger.try_acquire(expired).error().code == domain::ErrorCode::deadline_exceeded);
 
-    auto helper = f.request("youtube", "https://youtube.com");
-    helper.helper_processes = 1;
-    CHECK(ledger.try_acquire(helper).error().code == domain::ErrorCode::capability_unsupported);
-
     auto empty = f.request("kuwo", "");
     CHECK(ledger.try_acquire(empty).error().code == domain::ErrorCode::validation_failed);
 }

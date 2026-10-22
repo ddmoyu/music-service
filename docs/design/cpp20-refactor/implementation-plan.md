@@ -4,9 +4,9 @@
 
 本项目是纯后端，无 GUI；跨平台与 Docker 是持续约束。S0 即验证 Windows／Linux 无界面构建和最小容器启动，S5 完成系统服务、多架构与部署发布，不把平台适配全部推迟至最后。操作系统、CPU 与发布边界以[部署矩阵](backend-service/configuration-and-deployment.md#部署方式)为准。
 
-平台优先顺序只在[平台路线图](platform-roadmap.md)维护。酷我先完成产品闭环，第二个真实平台经 T41 验证扩展机制后再推进海外目录与 helper；单个来源受阻不改变其他来源的技术可行性。
+平台优先顺序只在[平台路线图](platform-roadmap.md)维护。酷我先完成产品闭环，第二个真实平台经 T41 验证扩展机制后再推进海外目录；单个来源受阻不改变其他来源的技术可行性。
 
-S0／S1 完成[平台扩展基线](backend-service/provider-extensibility.md)：开放 source 标识、能力组合、ProviderBundle 注册与酷我；模拟契约覆盖目录型来源。S2 用第二个平台和 Spotify 验证复用边界，再按需加入外部 helper。目录跨源下载归 S4 的匹配与显式策略，不能在平台内部隐藏换源。
+S0／S1 完成[平台扩展基线](backend-service/provider-extensibility.md)：开放 source 标识、能力组合、ProviderBundle 注册与酷我；模拟契约覆盖目录型来源。S2 用第二个平台和 Spotify 验证复用边界，后续平台同样原生接入。目录跨源下载归 S4 的匹配与显式策略，不能在平台内部隐藏换源。
 
 实现前以[已补齐的模块审查](backend-service/module-boundary-review.md#本轮模块与功能拆分审查)为基线：下载按 NormalizedDownloadIntent 去重，账号以 AccountBinding／AuthIdentityKey 分别表达稳定选择和授权快照，平台授权协议随 bundle 注册，runtime/admission 统一分配上游额度。验收编号 A35～A46 及其分期以[流程与验收](backend-service/flows-and-acceptance.md#8-验证层次与实施关口)为准；这些是设计和验收要求，当前没有对应实现。
 
@@ -48,7 +48,7 @@ S0／S1 完成[平台扩展基线](backend-service/provider-extensibility.md)：
 | 层次 | 对象 |
 | --- | --- |
 | 领域／协议 | 固定签名向量、响应解析、品质、版本匹配、状态转换、去重与文件名 |
-| 本地集成 | 模拟上游、多凭证类型与隔离、超时、重定向、Range、取消、慢消费者、DB 与文件故障；平台契约、100 源发现与可选 helper 生命周期 |
+| 本地集成 | 模拟上游、多凭证类型与隔离、超时、重定向、Range、取消、慢消费者、DB 与文件故障；平台契约与 100 源发现 |
 | 文件 | 格式、标签、封面／歌词、重复处理、载荷保真 |
 | 在线 | 实际平台、当前账号与品质条件 |
 | 目标部署 | 按部署矩阵验证系统／架构／运行库、Windows 服务、Linux 系统服务、NAS 与 Docker／Compose；覆盖路径、证书、权限、持久卷、停止信号和依赖 |

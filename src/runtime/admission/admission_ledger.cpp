@@ -139,10 +139,6 @@ AdmissionLedger::try_acquire(const ports::AdmissionRequest& request) {
         return domain::Error::validation("admission", "connections exceed the " + std::string{*dimension} +
                                                           " limit and can never be granted");
     }
-    if (request.helper_processes > 0) {
-        return domain::Error{domain::ErrorCode::capability_unsupported,
-                             "external helper processes are not enabled", false, {}};
-    }
     const auto now = clock_->steady_now();
     if (request.deadline <= now) {
         return domain::Error{domain::ErrorCode::deadline_exceeded,

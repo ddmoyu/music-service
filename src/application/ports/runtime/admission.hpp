@@ -17,8 +17,8 @@ namespace music_service::application::ports {
 enum class TrafficClass { short_request, download, media, auth };
 
 // One concrete upstream operation asking for quota. S0 enforces the global,
-// principal, source and origin dimensions; rate_limit_group and helper_processes are
-// carried now and enforced once T24/T26 enable them.
+// principal, source and origin dimensions; rate_limit_group is carried now and
+// enforced once T24 enables it.
 struct AdmissionRequest {
     std::string principal_id;
     domain::SourceId source;
@@ -29,7 +29,6 @@ struct AdmissionRequest {
     std::string rate_limit_group;
     std::chrono::steady_clock::time_point deadline;
     std::uint32_t connections{1};
-    std::uint32_t helper_processes{0};
 };
 
 // Exclusive quota for one operation. Returned exactly once: by release() after the

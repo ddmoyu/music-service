@@ -23,7 +23,7 @@
 
 ## 平台与能力
 
-`ProviderDescriptor` 包含 source、name、enabled、implementation_id／version、execution_mode（native／external）、能力列表、auth_methods、品质提示、目录来源说明，以及内部使用的明文 HTTP 端点登记（不对外返回）。支持程度与当前健康分开：`supported` 表示代码能力，`availability` 表示最近已知状态；不能用一次探测失败永久撤掉能力。注册和扩展规则见[多平台适配](provider-extensibility.md)。
+`ProviderDescriptor` 包含 source、name、enabled、implementation_id／version、execution_mode（固定为 native）、能力列表、auth_methods、品质提示、目录来源说明，以及内部使用的明文 HTTP 端点登记（不对外返回）。支持程度与当前健康分开：`supported` 表示代码能力，`availability` 表示最近已知状态；不能用一次探测失败永久撤掉能力。注册和扩展规则见[多平台适配](provider-extensibility.md)。
 
 | 能力键 | 含义 |
 | --- | --- |
@@ -90,7 +90,7 @@ AccountBinding 表达稳定的账号选择，不含 token、Cookie、secret_ref 
 | 音频属性 | codec、bitrate_bps、sample_rate_hz、channels、bit_depth，均允许未知 |
 | `completeness` | full／preview／unknown；不能仅因为拿到 URL 就填 full |
 
-`ResolvedAsset` 内部保存带类型的传输计划（首版 HttpAsset；ExternalTransfer 仅在外部执行能力启用后可用）、必需请求条件、处理计划、实际来源、有效期和资源指纹。HttpAsset 包含 URL 与秘密请求头；处理计划通过 processor_id、版本和私有上下文绑定。公开 `AssetDescriptor` 只返回 asset_id、原曲／实际曲目、品质属性、access_state、completeness、expires_at、warnings 与匹配／资源证据摘要，不返回命令或私有处理参数。
+`ResolvedAsset` 内部保存带类型的传输计划（首版 HttpAsset；新增传输形态由服务自己实现）、必需请求条件、处理计划、实际来源、有效期和资源指纹。HttpAsset 包含 URL 与秘密请求头；处理计划通过 processor_id、版本和私有上下文绑定。公开 `AssetDescriptor` 只返回 asset_id、原曲／实际曲目、品质属性、access_state、completeness、expires_at、warnings 与匹配／资源证据摘要，不返回命令或私有处理参数。
 
 目录源与音频源可以不同，例如 original_track.source=spotify、actual_track.source=youtube；实现工具不作为 source。外部提取／传输不会改变实际音频来源或凭空提升品质。缺少可直接转发的 HttpAsset 时不提供在线代理或直链，可在下载完成后访问 file_id。
 

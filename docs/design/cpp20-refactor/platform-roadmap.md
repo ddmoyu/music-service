@@ -8,7 +8,7 @@
 
 范围不局限于现有 Go 与 Lanyue 研究中的远端来源，也不设固定平台数量上限。首个闭环平台确定为酷我，已研究平台的首批扩展为 5sing、Jamendo、千千；同时纳入 Spotify 和更多海外来源。新增候选按能力、依赖和验证难度插入计划，不必等全部旧平台完成。本地音乐扫描继续按后续功能管理。
 
-平台可按目录、搜索、链接解析、歌词或音源能力独立接入。原生适配与可选外部工具的接入边界见[多平台扩展设计](backend-service/provider-extensibility.md)；数量不限不等于单次请求无限并发。
+平台可按目录、搜索、链接解析、歌词或音源能力独立接入。所有平台都由本项目原生解析与下载，不使用外部下载工具或第三方解析服务，见[多平台扩展设计](backend-service/provider-extensibility.md)；数量不限不等于单次请求无限并发。
 
 ## 已研究平台的原生开发顺序
 
@@ -32,18 +32,18 @@
 
 Spotify 已纳入计划：先接搜索、单曲／专辑／歌单目录及链接解析，再与已验证音频来源组合。公开 Web API 面向元信息、歌单及播放控制，本计划不将其声明为原始整曲下载接口。[Spotify Web API](https://developer.spotify.com/documentation/web-api)
 
-GitHub 的 [spotDL](https://github.com/spotDL/spotify-downloader) 读取 Spotify 信息后匹配 YouTube 音频；本项目参考其匹配和字段映射，保留 original_track 与 actual_track，不把替代音源标成 Spotify 原音。目录接入放在 S2，用第二个原生平台验证注册机制后即可开始；音频匹配与自动换源按 S4 的显式策略交付。
+GitHub 的 [spotDL](https://github.com/spotDL/spotify-downloader) 读取 Spotify 信息后匹配 YouTube 音频；本项目只参考其匹配和字段映射，不使用它或 yt-dlp；保留 original_track 与 actual_track，不把替代音源标成 Spotify 原音。目录接入放在 S2，用第二个原生平台验证注册机制后即可开始；音频匹配与自动换源按 S4 的显式策略交付。
 
 | 后续优先候选 | 接入目标 | 进入实施前的检查 |
 | --- | --- | --- |
 | Spotify `spotify` | 原生目录 Provider；OAuth／应用凭证、分页、链接解析；同源 resolve_audio 不声明支持 | 当前应用权限、配额模式、地区、scope 与端点样本；目录能力难度预计中等 |
-| YouTube／YouTube Music `youtube` | 先用可选 yt-dlp adapter 提取独立音轨，作为 Spotify 匹配目标之一 | 稳定视频身份、实际音轨与品质、凭证、过期地址、工具运行时和取消；分段流另验证 |
-| SoundCloud `soundcloud` | 搜索／链接、曲目和集合、已验证的音源能力 | 官方接口或 extractor 的账号要求、分页与实际传输形态 |
+| YouTube／YouTube Music `youtube` | 原生解析独立音轨，作为 Spotify 匹配目标之一 | 播放器脚本的签名与 n 参数需自行实现并持续跟进变更，难度高；稳定视频身份、实际音轨与品质、凭证、过期地址；分段流另验证 |
+| SoundCloud `soundcloud` | 搜索／链接、曲目和集合、已验证的音源能力 | 官方接口的账号要求、分页与实际传输形态 |
 | Bandcamp `bandcamp` | 曲目／专辑链接、元信息和可用音频 | 整曲／试听、具体可下载资源与格式；不假定存在全站搜索能力 |
-| Audius `audius` | 曲目／歌单／作者及音源，选择原生 API 或外部 adapter | 接口鉴权、分页、节点／地址变化及目标环境传输 |
+| Audius `audius` | 曲目／歌单／作者及音源，使用原生 API | 接口鉴权、分页、节点／地址变化及目标环境传输 |
 | 其他来源 | 持续加入候选，每个平台按已实现能力开放 | 优先 API／协议明确、可复用公共传输且可提供稳定样本的来源，不设最终封闭清单 |
 
-[yt-dlp 的站点清单](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md) 可作为发现候选的入口，包含上述多个来源；该清单不保证当前可用，也不表示搜索、集合、歌词、整曲下载等能力都齐全。每个新来源需单独建立 descriptor、域名／extractor 范围、能力样本和验证状态，不通过一个通用下载入口宣称支持全部站点。
+每个新来源需单独建立原生 descriptor、能力样本和验证状态，不通过一个通用下载入口宣称支持全部站点。
 
 ## 与服务分期的关系
 
