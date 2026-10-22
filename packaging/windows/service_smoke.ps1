@@ -18,6 +18,10 @@ function Assert([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw "service smoke test failed: $Message" }
 }
 
+$principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw 'service smoke test needs an elevated PowerShell (Run as administrator); nothing was changed'
+}
 $root = (Resolve-Path $PackageDir).Path
 $name = 'music-service-smoke'
 $work = Join-Path $env:ProgramData ("music-service-服务测试-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -55,6 +59,11 @@ try {
     Assert ($again.data.service -eq 'music-service') 'info after restart'
     Write-Host 'service smoke test passed'
 } finally {
-    & (Join-Path $scripts 'uninstall-service.ps1') -Name $name -ConfigDir $configDir -RemoveData -ErrorAction Continue
+    # Cleanup must not hide why the test failed.
+    try {
+        & (Join-Path $scripts 'uninstall-service.ps1') -Name $name -ConfigDir $configDir -RemoveData
+    } catch {
+        Write-Warning "cleanup: $_"
+    }
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 }
