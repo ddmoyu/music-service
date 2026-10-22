@@ -4,6 +4,7 @@
 #include "infrastructure/auth/access_tokens.hpp"
 #include "infrastructure/config/config_loader.hpp"
 #include "infrastructure/filesystem/data_layout.hpp"
+#include "infrastructure/filesystem/files.hpp"
 #include "infrastructure/filesystem/paths.hpp"
 #include "infrastructure/observability/logger.hpp"
 #include "infrastructure/filesystem/instance_lock.hpp"
@@ -26,6 +27,7 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <optional>
 #include <set>
@@ -462,7 +464,30 @@ int cmd_healthcheck(const cfg::ServiceConfig& config, const Console& console) {
     return exit_ok;
 }
 
-int cmd_serve(const cfg::ServiceConfig& config, const Console& console, CommandHooks hooks) {
+int cmd_serve(const cfg::ServiceConfig& config, const Console& terminal, CommandHooks hooks) {
+    // Declared before the host so it outlives the logger that writes to it.
+    std::ofstream log_file;
+    if (hooks.log_to_file) {
+        const auto logs = infrastructure::filesystem::DataLayout::under(config.data_dir).logs;
+        if (auto created = infrastructure::filesystem::create_directories(logs, infrastructure::filesystem::Privacy::normal);
+            !created) {
+            print_error(terminal, created.error());
+            return exit_failed;
+        }
+        log_file.open(logs / "music-service.log", std::ios::app | std::ios::binary);
+        if (!log_file) {
+            terminal.err << "error: cannot open " << path_to_utf8(logs / "music-service.log") << '\n';
+            return exit_failed;
+        }
+        if (!hooks.host.log_sink) {
+            if (config.logging.format == "text") {
+                hooks.host.log_sink = std::make_shared<infrastructure::observability::TextSink>(log_file);
+            } else {
+                hooks.host.log_sink = std::make_shared<infrastructure::observability::JsonLineSink>(log_file);
+            }
+        }
+    }
+    const Console console = log_file.is_open() ? Console{log_file, log_file} : terminal;
     auto host = ProcessHost::start(config, std::move(hooks.host));
     if (!host) {
         print_error(console, host.error());

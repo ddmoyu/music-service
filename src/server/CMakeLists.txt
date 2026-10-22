@@ -27,8 +27,19 @@ target_link_libraries(music_service_server_core
 )
 
 add_executable(music_service_server main.cpp)
+if(WIN32)
+    # "service": serve under the Windows Service Control Manager.
+    target_sources(music_service_server PRIVATE windows_service.cpp)
+    target_link_libraries(music_service_server PRIVATE advapi32)
+endif()
 set_target_properties(music_service_server PROPERTIES OUTPUT_NAME music-service)
 target_link_libraries(music_service_server PRIVATE
     music_service::server_core
     music_service::project_warnings
 )
+option(MUSIC_SERVICE_STATIC_CXX_RUNTIME
+       "Link libstdc++ and libgcc statically into the Linux program (only glibc stays shared)" ON)
+if(MUSIC_SERVICE_STATIC_CXX_RUNTIME AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_link_options(music_service_server PRIVATE -static-libstdc++ -static-libgcc)
+endif()
+install(TARGETS music_service_server RUNTIME DESTINATION bin)

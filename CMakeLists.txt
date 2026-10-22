@@ -23,6 +23,7 @@ include(CTest)
 include(cmake/dependencies/Dependencies.cmake)
 
 add_subdirectory(src)
+include(cmake/Packaging.cmake)
 
 if(BUILD_TESTING)
     add_subdirectory(tests)

@@ -1,0 +1,12 @@
+{
+  "config_version": 1,
+  "data_dir": "/var/lib/music-service",
+  "control": {"host": "127.0.0.1", "port": 17632},
+  "media": {"enabled": true, "host": "127.0.0.1", "port": 17633},
+  "events": {"enabled": true, "host": "127.0.0.1", "port": 17634},
+  "features": {"file_access": true, "media_proxy": false, "direct_media_urls": false},
+  "logging": {"format": "json", "level": "info"},
+  "destinations": [
+    {"id": "dst_default", "name": "下载", "root": "/srv/music", "principals": ["prn_local"]}
+  ]
+}

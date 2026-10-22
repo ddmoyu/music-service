@@ -19,6 +19,9 @@ struct CommandHooks {
     std::function<bool()> should_stop;
     // serve: called once the service is ready.
     std::function<void(const StartupReport&)> on_ready;
+    // serve: logs, the ready line and startup errors go to <data_dir>/logs/music-service.log
+    // (appended) instead of the console, for a Windows service, which has none.
+    bool log_to_file{false};
     HostOptions host;
 };
 

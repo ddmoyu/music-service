@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-22。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T19 **已完成**，T20 **受阻**（仅容器内的在线下载闭环，见实施记录），T29 **已完成**，T30 **已完成**（侧文件拆为子任务 T30.s，未开始），T21 **已完成**，T22 **已完成**，T41 **已完成**（选用 5sing），T23 **已完成**，T28、T31、T32、T34 **待验收**（Windows 通过，CI 待 Actions 额度恢复后运行），S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-22。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T19 **已完成**，T20 **受阻**（仅容器内的在线下载闭环，见实施记录），T29 **已完成**，T30 **已完成**（侧文件拆为子任务 T30.s，未开始），T21 **已完成**，T22 **已完成**，T41 **已完成**（选用 5sing），T23 **已完成**，T28、T31、T32、T34 **待验收**（Windows 通过，CI 待 Actions 额度恢复后运行），T37 **待验收**（Windows 发行包本机通过；Windows 服务、Linux 包与 systemd 待管理员运行或 CI），S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,7 +262,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-T20（S1 酷我端到端关口）除容器内的在线下载闭环外均已通过：须在能访问酷我音源接口的网络上运行 `packaging/docker/e2e.sh` 后转为已完成，S1 随之通过。T29 的实现只依赖 T17 的执行代码，已先行交付；T30（标签库 TagLib v2.3.2，按 MPL-1.1 静态链接）已交付标签与 FLAC／M4A 验证，侧文件留作子任务 T30.s。T21 交付公共集合用例与路由；T22（5sing）作为第二个原生平台接入，T41 以酷我与 5sing 验证扩展关口；T23 为两平台接入歌单、专辑、榜单、分类与推荐；T28 以两平台与 100 个模拟来源验证 S2 基础扩展关口；T31 补齐清理、复用证据与数据库备份恢复；T32 以故障组合与资源计量验证 S3 关口；T34 交付在线代理、受控直链与流桥接。T33、T24 依赖受阻的 T20，暂不能开始。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+T20（S1 酷我端到端关口）除容器内的在线下载闭环外均已通过：须在能访问酷我音源接口的网络上运行 `packaging/docker/e2e.sh` 后转为已完成，S1 随之通过。T29 的实现只依赖 T17 的执行代码，已先行交付；T30（标签库 TagLib v2.3.2，按 MPL-1.1 静态链接）已交付标签与 FLAC／M4A 验证，侧文件留作子任务 T30.s。T21 交付公共集合用例与路由；T22（5sing）作为第二个原生平台接入，T41 以酷我与 5sing 验证扩展关口；T23 为两平台接入歌单、专辑、榜单、分类与推荐；T28 以两平台与 100 个模拟来源验证 S2 基础扩展关口；T31 补齐清理、复用证据与数据库备份恢复；T32 以故障组合与资源计量验证 S3 关口；T34 交付在线代理、受控直链与流桥接；T37 交付发行包、Windows 服务与 systemd 集成。T33、T24 依赖受阻的 T20，暂不能开始。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
@@ -447,6 +447,18 @@ T20（S1 酷我端到端关口）除容器内的在线下载闭环外均已通�
 | Windows 证据（2026-10-21） | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 205/205 通过（3 项在线用例按设计跳过）；GCC 16.2 在 -O2 严格警告下检查改动的源码与测试 0 条警告 |
 | Linux 证据（CI 运行 39525823045、39526810353） | ubuntu-24.04，GCC 13.3.0：205/205 通过，Windows 与容器任务同时通过。首次运行在测试替身 mock_providers.hpp 中有 4 条 -Wmissing-field-initializers（ResolvedAudio 新字段未初始化），由 23c2271 修复后复跑 0 条项目警告 |
 | 已知限制 | 只验证 MP3（酷我标准品质的实际容器）；FLAC／M4A／Ogg／WAV／ADTS 的结构验证、标签写入与解密归 T30 及具体平台；不做完整解码证明；整曲判定依赖平台声明时长；处理器由 T17 的 Runner 在 processing 阶段调用，结果写入任务记录后才参与已完成结果复用的证据复核 |
+
+### T37 原生包与系统服务：待验收（2026-10-22，Windows 发行包本机通过；服务与 Linux 待验证）
+
+| 项目 | 记录 |
+| --- | --- |
+| 前置 | T32 待验收（Windows 通过） |
+| 交付 | ① 发行 preset 与包：`windows-msvc-release`／`linux-gcc-release` 加 `--target package`，CPack 生成 `music-service-<版本>-<系统>-<架构>.zip`（Windows）／`.tar.gz`（Linux），布局为 `bin/music-service[.exe]`、`share/music-service/{README.md, config.example.json, licenses/, service/}`（`cmake/Packaging.cmake`）；数据不在安装目录。② 运行库：所有 MSVC 目标（含第三方）改为静态运行库（`CMAKE_MSVC_RUNTIME_LIBRARY`），无需 VC++ 运行库；Linux GCC 程序静态链接 libstdc++／libgcc（`MUSIC_SERVICE_STATIC_CXX_RUNTIME`，缺省开），只依赖 glibc。③ 许可：随包附 Mbed TLS、cpp-httplib、nlohmann/json、TagLib（MPL-1.1）、utfcpp 的许可文本与 THIRD-PARTY.md（SQLite 为公有领域，Catch2 不随包）。④ Windows 服务：新命令 `service` 在 SCM 下运行 serve（`src/server/windows_service.cpp`）：上报 START_PENDING → 就绪后 RUNNING，STOP／SHUTDOWN 走与 Ctrl+C 相同的收尾，STOP_PENDING 等待提示 60 s，退出码作为服务专用退出码；服务没有控制台，日志、就绪行与启动后错误写 `data_dir/logs/music-service.log`（serve 新增 log_to_file），配置错误等更早的错误写应用程序事件日志；在 SCM 之外运行给出提示并以 2 退出。`install-service.ps1`／`uninstall-service.ps1`：配置在 `%ProgramData%\music-service`，以管理员 init 后把数据目录属主交给虚拟账户 `NT SERVICE\music-service`（secrets 的 OWNER RIGHTS 规则因此只授予服务账户），授予配置只读与下载目录修改权限，自动启动、失败重启，引导 token 移到仅管理员可读的位置；卸载默认保留数据。⑤ Linux：加固的 systemd unit（User=music-service、StateDirectory、ConfigurationDirectory、ProtectSystem=strict、NoNewPrivileges、SIGTERM＋TimeoutStopSec=60、Restart=on-failure、退出码 2 不重启）与 `install.sh`（建系统用户、复制到 /opt/music-service、写配置、以服务用户 init、下载目录 ReadWritePaths drop-in、启动并等待就绪；不改下载目录属主，无写权限时给出 setfacl 提示）。⑥ 验证脚本：`package_smoke.ps1`、`service_smoke.ps1`、`package_smoke.sh [--service]`，并加入 CI（Windows 与 Linux 作业各增加发行包与服务步骤） |
+| 本机证据（Windows 11 x64，MSVC，2026-10-22） | `music-service-0.1.0-windows-x86_64.zip`：程序 5,572,096 字节，包内无 DLL；dumpbin 导入只有 advapi32、bcrypt、ws2_32、crypt32、kernel32 与 api-ms-win-core-synch，无 C/C++ 运行库；解压到 237 字符的中文深路径后 `package_smoke.ps1` 通过（version、check-config、init、serve 就绪、healthcheck、token、强制结束与重启；`service` 在 SCM 之外以 2 退出并提示）。Debug 改为静态运行库后 `ctest --preset windows-msvc-debug` 316 项全部通过 |
+| 未验证 | Windows 服务实际安装运行（本机会话无管理员权限；`service_smoke.ps1` 需管理员 PowerShell 或 CI）；Linux 发行包、静态 C++ 运行库与 systemd 服务（本机无 Linux／WSL，待 CI 的 `package_smoke.sh --service`）；在全新、未装开发工具的机器上运行（本机装有 VS，导入检查替代但不等同）；ARM64 未构建，不标支持 |
+| 最低系统 | Windows：x64，Windows 10 1809／Server 2019 起（与构建所用 SDK 目标一致，尚无更低版本实测）；Linux：glibc 不低于构建机（ubuntu-24.04 为 2.39，package_smoke.sh 输出实际所需版本），需发行版 CA 证书 |
+| 附带修正 | T41 关口用例比较两源完整状态序列，SSE 合并快速更新时首个 queued 可能被合并，偶发失败（完整测试中出现 1 次）；改为检查每个任务的状态按状态机顺序出现且以 completed 结束 |
+| 已知限制 | 只有 zip／tar.gz，没有 MSI、deb、rpm 与代码签名；服务停止只上报一次等待提示，不逐步推进检查点；Linux 包的 glibc 下限取决于构建机，未用旧发行版构建；macOS 无发行包与 launchd 集成 |
 
 ### T34 在线代理、受控直链与流桥接：待验收（2026-10-22，Windows 通过，CI 待运行）
 

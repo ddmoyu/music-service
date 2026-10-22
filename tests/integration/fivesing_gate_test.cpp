@@ -337,9 +337,24 @@ TEST_CASE("T41: two real platforms, two principals, one download path", "[gate][
     CHECK(seen_b.begin()->first == b_five);
     REQUIRE(seen_a.count(a_kuwo) == 1);
     REQUIRE(seen_a.count(a_five) == 1);
-    CHECK(seen_a.at(a_kuwo).back() == "completed");
-    CHECK(seen_a.at(a_kuwo) == seen_a.at(a_five));
-    CHECK(seen_b.at(b_five) == seen_a.at(a_five));
+    // The stream may merge quick updates (a task claimed at once can skip "queued"), so
+    // each task's statuses must follow the one state machine in order and end completed.
+    const std::vector<std::string> machine{"queued", "resolving", "downloading", "processing", "finalizing", "completed"};
+    const auto follows_machine = [&](const std::vector<std::string>& statuses) {
+        auto next = machine.begin();
+        for (const auto& status : statuses) {
+            next = std::find(next, machine.end(), status);
+            if (next == machine.end()) {
+                return false;
+            }
+            ++next;
+        }
+        return !statuses.empty() && statuses.back() == "completed";
+    };
+    for (const auto* statuses : {&seen_a.at(a_kuwo), &seen_a.at(a_five), &seen_b.at(b_five)}) {
+        INFO(json(*statuses).dump());
+        CHECK(follows_machine(*statuses));
+    }
 
     const auto kuwo_task = wait_status(a, a_kuwo, "completed");
     const auto five_task = wait_status(a, a_five, "completed");

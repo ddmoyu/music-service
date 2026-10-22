@@ -1,5 +1,9 @@
 include_guard(GLOBAL)
 
+# The static MSVC runtime for every target, third-party ones included: the program needs
+# no Visual C++ Redistributable on the machine it runs on.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 # Shared language requirements for every project target.
 add_library(music_service_project_options INTERFACE)
 add_library(music_service::project_options ALIAS music_service_project_options)

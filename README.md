@@ -67,6 +67,7 @@ ctest --preset macos-clang-debug
 bash packaging/linux/smoke.sh out/build/macos-clang-debug/src/server/music-service
 ```
 
+- 发行包：`cmake --build --preset windows-msvc-release --target package`（Linux 用 linux-gcc-release）生成 zip／tar.gz，含程序、配置示例、许可文件与 Windows 服务／systemd 安装脚本，说明见 [packaging](packaging/README.md)。MSVC 目标使用静态运行库。
 - Debug 预设默认开启测试；Release 预设（windows-msvc-release、linux-gcc-release、macos-clang-release）不构建测试。构建目录为 `out/build/<预设名>`，按系统、编译器与配置隔离。Linux／macOS 使用当前主机架构；macOS CI 首先覆盖 `macos-15` 的 Apple Silicon，Intel 和其他发布组合须单独验证。
 - macOS 预设使用 Homebrew LLVM 的编译器、C++ 头文件和运行库，并记录运行库搜索路径。当前用于构建与 CI 验证，不能将依赖本机 Homebrew 路径的产物直接当作独立发行包。
 - 开发机差异放在已忽略的 CMakeUserPresets.json，不提交绝对工具链路径。

@@ -31,6 +31,22 @@ jobs:
       - name: Runtime smoke test
         shell: pwsh
         run: packaging/windows/smoke.ps1 -Binary out/build/windows-msvc-debug/src/server/music-service.exe
+      - name: Release package
+        shell: cmd
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSPATH=%%i"
+          call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          cmake --preset windows-msvc-release || exit /b 1
+          cmake --build --preset windows-msvc-release --target package || exit /b 1
+      - name: Package smoke test
+        shell: pwsh
+        run: packaging/windows/package_smoke.ps1 -Package (Get-Item out/build/windows-msvc-release/music-service-*.zip).FullName
+      - name: Windows service smoke test
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'package'
+          Expand-Archive (Get-Item out/build/windows-msvc-release/music-service-*.zip).FullName $dir
+          packaging/windows/service_smoke.ps1 -PackageDir (Get-ChildItem $dir -Directory | Select-Object -First 1).FullName
       # Live Kuwo from an overseas runner may be refused by region; the offline gate
       # ([gate] in ctest) is the required check, this step records what the network allows.
       - name: Kuwo online loop
@@ -62,6 +78,11 @@ jobs:
         run: out/build/linux-gcc-debug/tests/music_service_integration_tests "[online]"
       - name: Runtime smoke test
         run: packaging/linux/smoke.sh out/build/linux-gcc-debug/src/server/music-service
+      - name: Release package and systemd service
+        run: |
+          cmake --preset linux-gcc-release
+          cmake --build --preset linux-gcc-release --target package
+          sudo bash packaging/linux/package_smoke.sh out/build/linux-gcc-release/music-service-*.tar.gz --service
       - name: Kuwo online loop
         continue-on-error: true
         run: python3 -I packaging/e2e/kuwo_e2e.py --binary out/build/linux-gcc-debug/src/server/music-service

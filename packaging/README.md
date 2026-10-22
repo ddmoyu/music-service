@@ -4,8 +4,9 @@ Windows、Linux、macOS 和 Docker 共用同一程序 `music-service` 与同一 
 
 | 目录 | 内容 | 验证内容 |
 | --- | --- | --- |
-| `windows/` | `smoke.ps1` | version、check-config、init、serve 就绪、healthcheck、带 token 的 info、无 token 401、运行中管理命令被拒；强制结束后实例锁释放，重启后 token 仍有效 |
-| `linux/` | `smoke.sh` | 同上，另以 SIGTERM 停止：退出码 0，停机顺序为监听 → 数据库 → 实例锁，之后管理命令可执行；输出 glibc 与动态库依赖 |
+| `windows/` | `smoke.ps1`；`install-service.ps1`、`uninstall-service.ps1`（随发行包）；`package_smoke.ps1`、`service_smoke.ps1` | smoke：version、check-config、init、serve 就绪、healthcheck、带 token 的 info、无 token 401、运行中管理命令被拒；强制结束后实例锁释放，重启后 token 仍有效。package_smoke：发行 zip 解压到中文深路径、布局与许可文件齐全、无附带 DLL、只导入系统 DLL（dumpbin 可用时）、SCM 之外运行 service 给出提示并以 2 退出、对解压出的程序跑 smoke。service_smoke（需管理员）：以虚拟账户安装为服务、token 可用、secrets 属服务账户、Stop-Service 退出码 0 且日志有停机记录、停止后实例锁已释放、重启后 token 仍有效，最后卸载 |
+| `linux/` | `smoke.sh`；`music-service.service`、`install.sh`（随发行包）；`package_smoke.sh` | smoke：同上，另以 SIGTERM 停止：退出码 0，停机顺序为监听 → 数据库 → 实例锁，之后管理命令可执行；输出 glibc 与动态库依赖。package_smoke：发行 tar.gz 解压到中文深路径、布局齐全、不动态链接 libstdc++／libgcc、输出所需 glibc 版本、跑 smoke；`--service`（root＋systemd）以 install.sh 安装、检查运行用户与 secrets 属主、token 请求、SIGTERM 停止退出状态 0 且 journal 有停机记录、重启，最后清理 |
+| `package/` | 发行包的 README、配置示例与第三方许可说明 | 由 `cmake --build --preset <release 预设> --target package` 打入 `share/music-service/`（布局见 `cmake/Packaging.cmake`） |
 | macOS（复用 `linux/`） | `smoke.sh` 的 Darwin 分支 | 同一套启动、认证、SIGTERM 与锁释放检查；用 `sw_vers`、`otool -L` 输出系统与依赖。CI 使用 macos-15 Apple Silicon、Homebrew LLVM 20／libc++；首轮 CI 成功前不声明已验证支持，尚无独立 macOS 发行包 |
 | `docker/` | `Dockerfile`、`config.json`、`smoke.sh`、`e2e.sh` | 多阶段构建；运行镜像只含程序、Ubuntu 24.04 基础库与 CA 证书，非 root（uid 10001）；数据卷上 init、健康检查、发布端口访问、`docker stop` 正常收尾，删除容器后用同一卷重建仍可用；`e2e.sh IMAGE [--source fivesing]` 发布三个端口后运行在线闭环（默认酷我），以 `docker restart` 作为重启步骤 |
 | `e2e/` | `kuwo_e2e.py` | 在线酷我闭环（仅标准库）：搜索 → 详情 → 解析 → 持久任务（创建连接关闭）→ SSE／HTTP → 文件元数据 → 票据 Range 与完整读取并与发布文件比对 → 客户端保存中途失败而任务仍 completed → 取消与传输竞争（canceled 或 completed 其一）→ 重启后新实例仍提供任务与文件、幂等重放与完成结果复用。`--binary` 自行 init／serve／重启，`--api`＋`--token`＋`--restart-command` 驱动已运行的服务；`--source fivesing` 对 5sing 运行同一闭环。需要能访问对应平台的网络；CI 中这些步骤允许失败，海外运行器可能受地区限制 |

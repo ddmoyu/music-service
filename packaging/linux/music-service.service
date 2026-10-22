@@ -1,0 +1,45 @@
+# systemd unit for music-service installed by share/music-service/service/install.sh.
+# The program runs in the foreground; systemd supervises, restarts and stops it. Downloads
+# go to the directories named in /etc/music-service/config.json, which must be writable by
+# the music-service user and listed in ReadWritePaths (install.sh adds a drop-in for that).
+[Unit]
+Description=music-service: music search, download and media backend
+Documentation=file:///opt/music-service/share/music-service/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=music-service
+Group=music-service
+ExecStart=/opt/music-service/bin/music-service --config /etc/music-service/config.json serve
+# SIGTERM runs the normal shutdown: listeners, then running downloads save a checkpoint
+# within shutdown.soft_seconds (15 s by default), then the database and the lock.
+KillSignal=SIGTERM
+TimeoutStopSec=60
+Restart=on-failure
+RestartSec=5
+# Exit code 2 is a configuration or usage error: restarting does not help.
+RestartPreventExitStatus=2
+StateDirectory=music-service
+StateDirectoryMode=0750
+ConfigurationDirectory=music-service
+UMask=0027
+LimitNOFILE=8192
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

@@ -10,6 +10,7 @@ music-service [--config FILE] [--data-dir DIR] [COMMAND]
   principal create --name NAME | principal list | principal enable|disable --id ID
   token issue --principal ID --scopes A,B --output FILE | token list --principal ID | token revoke --id ID
   backup --output FILE | restore --input FILE
+  service                                  Windows：由服务管理器启动的 serve
 ```
 
 - 退出码：0 成功，1 操作失败（含 INSTANCE_LOCKED），2 参数或配置错误。
@@ -20,6 +21,7 @@ music-service [--config FILE] [--data-dir DIR] [COMMAND]
 - token 明文只写入新建的仅所有者可读文件（init 写 `secrets/bootstrap-token.txt`，issue 写 `--output`），目标已存在即失败；控制台只输出 token_id、scope 和文件位置。
 - `serve` 就绪后在 stdout 输出一行 JSON（`event`=`ready`、`instance_id`、`api_base_url`、媒体／事件地址；未启用时为 null），供桌面启动器读取实际端口；日志写 stderr。
 - `check-config` 校验配置、构建能力与目标根；已有数据库时以只读连接比对目录绑定，不改动持久状态。
+- `service`（仅 Windows）把 serve 交给服务控制管理器：就绪后上报 RUNNING，停止／关机控制走与 Ctrl+C 相同的收尾；日志与就绪行写 `data_dir/logs/music-service.log`，更早的错误写应用程序事件日志；直接在控制台运行时提示改用 serve 并以 2 退出。安装脚本见 `packaging/windows/install-service.ps1`。
 - `healthcheck` 请求本机控制入口的 `/health/ready`，按配置端口连接；端口为 0 的动态模式下请改用启动行里的地址。
 
 ## 启动与停止（ProcessHost）
