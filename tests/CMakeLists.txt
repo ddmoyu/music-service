@@ -89,6 +89,7 @@ catch_discover_tests(music_service_fault_tests DISCOVERY_MODE PRE_TEST)
 # and HTTP(S) servers on 127.0.0.1 with the test certificates. No outside network.
 add_executable(music_service_integration_tests
     integration/accounts_test.cpp
+    integration/backup_test.cpp
     integration/catalog_test.cpp
     integration/collections_test.cpp
     integration/downloads_test.cpp

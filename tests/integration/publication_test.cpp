@@ -531,3 +531,39 @@ TEST_CASE("a restarted service completes an interrupted publication", "[publicat
     }
     CHECK(logged);
 }
+
+TEST_CASE("a starting service removes work directories of unknown tasks only", "[publication][server][maintenance]") {
+    using namespace music_service::test;
+    Deployment d{"startup-maintenance"};
+    REQUIRE(d.run({"init"}).code == server::exit_ok);
+    const auto token = d.read(d.bootstrap());
+    std::string task_id;
+    {
+        RunningService service{d, std::make_shared<infrastructure::observability::MemorySink>(),
+                               std::vector<ports::ProviderBundle>{mock_combo("both")}, true};
+        auto api = service.client(token);
+        const auto created = api.Post("/api/v1/downloads", {{"Idempotency-Key", "startup-maintenance-1"}},
+                                      R"({"track":{"source":"both","id":"1"}})", "application/json");
+        REQUIRE(created);
+        REQUIRE(created->status == 202);
+        task_id = body(created)["data"]["task_id"].get<std::string>();
+    }
+    const auto work = d.dir / "下载" / ".music-service-work";
+    const std::string orphan = "tsk_LeftByAnOlderDatabase";
+    for (const auto& id : {task_id, orphan}) {
+        fs::create_directories(work / id);
+        std::ofstream{work / id / "audio.part", std::ios::binary} << "bytes";
+    }
+
+    const auto sink = std::make_shared<infrastructure::observability::MemorySink>();
+    RunningService service{d, sink, std::vector<ports::ProviderBundle>{mock_combo("both")}, true};
+    CHECK(fs::exists(work / task_id / "audio.part")); // the queued task still owns it
+    CHECK_FALSE(fs::exists(work / orphan));
+    bool logged = false;
+    for (const auto& record : sink->records()) {
+        if (record.event == "maintenance.workspace_removed") {
+            logged = true;
+        }
+    }
+    CHECK(logged);
+}

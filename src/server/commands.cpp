@@ -6,7 +6,9 @@
 #include "infrastructure/filesystem/data_layout.hpp"
 #include "infrastructure/filesystem/paths.hpp"
 #include "infrastructure/observability/logger.hpp"
+#include "infrastructure/filesystem/instance_lock.hpp"
 #include "infrastructure/storage/sqlite/account_repositories.hpp"
+#include "infrastructure/storage/sqlite/backup.hpp"
 #include "infrastructure/storage/sqlite/connection.hpp"
 #include "providers/registry/builtin_bundles.hpp"
 #include "server/instance.hpp"
@@ -22,6 +24,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <map>
 #include <optional>
@@ -88,7 +91,9 @@ void usage(std::ostream& out) {
            "  principal create --name NAME | principal list\n"
            "  principal enable --id ID | principal disable --id ID\n"
            "  token issue --principal ID --scopes A,B --output FILE\n"
-           "  token list --principal ID | token revoke --id ID\n";
+           "  token list --principal ID | token revoke --id ID\n"
+           "  backup --output FILE                   consistent database copy, also while serving\n"
+           "  restore --input FILE                   replace the database (service stopped)\n";
 }
 
 std::set<std::string, std::less<>> provider_sources(const HostOptions& host) {
@@ -192,6 +197,65 @@ int cmd_init(const cfg::ServiceConfig& config, const Console& console) {
     console.out << "initialized " << path_to_utf8((*instance)->layout.root) << '\n';
     print_issued(console, issued.value());
     console.out << "move the token to the client, then delete the file\n";
+    return exit_ok;
+}
+
+// Online: a consistent copy while the service may be running, so no instance lock.
+int cmd_backup(const Arguments& args, const cfg::ServiceConfig& config, const Console& console) {
+    if (!only_options(args, {"output"}, console)) {
+        return exit_usage;
+    }
+    const auto output = required(args, "output", console);
+    if (!output) {
+        return exit_usage;
+    }
+    const auto layout = infrastructure::filesystem::DataLayout::under(config.data_dir);
+    const auto target = fs::absolute(path_from_utf8(*output));
+    auto saved = infrastructure::storage::sqlite::backup_database(layout.database, target);
+    if (!saved) {
+        print_error(console, saved.error());
+        return exit_failed;
+    }
+    console.out << "backup " << path_to_utf8(target) << " schema_version=" << saved->schema_version
+                << " bytes=" << saved->size_bytes << '\n';
+    console.out << "secrets/ is not part of the backup; keep a copy of it with the database\n";
+    return exit_ok;
+}
+
+// Offline: holds the instance lock, so the service must be stopped.
+int cmd_restore(const Arguments& args, const cfg::ServiceConfig& config, const Console& console) {
+    if (!only_options(args, {"input"}, console)) {
+        return exit_usage;
+    }
+    const auto input = required(args, "input", console);
+    if (!input) {
+        return exit_usage;
+    }
+    auto layout = infrastructure::filesystem::prepare_data_dir(config.data_dir);
+    if (!layout) {
+        print_error(console, layout.error());
+        return exit_failed;
+    }
+    auto lock = infrastructure::filesystem::InstanceLock::acquire(layout->lock_file);
+    if (!lock) {
+        print_error(console, lock.error());
+        return exit_failed;
+    }
+    std::error_code ec;
+    const bool had_database = fs::exists(layout->database, ec);
+    const auto replaced = new_backup_path(layout->backups, "replaced", std::chrono::system_clock::now());
+    const auto source = fs::absolute(path_from_utf8(*input));
+    auto restored = infrastructure::storage::sqlite::restore_database(source, layout->database, replaced);
+    if (!restored) {
+        print_error(console, restored.error());
+        return exit_failed;
+    }
+    console.out << "restored " << path_to_utf8(layout->database) << " from " << path_to_utf8(source)
+                << " schema_version=" << restored->schema_version << '\n';
+    if (had_database) {
+        console.out << "the replaced database is kept at " << path_to_utf8(replaced) << '\n';
+    }
+    console.out << "secrets/ was not changed; restore it from the same backup if credentials are missing\n";
     return exit_ok;
 }
 
@@ -435,14 +499,16 @@ int run_command(const std::vector<std::string>& args, Console console, CommandHo
         return exit_ok;
     }
     const bool known = command == "serve" || command == "check-config" || command == "init" ||
-                       command == "healthcheck" || command == "principal" || command == "token";
+                       command == "healthcheck" || command == "principal" || command == "token" ||
+                       command == "backup" || command == "restore";
     if (!known) {
         console.err << "error: unknown command " << command << '\n';
         usage(console.err);
         return exit_usage;
     }
     if (command != "principal" && command != "token") {
-        if (parsed->words.size() > 1 || !parsed->options.empty()) {
+        const bool takes_options = command == "backup" || command == "restore";
+        if (parsed->words.size() > 1 || (!takes_options && !parsed->options.empty())) {
             usage(console.err);
             return exit_usage;
         }
@@ -466,6 +532,12 @@ int run_command(const std::vector<std::string>& args, Console console, CommandHo
     }
     if (command == "token") {
         return cmd_token(*parsed, config.value(), console);
+    }
+    if (command == "backup") {
+        return cmd_backup(*parsed, config.value(), console);
+    }
+    if (command == "restore") {
+        return cmd_restore(*parsed, config.value(), console);
     }
     return cmd_serve(config.value(), console, std::move(hooks));
 }

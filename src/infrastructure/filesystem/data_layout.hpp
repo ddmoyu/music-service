@@ -17,6 +17,7 @@ struct DataLayout {
     std::filesystem::path bootstrap_token; // secrets/bootstrap-token.txt
     std::filesystem::path cache;           // cache/            disposable
     std::filesystem::path logs;            // logs/
+    std::filesystem::path backups;         // backups/          owner only: database copies
 
     static DataLayout under(const std::filesystem::path& data_dir);
 };

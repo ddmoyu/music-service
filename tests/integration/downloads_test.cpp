@@ -1,12 +1,15 @@
 // Download intents, commands, queries and batches on real SQLite: idempotency,
 // duplicate handling, completed-result reuse with re-checks, retry, cancel, paging and
-// all-or-nothing batches (A01-A03, A35-A37, A46).
+// all-or-nothing batches (A01-A03, A35-A37, A46), and the cleanup of work directories
+// and expired idempotency records.
 
 #include "../unit/providers/mock_providers.hpp"
 
 #include "application/accounts/credential_service.hpp"
 #include "application/tasks/download_service.hpp"
+#include "downloads/maintenance.hpp"
 #include "infrastructure/clock.hpp"
+#include "infrastructure/filesystem/destination_files.hpp"
 #include "infrastructure/filesystem/paths.hpp"
 #include "infrastructure/observability/correlation.hpp"
 #include "infrastructure/secrets/file_secret_store.hpp"
@@ -20,6 +23,8 @@
 #include <algorithm>
 #include <atomic>
 #include <filesystem>
+#include <fstream>
+#include <map>
 #include <mutex>
 #include <set>
 #include <thread>
@@ -68,9 +73,10 @@ struct Downloads {
         service = std::make_shared<DownloadService>(
             tasks, registry, credentials, rules,
             [](const DestinationRule& rule) { return rule.id != "dst_offline"; },
-            [this](const std::string& destination, const std::string& path) {
+            [this](const std::string& destination, const std::string& path, std::uint64_t size) {
                 const std::lock_guard lock{files_mutex};
-                return files.count(destination + "|" + path) != 0;
+                const auto found = files.find(destination + "|" + path);
+                return found != files.end() && found->second == size;
             },
             3);
     }
@@ -116,7 +122,7 @@ struct Downloads {
         auto done = unwrap(publications->complete(task.task_id, *task.execution_id, finalizing.version,
                                                   {owner, "dst_main", path, 100, "mp3", "etag", "{}"}, "{}"));
         const std::lock_guard lock{files_mutex};
-        files.insert("dst_main|" + path);
+        files["dst_main|" + path] = 100;
         return done.asset;
     }
 
@@ -135,7 +141,7 @@ struct Downloads {
     std::string owner;
     std::string other;
     std::mutex files_mutex;
-    std::set<std::string> files;
+    std::map<std::string, std::uint64_t> files; // "destination|path" -> size on disk
 };
 
 std::size_t total_tasks(Downloads& d, const std::string& owner) {
@@ -289,12 +295,22 @@ TEST_CASE("completed results are reused only while they still hold", "[downloads
     CHECK_FALSE(forced_task.reused);
     REQUIRE(d.service->cancel(d.owner, forced_task.view.task.task_id));
 
+    // A46: the file was rewritten to another size: not the published file, a new task.
+    {
+        const std::lock_guard lock{d.files_mutex};
+        d.files["dst_main|歌手/Song.mp3"] = 99;
+    }
+    const auto rewritten = d.create(d.request(), 4);
+    CHECK_FALSE(rewritten.reused);
+    CHECK(rewritten.view.task.task_id != first.view.task.task_id);
+    REQUIRE(d.service->cancel(d.owner, rewritten.view.task.task_id));
+
     // A46: the file is gone: no reused=true, a new task instead.
     {
         const std::lock_guard lock{d.files_mutex};
         d.files.clear();
     }
-    const auto replaced = d.create(d.request(), 4);
+    const auto replaced = d.create(d.request(), 40);
     CHECK_FALSE(replaced.reused);
     CHECK(replaced.view.task.task_id != first.view.task.task_id);
     REQUIRE(d.service->cancel(d.owner, replaced.view.task.task_id));
@@ -541,4 +557,103 @@ TEST_CASE("a batch over the quota stores nothing", "[downloads]") {
     CHECK(refused.error().code == ErrorCode::queue_limit_exceeded);
     CHECK(refused.error().details.front().field == "items[2]");
     CHECK(total_tasks(d, d.owner) == 0);
+}
+
+TEST_CASE("maintenance removes work directories by their task's state, never an active one", "[downloads][maintenance]") {
+    Downloads d{"maintenance"};
+    const auto root = d.dir / "main";
+    fs::create_directories(root);
+    auto files = std::make_shared<infrastructure::filesystem::LocalDestinationFiles>(
+        std::map<std::string, fs::path>{{"dst_main", root}, {"dst_offline", d.dir / "offline"}});
+    const auto workspace = [&](const std::string& task_id) {
+        const auto path = root / ".music-service-work" / task_id;
+        fs::create_directories(path);
+        std::ofstream{path / "audio.part", std::ios::binary} << "partial bytes";
+        return path;
+    };
+
+    // One task in every situation, each with a work directory. Tasks are driven in
+    // creation order, so the one that stays queued comes last.
+    const auto completed_task = d.create(d.request("both", "2"), 2).view.task.task_id;
+    (void)d.complete("Song.mp3");
+    const auto finalizing_task = d.create(d.request("both", "3"), 3).view.task.task_id;
+    {
+        const auto task = d.running();
+        REQUIRE(task.task_id == finalizing_task);
+        REQUIRE(d.publications->begin(
+            {task.task_id, *task.execution_id, "dst_main", ".work/" + task.task_id, "Other.mp3", "{}", "reserved"},
+            task.version));
+    }
+    const auto failed_task = d.create(d.request("both", "4"), 4).view.task.task_id;
+    {
+        const auto task = d.running();
+        REQUIRE(task.task_id == failed_task);
+        ports::TransitionCommand failed{task.task_id, *task.execution_id, task.version, TaskStatus::failed,
+                                        std::nullopt, std::nullopt, std::nullopt};
+        failed.error_json = R"({"code":"UPSTREAM_FAILED"})";
+        REQUIRE(d.tasks->transition(failed));
+    }
+    const auto canceled_task = d.create(d.request("both", "5"), 5).view.task.task_id;
+    REQUIRE(d.service->cancel(d.owner, canceled_task));
+    const auto queued = d.create(d.request("both", "1"), 1).view.task.task_id;
+    const auto orphan = d.ids->next("tsk_"); // no such task, e.g. after restoring an older database
+    for (const auto& id : {queued, completed_task, finalizing_task, failed_task, canceled_task, orphan}) {
+        workspace(id);
+    }
+    fs::create_directories(root / ".music-service-work" / "notes"); // not a task directory
+    std::ofstream{root / "Song.mp3", std::ios::binary} << "published";
+    REQUIRE(unwrap(files->list_workspaces("dst_main")).size() == 6);
+
+    downloads::Maintenance maintenance{std::make_shared<sqlite::SqliteMaintenanceStore>(
+                                           sqlite::RepositoryContext{d.database.get(), d.clock, d.ids}),
+                                       files, {"dst_main", "dst_offline"}};
+    const auto verdicts = [](const downloads::MaintenanceReport& report) {
+        std::map<std::string, downloads::WorkspaceVerdict> out;
+        for (const auto& w : report.workspaces) {
+            out[w.task_id] = w.verdict;
+        }
+        return out;
+    };
+    const auto exists = [&](const std::string& id) { return fs::exists(root / ".music-service-work" / id); };
+
+    // An hour later: finished and unknown tasks lose their directories, the failed one is
+    // kept for diagnosis, active ones keep theirs.
+    const auto first = unwrap(maintenance.run(d.clock->now() + 1h));
+    auto seen = verdicts(first);
+    CHECK(seen.at(queued) == downloads::WorkspaceVerdict::kept_active);
+    CHECK(seen.at(finalizing_task) == downloads::WorkspaceVerdict::kept_active);
+    CHECK(seen.at(failed_task) == downloads::WorkspaceVerdict::kept_retained);
+    CHECK(seen.at(completed_task) == downloads::WorkspaceVerdict::removed_finished);
+    CHECK(seen.at(canceled_task) == downloads::WorkspaceVerdict::removed_finished);
+    CHECK(seen.at(orphan) == downloads::WorkspaceVerdict::removed_orphan);
+    CHECK(first.unavailable_destinations == std::vector<std::string>{"dst_offline"});
+    CHECK(first.errors.empty());
+    CHECK(exists(queued));
+    CHECK(fs::exists(root / ".music-service-work" / queued / "audio.part"));
+    CHECK(exists(finalizing_task));
+    CHECK(exists(failed_task));
+    CHECK_FALSE(exists(completed_task));
+    CHECK_FALSE(exists(canceled_task));
+    CHECK_FALSE(exists(orphan));
+    CHECK(fs::is_directory(root / ".music-service-work" / "notes"));
+    CHECK(fs::exists(root / "Song.mp3")); // published files are never touched
+    CHECK(first.idempotency_purged == 0);        // keys live 24 hours
+
+    // Past the retention the failed task's files go too; the rest is unchanged, and the
+    // expired idempotency keys are purged.
+    const auto second = unwrap(maintenance.run(d.clock->now() + 25h));
+    seen = verdicts(second);
+    CHECK(seen.at(failed_task) == downloads::WorkspaceVerdict::removed_expired);
+    CHECK(seen.at(queued) == downloads::WorkspaceVerdict::kept_active);
+    CHECK(seen.at(finalizing_task) == downloads::WorkspaceVerdict::kept_active);
+    CHECK(second.workspaces.size() == 3);
+    CHECK_FALSE(exists(failed_task));
+    CHECK(second.idempotency_purged == 5);
+    // A purged key is free again: the same key and request give a new task.
+    CHECK(d.create(d.request("both", "9"), 1).view.task.task_id != queued);
+
+    // Nothing left to do: a third run removes nothing.
+    const auto third = unwrap(maintenance.run(d.clock->now() + 26h));
+    CHECK(third.count(downloads::WorkspaceVerdict::kept_active) == 2);
+    CHECK(third.workspaces.size() == 2);
 }

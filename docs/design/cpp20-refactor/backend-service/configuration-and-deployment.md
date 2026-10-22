@@ -163,6 +163,7 @@ data_dir/
     credentials/                  # SecretStore 私有文件，sec_*.secret，只写一次
   cache/                           # 可丢弃，不存唯一任务事实
   logs/                            # 文件日志启用时使用；容器可仅 stdout
+  backups/                         # 仅所有者：迁移前自动备份与 restore 替换下的数据库
 
 destination_root/
   .music-service-work/

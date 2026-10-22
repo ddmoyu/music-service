@@ -10,8 +10,10 @@
 #include "infrastructure/storage/sqlite/database.hpp"
 #include "infrastructure/storage/sqlite/task_repositories.hpp"
 
+#include <chrono>
 #include <filesystem>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace music_service::server {
@@ -31,11 +33,17 @@ struct Instance {
     std::shared_ptr<infrastructure::storage::sqlite::SqliteDestinationRepository> destinations;
     std::shared_ptr<infrastructure::storage::sqlite::SqliteTaskRepository> tasks;
     std::shared_ptr<infrastructure::storage::sqlite::SqlitePublicationRepository> publications;
+    std::shared_ptr<infrastructure::storage::sqlite::SqliteMaintenanceStore> maintenance;
 
     // Closes the repositories and the database, then releases the lock.
     void close() noexcept;
     ~Instance() { close(); }
 };
+
+// A file name in backups/ that does not exist yet: <prefix>-20261022T031500Z.sqlite3,
+// with -2, -3, ... appended when that second is already taken.
+std::filesystem::path new_backup_path(const std::filesystem::path& backups, const std::string& prefix,
+                                      std::chrono::system_clock::time_point time);
 
 // Prepares data_dir, takes the instance lock (INSTANCE_LOCKED while the service or
 // another command runs), opens the database and applies migrations.

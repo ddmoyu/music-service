@@ -227,11 +227,12 @@ TEST_CASE("data_dir is prepared with the documented layout", "[filesystem][layou
     CHECK(fs::is_directory(layout->credentials));
     CHECK(fs::is_directory(layout->cache));
     CHECK(fs::is_directory(layout->logs));
+    CHECK(fs::is_directory(layout->backups));
     CHECK(layout->lock_file.filename() == "instance.lock");
     CHECK(layout->database.filename() == "service.sqlite3");
     CHECK(layout->bootstrap_token.parent_path() == layout->secrets);
     // The writability probe leaves nothing behind.
-    CHECK(std::distance(fs::directory_iterator{layout->root}, fs::directory_iterator{}) == 3);
+    CHECK(std::distance(fs::directory_iterator{layout->root}, fs::directory_iterator{}) == 4);
 }
 
 TEST_CASE("destination roots must exist and stay apart from data_dir", "[filesystem][layout]") {

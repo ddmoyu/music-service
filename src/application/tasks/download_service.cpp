@@ -90,11 +90,11 @@ DownloadService::DownloadService(std::shared_ptr<ports::TaskRepository> tasks,
                                  std::shared_ptr<accounts::CredentialService> credentials,
                                  std::vector<DestinationRule> destinations,
                                  std::function<bool(const DestinationRule&)> destination_available,
-                                 std::function<bool(const std::string&, const std::string&)> file_exists,
+                                 std::function<bool(const std::string&, const std::string&, std::uint64_t)> file_intact,
                                  std::uint32_t max_batch_items, std::shared_ptr<ports::DownloadQueue> queue)
     : tasks_(std::move(tasks)), providers_(std::move(providers)), credentials_(std::move(credentials)),
       destinations_(std::move(destinations)), destination_available_(std::move(destination_available)),
-      file_exists_(std::move(file_exists)), max_batch_items_(max_batch_items), queue_(std::move(queue)) {}
+      file_intact_(std::move(file_intact)), max_batch_items_(max_batch_items), queue_(std::move(queue)) {}
 
 void DownloadService::wake() const {
     if (queue_) {
@@ -180,8 +180,10 @@ std::optional<ports::ReuseCandidate> DownloadService::reusable(const domain::Nor
         return std::nullopt; // a lookup failure only means no reuse
     }
     for (const auto& result : results.value()) {
-        // The file must still be there; the transaction re-checks the versions.
-        if (result.file_available && file_exists_ && file_exists_(result.destination_id, result.relative_path)) {
+        // The published file must still be there with its recorded size (A46); the
+        // transaction re-checks the versions.
+        if (result.file_available && file_intact_ &&
+            file_intact_(result.destination_id, result.relative_path, result.size_bytes)) {
             return result.candidate;
         }
     }

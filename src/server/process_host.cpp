@@ -10,6 +10,7 @@
 #include "application/events/task_event_hub.hpp"
 #include "application/tasks/download_service.hpp"
 #include "audio_processing/verifying_processor.hpp"
+#include "downloads/maintenance.hpp"
 #include "downloads/recovery.hpp"
 #include "downloads/runner.hpp"
 #include "downloads/scheduler.hpp"
@@ -42,6 +43,9 @@
 namespace music_service::server {
 
 namespace {
+
+// How often the serve loop cleans up work directories and expired idempotency records.
+constexpr std::chrono::hours maintenance_interval{1};
 
 namespace cfg = application::config;
 namespace observability = infrastructure::observability;
@@ -107,6 +111,8 @@ struct ProcessHost::State {
     std::shared_ptr<runtime::BoundedExecutor> processing_executor;
     std::shared_ptr<runtime::BoundedExecutor> download_executor;
     std::shared_ptr<downloads::DownloadScheduler> scheduler;
+    std::shared_ptr<downloads::Maintenance> maintenance;
+    std::chrono::steady_clock::time_point next_maintenance;
     std::unique_ptr<event_server::EventServer> events;
     std::shared_ptr<application::media::FileAccessService> file_access;
     std::shared_ptr<application::media::MediaTicketService> tickets;
@@ -165,6 +171,32 @@ struct ProcessHost::State {
                              d.config.accept_new_tasks});
         }
         return views;
+    }
+
+    // Work directory and idempotency cleanup; problems are logged and retried next time.
+    void maintain() {
+        next_maintenance = std::chrono::steady_clock::now() + maintenance_interval;
+        auto done = maintenance->run(std::chrono::system_clock::now());
+        if (!done) {
+            log.warn("maintenance.failed", {{"code", std::string{domain::to_string(done.error().code)}},
+                                            {"message", done.error().message}});
+            return;
+        }
+        for (const auto& w : done->workspaces) {
+            if (w.verdict != downloads::WorkspaceVerdict::kept_active &&
+                w.verdict != downloads::WorkspaceVerdict::kept_retained) {
+                log.info("maintenance.workspace_removed", {{"destination_id", w.destination_id},
+                                                           {"task_id", w.task_id},
+                                                           {"reason", std::string{downloads::to_string(w.verdict)}}});
+            }
+        }
+        for (const auto& error : done->errors) {
+            log.warn("maintenance.error", {{"message", error}});
+        }
+        if (done->idempotency_purged > 0) {
+            log.info("maintenance.idempotency_purged",
+                     {{"records", static_cast<std::uint64_t>(done->idempotency_purged)}});
+        }
     }
 
     void shutdown() {
@@ -264,6 +296,9 @@ void ProcessHost::stop() {
 void ProcessHost::run_until(const std::function<bool()>& should_stop) {
     while (!should_stop()) {
         std::this_thread::sleep_for(100ms);
+        if (state_ && state_->maintenance && std::chrono::steady_clock::now() >= state_->next_maintenance) {
+            state_->maintain();
+        }
     }
     stop();
 }
@@ -367,6 +402,17 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
         state->log.info("startup.task_requeued",
                         {{"task_id", task.task_id}, {"resume_stage", std::string{domain::to_string(resume)}}});
     }
+
+    // Leftovers of finished, failed or unknown tasks go now, before new work starts; the
+    // serve loop repeats this every maintenance_interval.
+    std::vector<std::string> destination_ids;
+    for (const auto& d : state->destinations) {
+        destination_ids.push_back(d.config.id);
+    }
+    state->maintenance = std::make_shared<downloads::Maintenance>(
+        inst.maintenance, state->files, std::move(destination_ids),
+        downloads::MaintenanceOptions{config.filesystem.failed_work_retention});
+    state->maintain();
 
     state->admission = std::make_shared<runtime::AdmissionLedger>(admission_limits(config), clock);
     if (options.transport) {
@@ -478,13 +524,19 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
             std::error_code ec;
             return std::filesystem::is_directory(infrastructure::filesystem::path_from_utf8(rule.canonical_root), ec);
         },
-        [raw = state.get()](const std::string& destination_id, const std::string& relative_path) {
+        [raw = state.get()](const std::string& destination_id, const std::string& relative_path,
+                            std::uint64_t size_bytes) {
             for (const auto& d : raw->destinations) {
                 if (d.config.id == destination_id) {
-                    // Inside the bound root only; a link out of it is not the file.
+                    // Inside the bound root only; a link out of it is not the file. A file
+                    // of another size was rewritten or cut and is not the published one.
                     auto path = infrastructure::filesystem::resolve_within(d.root, relative_path);
                     std::error_code ec;
-                    return path && std::filesystem::is_regular_file(*path, ec);
+                    if (!path || !std::filesystem::is_regular_file(*path, ec)) {
+                        return false;
+                    }
+                    const auto size = std::filesystem::file_size(*path, ec);
+                    return !ec && size == size_bytes;
                 }
             }
             return false;

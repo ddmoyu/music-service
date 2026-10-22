@@ -74,6 +74,11 @@ public:
     domain::Result<Statement> prepare(std::string_view sql);
     [[nodiscard]] std::int64_t changes() const;
 
+    // Copies every page of source's main database into this one with SQLite's online
+    // backup, as one consistent snapshot (committed WAL content included). Writers of
+    // the source are not blocked for longer than one step.
+    domain::Result<void> copy_from(Connection& source);
+
 private:
     explicit Connection(sqlite3* db) : db_(db) {}
 

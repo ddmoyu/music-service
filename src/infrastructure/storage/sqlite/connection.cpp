@@ -189,4 +189,35 @@ domain::Result<Statement> Connection::prepare(std::string_view sql) {
 
 std::int64_t Connection::changes() const { return sqlite3_changes64(db_); }
 
+domain::Result<void> Connection::copy_from(Connection& source) {
+    sqlite3_backup* backup = sqlite3_backup_init(db_, "main", source.db_, "main");
+    if (backup == nullptr) {
+        return sqlite_error(sqlite3_extended_errcode(db_), "start backup", sqlite3_errmsg(db_));
+    }
+    int rc = SQLITE_OK;
+    // A writer of the source may hold its lock briefly: wait and continue, bounded.
+    for (int busy = 0; busy < 200;) {
+        rc = sqlite3_backup_step(backup, 256);
+        if (rc == SQLITE_DONE) {
+            break;
+        }
+        if (rc == SQLITE_BUSY || rc == SQLITE_LOCKED) {
+            ++busy;
+            sqlite3_sleep(25);
+            continue;
+        }
+        if (rc != SQLITE_OK) {
+            break;
+        }
+    }
+    const int finished = sqlite3_backup_finish(backup);
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(rc == SQLITE_OK ? SQLITE_BUSY : rc, "backup");
+    }
+    if (finished != SQLITE_OK) {
+        return sqlite_error(finished, "finish backup");
+    }
+    return domain::ok();
+}
+
 } // namespace music_service::infrastructure::storage::sqlite

@@ -209,9 +209,68 @@ domain::Error schema_error(std::string message) {
     return domain::Error{domain::ErrorCode::storage_unavailable, std::move(message), false, {}};
 }
 
+// Applied migrations by version, with their recorded checksums.
+domain::Result<std::map<std::uint32_t, std::string>> applied_migrations(Connection& db) {
+    auto statement = db.prepare("SELECT version, checksum FROM schema_migrations");
+    if (!statement) {
+        return std::move(statement).error();
+    }
+    std::map<std::uint32_t, std::string> rows;
+    while (true) {
+        auto row = statement->step();
+        if (!row) {
+            return std::move(row).error();
+        }
+        if (!*row) {
+            break;
+        }
+        rows.emplace(static_cast<std::uint32_t>(statement->integer(0)), statement->text(1));
+    }
+    return rows;
+}
+
+// The newest applied version, or a refusal for versions or checksums this build does not know.
+domain::Result<std::uint32_t> check_applied(const std::map<std::uint32_t, std::string>& applied,
+                                            std::span<const Migration> list) {
+    const auto latest = list.empty() ? 0U : list.back().version;
+    for (const auto& [version, recorded] : applied) {
+        if (version > latest) {
+            return schema_error("database schema version " + std::to_string(version) +
+                                " is newer than this build supports (" + std::to_string(latest) +
+                                "); upgrade the program or restore a matching backup");
+        }
+        const auto known = std::find_if(list.begin(), list.end(),
+                                        [version](const Migration& m) { return m.version == version; });
+        if (known == list.end() || checksum(known->sql) != recorded) {
+            return schema_error("schema migration " + std::to_string(version) +
+                                " differs from this build");
+        }
+    }
+    return applied.empty() ? 0U : applied.rbegin()->first;
+}
+
 } // namespace
 
 std::span<const Migration> builtin_migrations() { return migrations; }
+
+domain::Result<std::uint32_t> schema_version(Connection& db, std::span<const Migration> list) {
+    auto table = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'");
+    if (!table) {
+        return std::move(table).error();
+    }
+    auto exists = table->step();
+    if (!exists) {
+        return std::move(exists).error();
+    }
+    if (!exists.value()) {
+        return 0U;
+    }
+    auto applied = applied_migrations(db);
+    if (!applied) {
+        return std::move(applied).error();
+    }
+    return check_applied(applied.value(), list);
+}
 
 domain::Result<std::uint32_t> migrate(Database& database, std::chrono::system_clock::time_point now,
                                       std::span<const Migration> list) {
@@ -227,43 +286,17 @@ domain::Result<std::uint32_t> migrate(Database& database, std::chrono::system_cl
             !created) {
             return created.error();
         }
-        auto statement = db.prepare("SELECT version, checksum FROM schema_migrations");
-        if (!statement) {
-            return std::move(statement).error();
-        }
-        std::map<std::uint32_t, std::string> rows;
-        while (true) {
-            auto row = statement->step();
-            if (!row) {
-                return std::move(row).error();
-            }
-            if (!*row) {
-                break;
-            }
-            rows.emplace(static_cast<std::uint32_t>(statement->integer(0)), statement->text(1));
-        }
-        return rows;
+        return applied_migrations(db);
     });
     if (!applied) {
         return std::move(applied).error();
     }
-
-    const auto latest = list.empty() ? 0U : list.back().version;
-    for (const auto& [version, recorded] : applied.value()) {
-        if (version > latest) {
-            return schema_error("database schema version " + std::to_string(version) +
-                                " is newer than this build supports (" + std::to_string(latest) +
-                                "); upgrade the program or restore a matching backup");
-        }
-        const auto known = std::find_if(list.begin(), list.end(),
-                                        [version](const Migration& m) { return m.version == version; });
-        if (known == list.end() || checksum(known->sql) != recorded) {
-            return schema_error("schema migration " + std::to_string(version) +
-                                " differs from this build");
-        }
+    auto checked = check_applied(applied.value(), list);
+    if (!checked) {
+        return std::move(checked).error();
     }
 
-    std::uint32_t current = applied.value().empty() ? 0U : applied.value().rbegin()->first;
+    std::uint32_t current = checked.value();
     for (const auto& migration : list) {
         if (applied.value().count(migration.version) != 0) {
             continue;

@@ -17,6 +17,7 @@ add_library(music_service_infrastructure STATIC
     secrets/file_secret_store.cpp
     storage/intent_codec.cpp
     storage/sqlite/account_repositories.cpp
+    storage/sqlite/backup.cpp
     storage/sqlite/connection.cpp
     storage/sqlite/database.cpp
     storage/sqlite/migrations.cpp

@@ -525,7 +525,7 @@ SqliteTaskRepository::find_idempotent(const std::string& owner_id, const std::st
 domain::Result<std::vector<ports::CompletedResult>>
 SqliteTaskRepository::completed_results(const std::string& owner_id, const domain::DownloadFingerprint& fingerprint) {
     return ctx_.database->read([&](Connection& db) -> domain::Result<std::vector<ports::CompletedResult>> {
-        auto s = db.prepare("SELECT t.id, t.version, f.id, f.version, f.destination_id, f.relative_path, f.status"
+        auto s = db.prepare("SELECT t.id, t.version, f.id, f.version, f.destination_id, f.relative_path, f.status, f.size_bytes"
                             " FROM download_tasks t JOIN task_files tf ON tf.task_id = t.id"
                             " JOIN file_assets f ON f.id = tf.file_id"
                             " WHERE t.owner_id = ? AND t.status = 'completed' AND t.fingerprint_digest = ?"
@@ -539,6 +539,7 @@ SqliteTaskRepository::completed_results(const std::string& owner_id, const domai
                                            static_cast<std::uint64_t>(st.integer(3))},
                                           st.text(4),
                                           st.text(5),
+                                          static_cast<std::uint64_t>(st.integer(7)),
                                           st.text(6) == "available"};
         });
     });
@@ -1405,6 +1406,55 @@ domain::Result<ports::FileAssetRecord> SqlitePublicationRepository::mark_missing
             return not_found("file");
         }
         return *found.value();
+    });
+}
+
+domain::Result<std::vector<ports::WorkspaceTask>>
+SqliteMaintenanceStore::workspace_tasks(const std::vector<std::string>& task_ids) {
+    return ctx_.database->read([&](Connection& db) -> domain::Result<std::vector<ports::WorkspaceTask>> {
+        auto s = db.prepare("SELECT t.status, t.finished_at, EXISTS (SELECT 1 FROM finalization_intents i"
+                            " WHERE i.task_id = t.id) FROM download_tasks t WHERE t.id = ?");
+        if (!s) {
+            return std::move(s).error();
+        }
+        std::vector<ports::WorkspaceTask> found;
+        for (const auto& id : task_ids) {
+            s->reset();
+            s->bind(1, id);
+            auto row = s->step();
+            if (!row) {
+                return std::move(row).error();
+            }
+            if (!row.value()) {
+                continue;
+            }
+            auto status = domain::parse_task_status(s->text(0));
+            if (!status) {
+                return std::move(status).error();
+            }
+            ports::WorkspaceTask task{id, status.value(), std::nullopt, s->integer(2) != 0};
+            if (!s->is_null(1)) {
+                task.finished_at = from_millis(s->integer(1));
+            }
+            found.push_back(std::move(task));
+        }
+        return found;
+    });
+}
+
+domain::Result<std::size_t> SqliteMaintenanceStore::purge_expired_idempotency(std::chrono::system_clock::time_point now,
+                                                                              std::size_t limit) {
+    return ctx_.database->write([&](Connection& db) -> domain::Result<std::size_t> {
+        auto s = db.prepare("DELETE FROM idempotency_records WHERE rowid IN (SELECT rowid FROM idempotency_records"
+                            " WHERE expires_at <= ? ORDER BY expires_at LIMIT ?)");
+        if (!s) {
+            return std::move(s).error();
+        }
+        s->bind(1, to_millis(now)).bind(2, static_cast<std::int64_t>(limit));
+        if (auto run = s->run(); !run) {
+            return std::move(run).error();
+        }
+        return static_cast<std::size_t>(db.changes());
     });
 }
 

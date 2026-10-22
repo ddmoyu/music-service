@@ -25,4 +25,9 @@ domain::Result<std::uint32_t> migrate(Database& database,
                                       std::chrono::system_clock::time_point now,
                                       std::span<const Migration> migrations = builtin_migrations());
 
+// The schema version of a database without changing it: 0 when no migration ran yet.
+// The same refusals as migrate() for newer or altered schemas.
+domain::Result<std::uint32_t> schema_version(Connection& db,
+                                             std::span<const Migration> migrations = builtin_migrations());
+
 } // namespace music_service::infrastructure::storage::sqlite

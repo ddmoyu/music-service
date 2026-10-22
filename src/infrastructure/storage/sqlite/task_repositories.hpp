@@ -1,5 +1,6 @@
 #pragma once
 
+#include "application/ports/storage/maintenance.hpp"
 #include "application/ports/storage/publication_repository.hpp"
 #include "application/ports/storage/task_repository.hpp"
 #include "infrastructure/storage/sqlite/account_repositories.hpp"
@@ -83,6 +84,19 @@ public:
     domain::Result<application::ports::FileAssetRecord> get_asset(const std::string& owner_id,
                                                                   const std::string& file_id) override;
     domain::Result<application::ports::FileAssetRecord> mark_missing(const std::string& file_id) override;
+
+private:
+    RepositoryContext ctx_;
+};
+
+class SqliteMaintenanceStore final : public application::ports::MaintenanceStore {
+public:
+    explicit SqliteMaintenanceStore(RepositoryContext context) : ctx_(std::move(context)) {}
+
+    domain::Result<std::vector<application::ports::WorkspaceTask>>
+    workspace_tasks(const std::vector<std::string>& task_ids) override;
+    domain::Result<std::size_t> purge_expired_idempotency(std::chrono::system_clock::time_point now,
+                                                          std::size_t limit) override;
 
 private:
     RepositoryContext ctx_;

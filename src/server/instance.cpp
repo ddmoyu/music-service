@@ -1,8 +1,11 @@
 #include "server/instance.hpp"
 
 #include "infrastructure/filesystem/paths.hpp"
+#include "infrastructure/storage/sqlite/backup.hpp"
 #include "infrastructure/storage/sqlite/migrations.hpp"
 
+#include <chrono>
+#include <cstdio>
 #include <set>
 #include <utility>
 
@@ -11,7 +14,36 @@ namespace music_service::server {
 namespace fs = std::filesystem;
 namespace sqlite = infrastructure::storage::sqlite;
 
+namespace {
+
+std::string backup_stamp(std::chrono::system_clock::time_point time) {
+    using namespace std::chrono;
+    const auto seconds = floor<std::chrono::seconds>(time);
+    const auto day = floor<days>(seconds);
+    const year_month_day date{day};
+    const hh_mm_ss clock{seconds - day};
+    char buffer[32];
+    std::snprintf(buffer, sizeof buffer, "%04d%02u%02uT%02d%02d%02dZ", static_cast<int>(date.year()),
+                  static_cast<unsigned>(date.month()), static_cast<unsigned>(date.day()),
+                  static_cast<int>(clock.hours().count()), static_cast<int>(clock.minutes().count()),
+                  static_cast<int>(clock.seconds().count()));
+    return buffer;
+}
+
+} // namespace
+
+fs::path new_backup_path(const fs::path& backups, const std::string& prefix, std::chrono::system_clock::time_point time) {
+    const auto stem = prefix + "-" + backup_stamp(time);
+    auto path = backups / (stem + ".sqlite3");
+    std::error_code ec;
+    for (int n = 2; fs::exists(path, ec); ++n) {
+        path = backups / (stem + "-" + std::to_string(n) + ".sqlite3");
+    }
+    return path;
+}
+
 void Instance::close() noexcept {
+    maintenance.reset();
     identities.reset();
     credentials.reset();
     destinations.reset();
@@ -43,6 +75,20 @@ domain::Result<std::unique_ptr<Instance>> open_instance(const application::confi
         return std::move(database).error();
     }
     instance->database = std::move(database).value();
+    // A database that migrations are about to change is copied first, so a failed or
+    // unwanted upgrade can be undone with "restore" (internal-contracts.md 8).
+    auto current = instance->database->read([](sqlite::Connection& db) { return sqlite::schema_version(db); });
+    if (!current) {
+        return std::move(current).error();
+    }
+    const auto migrations = sqlite::builtin_migrations();
+    if (current.value() > 0 && current.value() < migrations.back().version) {
+        const auto copy = new_backup_path(instance->layout.backups,
+                                          "pre-migration-v" + std::to_string(current.value()), instance->clock->now());
+        if (auto saved = sqlite::backup_database(instance->layout.database, copy); !saved) {
+            return std::move(saved).error();
+        }
+    }
     if (auto migrated = sqlite::migrate(*instance->database, instance->clock->now()); !migrated) {
         return std::move(migrated).error();
     }
@@ -54,6 +100,7 @@ domain::Result<std::unique_ptr<Instance>> open_instance(const application::confi
         context, sqlite::TaskRepositoryOptions{config.download_limits.per_principal_active,
                                                config.download_limits.global_active, config.idempotency.retention});
     instance->publications = std::make_shared<sqlite::SqlitePublicationRepository>(context);
+    instance->maintenance = std::make_shared<sqlite::SqliteMaintenanceStore>(context);
     return instance;
 }
 

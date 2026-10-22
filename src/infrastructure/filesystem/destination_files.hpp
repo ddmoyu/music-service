@@ -1,6 +1,7 @@
 #pragma once
 
 #include "application/ports/storage/destination_files.hpp"
+#include "application/ports/storage/maintenance.hpp"
 #include "application/ports/storage/published_files.hpp"
 #include "application/ports/storage/work_files.hpp"
 
@@ -16,7 +17,8 @@ namespace music_service::infrastructure::filesystem {
 // never replaced.
 class LocalDestinationFiles final : public application::ports::DestinationFiles,
                                     public application::ports::WorkFiles,
-                                    public application::ports::PublishedFiles {
+                                    public application::ports::PublishedFiles,
+                                    public application::ports::WorkspaceDirectories {
 public:
     // Destination id -> canonical root, as bound at startup. A root that is offline stays
     // listed and is reported unavailable while it is missing.
@@ -28,6 +30,7 @@ public:
     domain::Result<void> move(const std::string& destination_id, const std::string& from,
                               const std::string& to) override;
     domain::Result<void> remove_workspace(const std::string& destination_id, const std::string& task_id) override;
+    domain::Result<std::vector<std::string>> list_workspaces(const std::string& destination_id) override;
 
     [[nodiscard]] std::string relative_path(const std::string& task_id, const std::string& name) const override;
     domain::Result<std::unique_ptr<application::ports::WorkFile>> open(const std::string& destination_id,

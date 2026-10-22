@@ -34,6 +34,7 @@ DataLayout DataLayout::under(const fs::path& data_dir) {
     layout.bootstrap_token = layout.secrets / "bootstrap-token.txt";
     layout.cache = data_dir / "cache";
     layout.logs = data_dir / "logs";
+    layout.backups = data_dir / "backups";
     return layout;
 }
 
@@ -49,6 +50,7 @@ domain::Result<DataLayout> prepare_data_dir(const fs::path& data_dir) {
     for (const auto& [path, privacy] :
          {std::pair{layout.secrets, Privacy::owner_only},
           std::pair{layout.credentials, Privacy::owner_only},
+          std::pair{layout.backups, Privacy::owner_only},
           std::pair{layout.cache, Privacy::normal}, std::pair{layout.logs, Privacy::normal}}) {
         if (auto created = create_directories(path, privacy); !created) {
             return created.error();

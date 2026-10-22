@@ -186,6 +186,34 @@ domain::Result<void> LocalDestinationFiles::remove_workspace(const std::string& 
     return domain::ok();
 }
 
+domain::Result<std::vector<std::string>> LocalDestinationFiles::list_workspaces(const std::string& destination_id) {
+    auto base = root(destination_id);
+    if (!base) {
+        return std::move(base).error();
+    }
+    const auto directory = base.value() / std::string{workspace_directory_name};
+    std::vector<std::string> ids;
+    std::error_code ec;
+    fs::directory_iterator it{directory, ec};
+    if (ec) {
+        if (absent(ec)) {
+            return ids; // nothing was ever downloaded here
+        }
+        return file_error("list workspaces", directory, ec);
+    }
+    for (const auto end = fs::directory_iterator{}; it != end; it.increment(ec)) {
+        if (ec) {
+            return file_error("list workspaces", directory, ec);
+        }
+        const auto name = path_to_utf8(it->path().filename());
+        if (domain::is_valid_service_id("tsk_", name)) {
+            ids.push_back(name);
+        }
+    }
+    std::sort(ids.begin(), ids.end());
+    return ids;
+}
+
 namespace {
 
 class LocalReadableFile final : public ports::ReadableFile {

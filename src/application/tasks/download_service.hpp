@@ -103,7 +103,9 @@ public:
     DownloadService(std::shared_ptr<ports::TaskRepository> tasks, std::shared_ptr<const ports::ProviderDirectory> providers,
                     std::shared_ptr<accounts::CredentialService> credentials, std::vector<DestinationRule> destinations,
                     std::function<bool(const DestinationRule&)> destination_available,
-                    std::function<bool(const std::string& destination_id, const std::string& relative_path)> file_exists,
+                    std::function<bool(const std::string& destination_id, const std::string& relative_path,
+                                       std::uint64_t size_bytes)>
+                        file_intact,
                     std::uint32_t max_batch_items, std::shared_ptr<ports::DownloadQueue> queue = {});
 
     // Idempotency-Key: 16 to 128 printable ASCII characters without spaces.
@@ -142,7 +144,7 @@ private:
     std::shared_ptr<accounts::CredentialService> credentials_;
     std::vector<DestinationRule> destinations_;
     std::function<bool(const DestinationRule&)> destination_available_;
-    std::function<bool(const std::string&, const std::string&)> file_exists_;
+    std::function<bool(const std::string&, const std::string&, std::uint64_t)> file_intact_;
     std::uint32_t max_batch_items_;
     std::shared_ptr<ports::DownloadQueue> queue_; // empty: tasks only queue
 };
