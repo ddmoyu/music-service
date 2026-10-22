@@ -126,6 +126,15 @@ public:
         if (url == "https://www.kuwo.cn/play_detail/78932517") {
             return answer(200, fixture("kuwo", "play-detail-78932517.html"), url);
         }
+        if (url.rfind("https://nplserver.kuwo.cn/pl.svc?op=getlistinfo&pid=2234580349&", 0) == 0) {
+            return answer(200, fixture("kuwo", "playlist-2234580349-pn0-rn2.json"), url);
+        }
+        if (url.rfind("https://wapi.kuwo.cn/api/pc/bang/list?", 0) == 0) {
+            return answer(200, fixture("kuwo", "bang-list.json"), url);
+        }
+        if (url.rfind("https://kbangserver.kuwo.cn/ksong.s?", 0) == 0) {
+            return answer(200, fixture("kuwo", "chart-16-pn0-rn2.json"), url);
+        }
         if (url.rfind("https://mobi.kuwo.cn/mobi.s?", 0) == 0) {
             const auto found = url.find("&rid=78932517&") != std::string::npos;
             return answer(200, fixture("kuwo", found ? "audio-78932517-standard.json" : "audio-missing.json"), url);
@@ -251,7 +260,8 @@ TEST_CASE("T22: 5sing next to Kuwo, from search to a published file", "[gate][fi
     CHECK(has("search_tracks"));
     CHECK(has("lyrics"));
     CHECK(has("resolve_audio"));
-    CHECK_FALSE(has("search_playlists"));
+    CHECK(has("playlist_tracks"));
+    CHECK_FALSE(has("search_albums"));
 
     // One search over both sources: each answers on its own.
     const auto search = api.Get("/api/v1/search/tracks?q=%E5%8D%83%E5%B9%B4%E9%85%92&sources=kuwo,fivesing&limit=5");
@@ -472,7 +482,9 @@ TEST_CASE("T41: two real platforms, two principals, one download path", "[gate][
     CHECK(listed_sources(a, "") == std::set<std::string>{"fivesing", "kuwo"});
     CHECK(listed_sources(a, "?capability=resolve_audio") == std::set<std::string>{"fivesing", "kuwo"});
     CHECK(listed_sources(a, "?capability=lyrics") == std::set<std::string>{"fivesing"});
-    CHECK(listed_sources(a, "?capability=search_playlists").empty());
+    CHECK(listed_sources(a, "?capability=search_playlists") == std::set<std::string>{"fivesing", "kuwo"});
+    CHECK(listed_sources(a, "?capability=search_albums") == std::set<std::string>{"kuwo"});
+    CHECK(listed_sources(a, "?capability=search_artists").empty());
     const auto providers = body(a.Get("/api/v1/providers"));
     for (const auto& item : providers["data"]["items"]) {
         CHECK(item["implementation"]["execution_mode"] == "native");
@@ -493,6 +505,27 @@ TEST_CASE("T41: two real platforms, two principals, one download path", "[gate][
                                    "application/json");
     REQUIRE(five_lower->status == 200);
     CHECK(body(five_lower)["data"]["actual_quality"] == "standard");
+    // Collections through the shared routes: Kuwo's playlist pages under a service cursor,
+    // its live chart list; 5sing declares none of them.
+    const auto first_page = a.Get("/api/v1/playlists/tracks?source=kuwo&id=2234580349&limit=2");
+    REQUIRE(first_page->status == 200);
+    const auto first_body = body(first_page)["data"];
+    CHECK(first_body["items"].size() == 2);
+    CHECK(first_body["page"]["total"] == 17);
+    const auto cursor = first_body["page"]["next_cursor"].get<std::string>();
+    const auto second_page = a.Get("/api/v1/playlists/tracks?source=kuwo&id=2234580349&limit=2&cursor=" + cursor);
+    REQUIRE(second_page->status == 200);
+    CHECK(body(second_page)["data"]["items"][0]["ref"]["source"] == "kuwo");
+    // A cursor is its owner's: another principal gets CURSOR_EXPIRED.
+    CHECK(code_of(b.Get("/api/v1/playlists/tracks?source=kuwo&id=2234580349&limit=2&cursor=" + cursor)) == "CURSOR_EXPIRED");
+    const auto charts = a.Get("/api/v1/charts?source=kuwo");
+    REQUIRE(charts->status == 200);
+    CHECK(body(charts)["data"]["catalog_kind"] == "live");
+    CHECK(body(charts)["data"]["items"].size() == 36);
+    const auto chart = body(a.Get("/api/v1/charts/detail?source=kuwo&id=16"))["data"];
+    CHECK(chart["name"] == "酷我热歌榜");
+    CHECK(code_of(a.Get("/api/v1/charts?source=fivesing")) == "CAPABILITY_UNSUPPORTED");
+
     // Each package owns its id format; one source's id is not valid at the other.
     CHECK(a.Get("/api/v1/tracks/detail?source=kuwo&id=" + work)->status == 400);
     CHECK(a.Get("/api/v1/tracks/detail?source=fivesing&id=78932517")->status == 400);

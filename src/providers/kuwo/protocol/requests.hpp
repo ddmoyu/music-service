@@ -29,4 +29,37 @@ application::ports::HttpRequest track_page(std::string_view rid);
 // standard-quality audio address. client_id is the per-request user value.
 application::ports::HttpRequest standard_audio(std::string_view rid, std::string_view client_id);
 
+// Collections (T23), confirmed over HTTPS on 2026-10-22. page is 0-based unless noted.
+// Every answer is requested as UTF-8; the legacy search route answers single-quoted
+// pseudo JSON (parsing::legacy_json).
+
+// GET https://search.kuwo.cn/r.s with ft=playlist or ft=album: collection search.
+application::ports::HttpRequest search_collections(std::string_view kind, std::string_view keyword,
+                                                   std::uint32_t page, std::uint32_t page_size,
+                                                   std::string_view operation);
+
+// GET https://nplserver.kuwo.cn/pl.svc?op=getlistinfo: a playlist and one page of its songs.
+application::ports::HttpRequest playlist_page(std::string_view id, std::uint32_t page, std::uint32_t page_size,
+                                              std::string_view operation);
+
+// GET https://search.kuwo.cn/r.s?stype=albuminfo: an album and one page of its songs.
+application::ports::HttpRequest album_page(std::string_view id, std::uint32_t page, std::uint32_t page_size,
+                                           std::string_view operation);
+
+// GET https://wapi.kuwo.cn/api/pc/classify/playlist/getTagList: playlist categories.
+application::ports::HttpRequest playlist_tags();
+
+// GET .../getTagPlayList (page is 1-based): playlists of a category.
+application::ports::HttpRequest tag_playlists(std::string_view tag_id, std::uint32_t page, std::uint32_t page_size);
+
+// GET .../getRcmPlayList?order=hot (page is 1-based): recommended playlists.
+application::ports::HttpRequest recommended_playlists(std::uint32_t page, std::uint32_t page_size);
+
+// GET https://wapi.kuwo.cn/api/pc/bang/list: the chart tree.
+application::ports::HttpRequest chart_list();
+
+// GET https://kbangserver.kuwo.cn/ksong.s?type=bang: a chart and one page of its songs.
+application::ports::HttpRequest chart_page(std::string_view id, std::uint32_t page, std::uint32_t page_size,
+                                           std::string_view operation);
+
 } // namespace music_service::providers::kuwo::protocol

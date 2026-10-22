@@ -50,6 +50,9 @@ domain::Result<AudioEvidence> parse_audio(std::string_view body, std::string_vie
 // VALIDATION_FAILED. No network.
 domain::Result<std::string> parse_track_link(std::string_view link);
 
+// Artists from Kuwo's '&'-joined names and ids; ids line up only when the counts match.
+[[nodiscard]] std::vector<domain::ArtistSummary> parse_artists(std::string_view names, std::string_view ids);
+
 // Decodes the HTML character references Kuwo uses (&amp; &lt; &gt; &quot; &#39;
 // &apos; &nbsp; and numeric forms) and trims surrounding whitespace.
 [[nodiscard]] std::string decode_text(std::string_view text);

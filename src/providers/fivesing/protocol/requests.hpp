@@ -18,8 +18,9 @@ inline constexpr std::string_view user_agent =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 "
     "Safari/537.36";
 
-// The search API answers a fixed number of songs per page.
+// The search API answers a fixed number of songs, and of playlists, per page.
 inline constexpr std::uint32_t search_page_size = 10;
+inline constexpr std::uint32_t playlist_search_page_size = 15;
 
 // Every plaintext endpoint this package calls; the bundle registers the same list.
 std::vector<application::ports::PlaintextEndpoint> plaintext_endpoints();
@@ -34,6 +35,16 @@ application::ports::HttpRequest song_info(std::string_view type, std::string_vie
 // GET http://mobileapi.5sing.kugou.com/song/getSongUrl: the audio addresses of one work,
 // a primary and a backup for each of the sq, hq and lq tiers.
 application::ports::HttpRequest song_urls(std::string_view type, std::string_view id);
+
+// GET http://search.5sing.kugou.com/home/json with type=1: playlist search, page 1-based.
+application::ports::HttpRequest search_playlists(std::string_view keyword, std::uint32_t page);
+
+// GET http://mobileapi.5sing.kugou.com/song/getsonglist: a playlist's title, counts and owner.
+application::ports::HttpRequest playlist_info(std::string_view id);
+
+// GET http://mobileapi.5sing.kugou.com/song/getsonglistsong: every song of a playlist. The
+// API ignores page and pagesize and always answers the whole list.
+application::ports::HttpRequest playlist_songs(std::string_view id);
 
 // HEAD of an audio address, to check it answers with the declared file before it is
 // handed to the download.

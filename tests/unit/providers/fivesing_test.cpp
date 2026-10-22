@@ -256,7 +256,7 @@ TEST_CASE("5sing song links", "[providers][fivesing]") {
 
 TEST_CASE("5sing API requests are registered plaintext endpoints without secrets", "[providers][fivesing]") {
     const auto bundle = providers::fivesing::make_bundle();
-    CHECK(bundle.plaintext_endpoints.size() == 4);
+    CHECK(bundle.plaintext_endpoints.size() == 7);
     for (const auto& request : {protocol::search_tracks("千年", 1), protocol::song_info("fc", "1", "track_detail"),
                                 protocol::song_info("fc", "1", "lyrics"), protocol::song_urls("fc", "1")}) {
         INFO(request.url);
@@ -282,10 +282,11 @@ TEST_CASE("5sing API requests are registered plaintext endpoints without secrets
     std::vector<ports::ProviderBundle> bundles;
     bundles.push_back(providers::fivesing::make_bundle());
     const auto registry = unwrap(providers::ProviderRegistry::build(std::move(bundles), {}));
-    CHECK(registry->plaintext_endpoints("fivesing").size() == 4);
+    CHECK(registry->plaintext_endpoints("fivesing").size() == 7);
     const auto view = unwrap(registry->describe("fivesing"));
     CHECK(view.supports("lyrics"));
-    CHECK_FALSE(view.supports("search_playlists"));
+    CHECK(view.supports("search_playlists"));
+    CHECK_FALSE(view.supports("search_albums"));
     CHECK(view.auth_methods.empty());
 }
 
@@ -525,6 +526,107 @@ TEST_CASE("5sing resolves a tier's file, its backup only for the same file", "[p
     }
 }
 
+TEST_CASE("5sing playlist answers", "[providers][fivesing]") {
+    const auto found = unwrap(parsing::parse_playlist_search(fixture("search-playlist-gufeng-p1.json")));
+    CHECK(found.page == 1);
+    CHECK(found.total == 10000);
+    CHECK(found.total_pages == 667);
+    REQUIRE(found.playlists.size() == 15);
+    const auto& first = found.playlists[0];
+    CHECK(first.ref == test::track("fivesing", "59b6bcf8da767f5ace4bb449"));
+    CHECK(first.name == "古风"); // highlight removed
+    CHECK_FALSE(first.creator);  // the search leaves the name empty
+    CHECK_FALSE(first.description);
+    CHECK(first.track_count == 153);
+    CHECK(first.play_count == 43232);
+    CHECK(first.artwork.has_value());
+    CHECK(unwrap(parsing::parse_playlist_search(fixture("search-playlist-empty.json"))).playlists.empty());
+
+    const auto playlist =
+        unwrap(parsing::parse_playlist_info(fixture("songlist-59b6bcf8da767f5ace4bb449.json"), "59b6bcf8da767f5ace4bb449"));
+    CHECK(playlist.name == "古风");
+    CHECK(playlist.creator == "云知月");
+    CHECK_FALSE(playlist.description); // "暂无简介" is the placeholder
+    CHECK(playlist.track_count == 153);
+    CHECK(playlist.play_count == 43232);
+    CHECK(playlist.artwork->rfind("https://", 0) == 0);
+    CHECK(parsing::parse_playlist_info(fixture("songlist-missing.json"), "ffffffffffffffffffffffff").error().code ==
+          ErrorCode::not_found);
+    CHECK(detail_reason(parsing::parse_playlist_info(fixture("songlist-59b6bcf8da767f5ace4bb449.json"), "abc").error(),
+                        "protocol") == "playlist response is about another playlist");
+
+    const auto songs = unwrap(parsing::parse_playlist_songs(fixture("songlistsong-59b6bcf8da767f5ace4bb449-first5.json")));
+    REQUIRE(songs.size() == 5);
+    CHECK(songs[0].ref == test::track("fivesing", "yc-2239736"));
+    CHECK(songs[0].title == "浮生辞 (《白发魔女传》正版手游主题曲)"); // in full, unlike the web page
+    CHECK(songs[0].artists[0].name == "银临");
+    CHECK(songs[0].version.label == "原创");
+    CHECK_FALSE(songs[0].duration_ms);
+    CHECK(parsing::parse_playlist_songs(fixture("songlistsong-missing.json")).error().code == ErrorCode::not_found);
+    // Code 13 ("too frequent") is a retryable rate limit, not a missing playlist.
+    const auto limited = parsing::parse_playlist_songs(R"({"message":"x","success":false,"data":[],"code":13})");
+    CHECK(limited.error().code == ErrorCode::upstream_rate_limited);
+    CHECK(limited.error().retryable);
+
+    CHECK(parsing::is_playlist_id("59b6bcf8da767f5ace4bb449"));
+    for (const auto* bad : {"", "../x", "59b6bcf8-da76", "0123456789abcdef0123456789abcdef0"}) {
+        INFO(bad);
+        CHECK_FALSE(parsing::is_playlist_id(bad));
+    }
+}
+
+TEST_CASE("5sing playlist capabilities", "[providers][fivesing]") {
+    auto upstream = std::make_shared<FakeUpstream>();
+    auto search = unwrap(providers::fivesing::make_playlist_search(setup(upstream)));
+    auto detail = unwrap(providers::fivesing::make_playlist_detail(setup(upstream)));
+    auto tracks = unwrap(providers::fivesing::make_playlist_tracks(setup(upstream)));
+    const auto playlist = test::track("fivesing", "59b6bcf8da767f5ace4bb449");
+
+    upstream->respond(200, fixture("search-playlist-gufeng-p1.json"));
+    const auto first = unwrap(search->search(context(), {"古风", 10, std::nullopt}));
+    CHECK(upstream->calls.back().request.url ==
+          "http://search.5sing.kugou.com/home/json?keyword=%E5%8F%A4%E9%A3%8E&sort=1&page=1&filter=0&type=1");
+    CHECK(upstream->calls.back().request.operation == "search_playlists");
+    CHECK(first.page.items.size() == 10);
+    CHECK(first.next_cursor == "1:10");
+    upstream->respond(200, fixture("search-playlist-gufeng-p1.json"));
+    const auto rest = unwrap(search->search(context(), {"古风", 10, std::string{"1:10"}}));
+    CHECK(rest.page.items.size() == 5);
+    CHECK(rest.next_cursor == "2");
+    CHECK(search->search(context(), {"古风", 10, std::string{"1:15"}}).error().code == ErrorCode::cursor_mismatch);
+
+    upstream->respond(200, fixture("songlist-59b6bcf8da767f5ace4bb449.json"));
+    CHECK(unwrap(detail->detail(context(), playlist)).creator == "云知月");
+    CHECK(upstream->calls.back().request.url ==
+          "http://mobileapi.5sing.kugou.com/song/getsonglist?id=59b6bcf8da767f5ace4bb449&songfields=ID,user");
+
+    // The whole list comes in one answer; the cursor is an offset into it.
+    upstream->respond(200, fixture("songlistsong-59b6bcf8da767f5ace4bb449-first5.json"));
+    const auto page = unwrap(tracks->list(context(), playlist, {2, std::nullopt}));
+    CHECK(upstream->calls.back().request.url.rfind(
+              "http://mobileapi.5sing.kugou.com/song/getsonglistsong?id=59b6bcf8da767f5ace4bb449&", 0) == 0);
+    CHECK(upstream->calls.back().request.operation == "playlist_tracks");
+    CHECK(page.page.items.size() == 2);
+    CHECK(page.page.page.total == 5);
+    CHECK(page.next_cursor == "2");
+    upstream->respond(200, fixture("songlistsong-59b6bcf8da767f5ace4bb449-first5.json"));
+    const auto last = unwrap(tracks->list(context(), playlist, {2, std::string{"4"}}));
+    CHECK(last.page.items.size() == 1);
+    CHECK(last.page.items[0].ref.id.value() == "yc-831771");
+    CHECK_FALSE(last.next_cursor);
+
+    const auto before = upstream->calls.size();
+    CHECK(tracks->list(context(), playlist, {2, std::string{"0"}}).error().code == ErrorCode::cursor_mismatch);
+    CHECK(tracks->list(context(), test::track("fivesing", "../x"), {2, std::nullopt}).error().code ==
+          ErrorCode::validation_failed);
+    CHECK(detail->detail(context(), test::track("kuwo", "59b6bcf8da767f5ace4bb449")).error().code ==
+          ErrorCode::validation_failed);
+    CHECK(upstream->calls.size() == before);
+    for (const auto& call : upstream->calls) {
+        CHECK(call.request.secret_headers.empty());
+    }
+}
+
 // Live probe of the real service, opt-in: MUSIC_SERVICE_FIVESING_ONLINE=1. Results are
 // recorded in the T22 record.
 TEST_CASE("5sing live protocol probe", "[providers][online-fivesing]") {
@@ -575,5 +677,21 @@ TEST_CASE("5sing live protocol probe", "[providers][online-fivesing]") {
         }
     }
     WARN("high " << high << " of " << page.page.items.size());
+
+    // Playlists: search, detail and two pages of tracks, all on one list answer each.
+    auto playlists = unwrap(providers::fivesing::make_playlist_search(live));
+    const auto lists = unwrap(playlists->search(context(), {"古风", 5, std::nullopt}));
+    REQUIRE_FALSE(lists.page.items.empty());
+    const auto& list = lists.page.items[0];
+    const auto info = unwrap(unwrap(providers::fivesing::make_playlist_detail(live))->detail(context(), list.ref));
+    auto list_tracks = unwrap(providers::fivesing::make_playlist_tracks(live));
+    const auto first_tracks = unwrap(list_tracks->list(context(), list.ref, {20, std::nullopt}));
+    REQUIRE_FALSE(first_tracks.page.items.empty());
+    WARN("playlist " << info.name << " by " << info.creator.value_or("?") << ": " << *first_tracks.page.page.total
+                     << " songs listed of " << info.track_count.value_or(0));
+    if (first_tracks.next_cursor) {
+        const auto second = unwrap(list_tracks->list(context(), list.ref, {20, first_tracks.next_cursor}));
+        CHECK(second.page.items.front().ref != first_tracks.page.items.front().ref);
+    }
     CHECK(ledger->usage().total == 0);
 }

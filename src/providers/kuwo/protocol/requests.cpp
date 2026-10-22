@@ -43,4 +43,67 @@ ports::HttpRequest standard_audio(std::string_view rid, std::string_view client_
     return get(std::move(url), "resolve_audio");
 }
 
+namespace {
+
+std::string pages(std::uint32_t page, std::uint32_t page_size) {
+    return "&pn=" + std::to_string(page) + "&rn=" + std::to_string(page_size);
+}
+
+// The anonymous web client identity wapi.kuwo.cn expects.
+constexpr std::string_view wapi_client = "loginUid=0&loginSid=0&appUid=38668888";
+
+} // namespace
+
+ports::HttpRequest search_collections(std::string_view kind, std::string_view keyword, std::uint32_t page,
+                                      std::uint32_t page_size, std::string_view operation) {
+    std::string url = "https://search.kuwo.cn/r.s?all=" + encode_query_component(keyword) + "&ft=" + std::string{kind};
+    url += "&itemset=web_2013&client=kt&pcmp4=1&geo=c&vipver=1" + pages(page, page_size);
+    url += "&rformat=json&encoding=utf8";
+    return get(std::move(url), operation);
+}
+
+ports::HttpRequest playlist_page(std::string_view id, std::uint32_t page, std::uint32_t page_size,
+                                 std::string_view operation) {
+    std::string url = "https://nplserver.kuwo.cn/pl.svc?op=getlistinfo&pid=" + std::string{id} + pages(page, page_size);
+    url += "&encode=utf8&keyset=pl2012&identity=kuwo&pcmp4=1&vipver=1&newver=1";
+    return get(std::move(url), operation);
+}
+
+ports::HttpRequest album_page(std::string_view id, std::uint32_t page, std::uint32_t page_size,
+                              std::string_view operation) {
+    std::string url = "https://search.kuwo.cn/r.s?stype=albuminfo&albumid=" + std::string{id} + pages(page, page_size);
+    url += "&sortby=0&alflac=1&show_copyright_off=1&pcmp4=1&encoding=utf8";
+    return get(std::move(url), operation);
+}
+
+ports::HttpRequest playlist_tags() {
+    return get("https://wapi.kuwo.cn/api/pc/classify/playlist/getTagList?cmd=rcm_keyword_playlist&user=0"
+               "&prod=kwplayer_pc_9.1.1.2&vipver=9.1.1.2&source=kwplayer_pc_9.1.1.2&" +
+                   std::string{wapi_client},
+               "categories");
+}
+
+ports::HttpRequest tag_playlists(std::string_view tag_id, std::uint32_t page, std::uint32_t page_size) {
+    return get("https://wapi.kuwo.cn/api/pc/classify/playlist/getTagPlayList?" + std::string{wapi_client} +
+                   pages(page, page_size) + "&id=" + std::string{tag_id},
+               "category_playlists");
+}
+
+ports::HttpRequest recommended_playlists(std::uint32_t page, std::uint32_t page_size) {
+    return get("https://wapi.kuwo.cn/api/pc/classify/playlist/getRcmPlayList?" + std::string{wapi_client} +
+                   pages(page, page_size) + "&order=hot",
+               "recommend_playlists");
+}
+
+ports::HttpRequest chart_list() {
+    return get("https://wapi.kuwo.cn/api/pc/bang/list?" + std::string{wapi_client}, "charts");
+}
+
+ports::HttpRequest chart_page(std::string_view id, std::uint32_t page, std::uint32_t page_size,
+                              std::string_view operation) {
+    std::string url = "https://kbangserver.kuwo.cn/ksong.s?from=pc&fmt=json" + pages(page, page_size);
+    url += "&type=bang&data=content&id=" + std::string{id} + "&show_copyright_off=0&pcmp4=1&isbang=1&encode=utf8";
+    return get(std::move(url), operation);
+}
+
 } // namespace music_service::providers::kuwo::protocol

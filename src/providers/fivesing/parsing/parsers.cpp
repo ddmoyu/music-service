@@ -145,6 +145,11 @@ domain::VersionInfo version_of(std::string_view type) {
 // NOT_FOUND, anything else an upstream failure carrying the code.
 domain::Error refusal(const json& document, std::initializer_list<std::int64_t> missing_codes) {
     const auto code = as_uint(document, "code");
+    if (code && *code == 13) { // "操作太频繁": too many requests
+        domain::Error error{domain::ErrorCode::upstream_rate_limited, "5sing is limiting requests", true, {}};
+        error.details.push_back({"fivesing_code", "13"});
+        return error;
+    }
     if (code && std::find(missing_codes.begin(), missing_codes.end(), static_cast<std::int64_t>(*code)) !=
                     missing_codes.end()) {
         return domain::Error{domain::ErrorCode::not_found, "5sing has no such work", false, {}};
@@ -353,6 +358,149 @@ domain::Result<std::vector<AudioTier>> parse_song_urls(std::string_view body, co
         }
     }
     return tiers;
+}
+
+bool is_playlist_id(std::string_view id) noexcept {
+    return !id.empty() && id.size() <= 32 && std::all_of(id.begin(), id.end(), [](char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+    });
+}
+
+domain::Result<PlaylistSearchPage> parse_playlist_search(std::string_view body) {
+    auto document = json::parse(body, nullptr, false);
+    if (document.is_discarded() || !document.is_object()) {
+        return protocol_error("playlist search response is not a JSON object");
+    }
+    const auto info = document.find("pageInfo");
+    const auto list = document.find("list");
+    if (info == document.end() || !info->is_object() || list == document.end() ||
+        !(list->is_array() || list->is_null())) {
+        return protocol_error("playlist search response lacks list or pageInfo");
+    }
+    const auto total = as_uint(*info, "totalCount");
+    const auto page = as_uint(*info, "cur");
+    const auto pages = as_uint(*info, "totalPages");
+    if (!total || !page || !pages || *page > 100000 || *pages > 100000000) {
+        return protocol_error("playlist search response lacks totalCount, cur or totalPages");
+    }
+    PlaylistSearchPage result;
+    result.total = *total;
+    result.page = static_cast<std::uint32_t>(*page);
+    result.total_pages = static_cast<std::uint32_t>(*pages);
+    if (list->is_null()) {
+        return result;
+    }
+    for (const auto& item : *list) {
+        if (!item.is_object()) {
+            return protocol_error("playlist search item is not an object");
+        }
+        const auto id = as_string(item, "songListId");
+        if (!is_playlist_id(id)) {
+            continue;
+        }
+        domain::Playlist playlist{domain::PlatformRef{domain::SourceId::parse(source_name).value(),
+                                                      domain::PlatformId::parse(id).value()}};
+        playlist.name = clean_text(as_string(item, "title"));
+        if (auto creator = clean_text(as_string(item, "userName")); !creator.empty()) {
+            playlist.creator = std::move(creator);
+        }
+        // "0" stands for no description.
+        if (auto content = clean_text(as_string(item, "content")); !content.empty() && content != "0") {
+            playlist.description = std::move(content);
+        }
+        if (auto picture = as_string(item, "pictureUrl"); picture.rfind("http", 0) == 0) {
+            playlist.artwork = std::move(picture);
+        }
+        playlist.track_count = as_uint(item, "songCnt");
+        playlist.play_count = as_uint(item, "playCount");
+        result.playlists.push_back(std::move(playlist));
+    }
+    return result;
+}
+
+domain::Result<domain::Playlist> parse_playlist_info(std::string_view body, std::string_view id) {
+    auto document = json::parse(body, nullptr, false);
+    if (document.is_discarded() || !document.is_object()) {
+        return protocol_error("playlist response is not a JSON object");
+    }
+    const auto success = document.find("success");
+    if (success == document.end() || !success->is_boolean()) {
+        return protocol_error("playlist response lacks success");
+    }
+    if (!success->get<bool>()) {
+        auto error = refusal(document, {24});
+        if (error.code == domain::ErrorCode::not_found) {
+            error.message = "5sing has no such playlist";
+        }
+        return error;
+    }
+    const auto data = document.find("data");
+    if (data == document.end() || !data->is_object()) {
+        return protocol_error("playlist response lacks data");
+    }
+    if (as_string(*data, "ID") != id) {
+        return protocol_error("playlist response is about another playlist");
+    }
+    domain::Playlist playlist{domain::PlatformRef{domain::SourceId::parse(source_name).value(),
+                                                  domain::PlatformId::parse(id).value()}};
+    playlist.name = clean_text(as_string(*data, "T"));
+    // "暂无简介" is the placeholder for no description.
+    if (auto content = clean_text(as_string(*data, "C")); !content.empty() && content != "暂无简介") {
+        playlist.description = std::move(content);
+    }
+    if (auto picture = as_string(*data, "P"); picture.rfind("http", 0) == 0) {
+        playlist.artwork = std::move(picture);
+    }
+    playlist.track_count = as_uint(*data, "E");
+    playlist.play_count = as_uint(*data, "H");
+    if (const auto user = data->find("user"); user != data->end() && user->is_object()) {
+        if (auto name = clean_text(as_string(*user, "NN")); !name.empty()) {
+            playlist.creator = std::move(name);
+        }
+    }
+    return playlist;
+}
+
+domain::Result<std::vector<domain::Track>> parse_playlist_songs(std::string_view body) {
+    auto document = json::parse(body, nullptr, false);
+    if (document.is_discarded() || !document.is_object()) {
+        return protocol_error("playlist songs response is not a JSON object");
+    }
+    const auto success = document.find("success");
+    if (success == document.end() || !success->is_boolean()) {
+        return protocol_error("playlist songs response lacks success");
+    }
+    if (!success->get<bool>()) {
+        auto error = refusal(document, {0, 24});
+        if (error.code == domain::ErrorCode::not_found) {
+            error.message = "5sing has no such playlist";
+        }
+        return error;
+    }
+    const auto data = document.find("data");
+    if (data == document.end() || !data->is_array()) {
+        return protocol_error("playlist songs response lacks data");
+    }
+    std::vector<domain::Track> tracks;
+    for (const auto& item : *data) {
+        if (!item.is_object()) {
+            return protocol_error("playlist song is not an object");
+        }
+        const auto number = as_uint(item, "ID");
+        WorkKey key{as_string(item, "SK"), number ? std::to_string(*number) : std::string{}};
+        auto title = clean_text(as_string(item, "SN"));
+        if (!is_work_type(key.type) || !is_work_number(key.id) || title.empty()) {
+            continue;
+        }
+        domain::Track track{ref_of(key), std::move(title), {}, std::nullopt, std::nullopt, version_of(key.type)};
+        if (const auto user = item.find("user"); user != item.end() && user->is_object()) {
+            if (auto name = clean_text(as_string(*user, "NN")); !name.empty()) {
+                track.artists.push_back({std::move(name), std::nullopt});
+            }
+        }
+        tracks.push_back(std::move(track));
+    }
+    return tracks;
 }
 
 domain::Result<WorkKey> parse_track_link(std::string_view link) {

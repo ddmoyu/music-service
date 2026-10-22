@@ -96,7 +96,7 @@ struct SearchCursor {
     std::uint32_t offset{0};
 };
 
-std::optional<SearchCursor> parse_cursor(std::string_view text) {
+std::optional<SearchCursor> parse_cursor(std::string_view text, std::uint32_t page_size) {
     const auto read = [](std::string_view part, std::uint32_t& value) {
         const auto [end, ec] = std::from_chars(part.data(), part.data() + part.size(), value);
         return !part.empty() && ec == std::errc{} && end == part.data() + part.size();
@@ -108,7 +108,7 @@ std::optional<SearchCursor> parse_cursor(std::string_view text) {
     }
     if (colon != std::string_view::npos &&
         (!read(text.substr(colon + 1), cursor.offset) || cursor.offset < 1 ||
-         cursor.offset >= protocol::search_page_size)) {
+         cursor.offset >= page_size)) {
         return std::nullopt;
     }
     return cursor;
@@ -129,7 +129,7 @@ public:
         }
         SearchCursor cursor;
         if (query.cursor) {
-            auto parsed = parse_cursor(*query.cursor);
+            auto parsed = parse_cursor(*query.cursor, protocol::search_page_size);
             if (!parsed) {
                 return Error{ErrorCode::cursor_mismatch, "cursor is not a 5sing search position", false, {}};
             }
@@ -164,6 +164,149 @@ public:
         }
         const auto returned = static_cast<std::uint32_t>(result.page.items.size());
         result.page.page = {query.limit, returned, parsed->total, result.next_cursor.has_value()};
+        return result;
+    }
+
+private:
+    Client client_;
+};
+
+// One page of a search answer: at most limit entries from the cursor's offset, then the
+// rest of the page, then the next page.
+template <class Item>
+ports::CatalogPage<Item> search_page(std::vector<Item>& entries, const SearchCursor& cursor, std::uint32_t limit,
+                                     std::uint64_t total, std::uint32_t total_pages) {
+    const auto from = std::min<std::size_t>(cursor.offset, entries.size());
+    const auto to = std::min<std::size_t>(from + limit, entries.size());
+    ports::CatalogPage<Item> result;
+    result.page.items.assign(std::make_move_iterator(entries.begin() + static_cast<std::ptrdiff_t>(from)),
+                             std::make_move_iterator(entries.begin() + static_cast<std::ptrdiff_t>(to)));
+    if (to < entries.size()) {
+        result.next_cursor = std::to_string(cursor.page) + ":" + std::to_string(to);
+    } else if (!entries.empty() && cursor.page < total_pages) {
+        result.next_cursor = std::to_string(cursor.page + 1);
+    }
+    const auto returned = static_cast<std::uint32_t>(result.page.items.size());
+    result.page.page = {limit, returned, total, result.next_cursor.has_value()};
+    return result;
+}
+
+class PlaylistSearch final : public ports::PlaylistSearch {
+public:
+    explicit PlaylistSearch(const ports::ProviderSetup& setup) : client_(setup) {}
+
+    domain::Result<ports::CatalogPage<domain::Playlist>> search(const ports::ProviderContext& context,
+                                                                const ports::SearchQuery& query) override {
+        const auto text = parsing::clean_text(query.text);
+        if (text.empty() || query.text.size() > max_query_bytes) {
+            return Error::validation("q", "must be 1 to 200 bytes");
+        }
+        if (query.limit < 1 || query.limit > 50) {
+            return Error::validation("limit", "must be between 1 and 50");
+        }
+        SearchCursor cursor;
+        if (query.cursor) {
+            auto parsed = parse_cursor(*query.cursor, protocol::playlist_search_page_size);
+            if (!parsed) {
+                return Error{ErrorCode::cursor_mismatch, "cursor is not a 5sing search position", false, {}};
+            }
+            cursor = *parsed;
+        }
+        auto body = client_.body(protocol::search_playlists(query.text, cursor.page), context);
+        if (!body) {
+            return std::move(body).error();
+        }
+        auto parsed = parsing::parse_playlist_search(*body);
+        if (!parsed) {
+            return std::move(parsed).error();
+        }
+        if (parsed->page != cursor.page && !(parsed->total == 0 && parsed->playlists.empty())) {
+            Error error{ErrorCode::upstream_failed, "the 5sing response could not be read", false, {}};
+            error.details.push_back({"protocol", "search response is for another page"});
+            return error;
+        }
+        return search_page(parsed->playlists, cursor, query.limit, parsed->total, parsed->total_pages);
+    }
+
+private:
+    Client client_;
+};
+
+domain::Result<std::string> playlist_id(const domain::PlatformRef& entity) {
+    if (entity.source.value() != protocol::source) {
+        return Error::validation("id", "is not a 5sing playlist");
+    }
+    if (!parsing::is_playlist_id(entity.id.value())) {
+        return Error::validation("id", "is not a 5sing playlist id");
+    }
+    return entity.id.value();
+}
+
+class PlaylistDetail final : public ports::PlaylistDetail {
+public:
+    explicit PlaylistDetail(const ports::ProviderSetup& setup) : client_(setup) {}
+
+    domain::Result<domain::Playlist> detail(const ports::ProviderContext& context,
+                                            const domain::PlatformRef& entity) override {
+        auto id = playlist_id(entity);
+        if (!id) {
+            return std::move(id).error();
+        }
+        auto body = client_.body(protocol::playlist_info(*id), context);
+        if (!body) {
+            return std::move(body).error();
+        }
+        return parsing::parse_playlist_info(*body, *id);
+    }
+
+private:
+    Client client_;
+};
+
+// The API answers every song at once; the cursor is the offset into that list.
+class PlaylistTracks final : public ports::PlaylistTracks {
+public:
+    explicit PlaylistTracks(const ports::ProviderSetup& setup) : client_(setup) {}
+
+    domain::Result<ports::CatalogPage<domain::Track>> list(const ports::ProviderContext& context,
+                                                           const domain::PlatformRef& entity,
+                                                           const ports::ListQuery& query) override {
+        auto id = playlist_id(entity);
+        if (!id) {
+            return std::move(id).error();
+        }
+        if (query.limit < 1 || query.limit > 100) {
+            return Error::validation("limit", "must be between 1 and 100");
+        }
+        std::uint32_t offset = 0;
+        if (query.cursor) {
+            const auto& text = *query.cursor;
+            const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), offset);
+            if (text.empty() || ec != std::errc{} || end != text.data() + text.size() || offset < 1 ||
+                offset > 100000) {
+                return Error{ErrorCode::cursor_mismatch, "cursor is not a 5sing playlist position", false, {}};
+            }
+        }
+        auto body = client_.body(protocol::playlist_songs(*id), context);
+        if (!body) {
+            return std::move(body).error();
+        }
+        auto songs = parsing::parse_playlist_songs(*body);
+        if (!songs) {
+            return std::move(songs).error();
+        }
+        const auto from = std::min<std::size_t>(offset, songs->size());
+        const auto to = std::min<std::size_t>(from + query.limit, songs->size());
+        ports::CatalogPage<domain::Track> result;
+        result.page.items.assign(std::make_move_iterator(songs->begin() + static_cast<std::ptrdiff_t>(from)),
+                                 std::make_move_iterator(songs->begin() + static_cast<std::ptrdiff_t>(to)));
+        if (to < songs->size()) {
+            result.next_cursor = std::to_string(to);
+        }
+        // The total is the songs the list holds now; the playlist's own count may include
+        // removed works.
+        result.page.page = {query.limit, static_cast<std::uint32_t>(result.page.items.size()), songs->size(),
+                            result.next_cursor.has_value()};
         return result;
     }
 
@@ -420,6 +563,18 @@ domain::Result<std::shared_ptr<ports::ILinkParser>> make_link_parser(const ports
 
 domain::Result<std::shared_ptr<ports::IAssetResolver>> make_resolver(const ports::ProviderSetup& setup) {
     return make_networked<ports::IAssetResolver, Resolver>(setup);
+}
+
+domain::Result<std::shared_ptr<ports::PlaylistSearch>> make_playlist_search(const ports::ProviderSetup& setup) {
+    return make_networked<ports::PlaylistSearch, PlaylistSearch>(setup);
+}
+
+domain::Result<std::shared_ptr<ports::PlaylistDetail>> make_playlist_detail(const ports::ProviderSetup& setup) {
+    return make_networked<ports::PlaylistDetail, PlaylistDetail>(setup);
+}
+
+domain::Result<std::shared_ptr<ports::PlaylistTracks>> make_playlist_tracks(const ports::ProviderSetup& setup) {
+    return make_networked<ports::PlaylistTracks, PlaylistTracks>(setup);
 }
 
 } // namespace music_service::providers::fivesing

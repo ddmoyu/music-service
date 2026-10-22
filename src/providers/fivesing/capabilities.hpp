@@ -21,5 +21,10 @@ domain::Result<std::shared_ptr<ports::ILyrics>> make_lyrics(const ports::Provide
 // MP3. One tier's primary address is checked with HEAD; its backup is used only when it
 // names the same file (same md5 file name) and the primary does not answer.
 domain::Result<std::shared_ptr<ports::IAssetResolver>> make_resolver(const ports::ProviderSetup& setup);
+// Playlists (T23): search (15 per upstream page, cursor "<page>[:<offset>]"), detail and
+// tracks (the whole list in one answer, cursor an offset into it).
+domain::Result<std::shared_ptr<ports::PlaylistSearch>> make_playlist_search(const ports::ProviderSetup& setup);
+domain::Result<std::shared_ptr<ports::PlaylistDetail>> make_playlist_detail(const ports::ProviderSetup& setup);
+domain::Result<std::shared_ptr<ports::PlaylistTracks>> make_playlist_tracks(const ports::ProviderSetup& setup);
 
 } // namespace music_service::providers::fivesing

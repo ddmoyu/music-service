@@ -35,6 +35,9 @@ std::vector<ports::PlaintextEndpoint> plaintext_endpoints() {
         {std::string{api_host}, 80, "/song/newget", "track_detail", false},
         {std::string{api_host}, 80, "/song/newget", "lyrics", false},
         {std::string{api_host}, 80, "/song/getSongUrl", "resolve_audio", false},
+        {std::string{search_host}, 80, "/home/json", "search_playlists", false},
+        {std::string{api_host}, 80, "/song/getsonglist", "playlist_detail", false},
+        {std::string{api_host}, 80, "/song/getsonglistsong", "playlist_tracks", false},
     };
 }
 
@@ -51,6 +54,22 @@ ports::HttpRequest song_info(std::string_view type, std::string_view id, std::st
 
 ports::HttpRequest song_urls(std::string_view type, std::string_view id) {
     return get("http://" + std::string{api_host} + "/song/getSongUrl?" + work_query(type, id), "resolve_audio");
+}
+
+ports::HttpRequest search_playlists(std::string_view keyword, std::uint32_t page) {
+    std::string url = "http://" + std::string{search_host} + "/home/json?keyword=" + encode_query_component(keyword);
+    url += "&sort=1&page=" + std::to_string(page) + "&filter=0&type=1";
+    return get(std::move(url), "search_playlists");
+}
+
+ports::HttpRequest playlist_info(std::string_view id) {
+    return get("http://" + std::string{api_host} + "/song/getsonglist?id=" + std::string{id} + "&songfields=ID,user",
+               "playlist_detail");
+}
+
+ports::HttpRequest playlist_songs(std::string_view id) {
+    return get("http://" + std::string{api_host} + "/song/getsonglistsong?id=" + std::string{id} + "&page=1&pagesize=1000",
+               "playlist_tracks");
 }
 
 ports::HttpRequest audio_probe(std::string url) {

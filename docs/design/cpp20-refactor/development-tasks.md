@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-22。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T19 **已完成**，T20 **受阻**（仅容器内的在线下载闭环，见实施记录），T29 **已完成**，T30 **已完成**（侧文件拆为子任务 T30.s，未开始），T21 **已完成**，T22 **已完成**，T41 **已完成**（选用 5sing），S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-22。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T19 **已完成**，T20 **受阻**（仅容器内的在线下载闭环，见实施记录），T29 **已完成**，T30 **已完成**（侧文件拆为子任务 T30.s，未开始），T21 **已完成**，T22 **已完成**，T41 **已完成**（选用 5sing），T23 **待验收**（CI 待运行），S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,7 +262,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-T20（S1 酷我端到端关口）除容器内的在线下载闭环外均已通过：须在能访问酷我音源接口的网络上运行 `packaging/docker/e2e.sh` 后转为已完成，S1 随之通过。T29 的实现只依赖 T17 的执行代码，已先行交付；T30（标签库 TagLib v2.3.2，按 MPL-1.1 静态链接）已交付标签与 FLAC／M4A 验证，侧文件留作子任务 T30.s。T21 交付公共集合用例与路由；T22（5sing）作为第二个原生平台接入，T41 以酷我与 5sing 验证扩展关口；之后为 S2 的 T23 与 S3 的 T31。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+T20（S1 酷我端到端关口）除容器内的在线下载闭环外均已通过：须在能访问酷我音源接口的网络上运行 `packaging/docker/e2e.sh` 后转为已完成，S1 随之通过。T29 的实现只依赖 T17 的执行代码，已先行交付；T30（标签库 TagLib v2.3.2，按 MPL-1.1 静态链接）已交付标签与 FLAC／M4A 验证，侧文件留作子任务 T30.s。T21 交付公共集合用例与路由；T22（5sing）作为第二个原生平台接入，T41 以酷我与 5sing 验证扩展关口；T23 为两平台接入歌单、专辑、榜单、分类与推荐，之后为 S2 的 T28 与 S3 的 T31。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
@@ -447,6 +447,19 @@ T20（S1 酷我端到端关口）除容器内的在线下载闭环外均已通�
 | Windows 证据（2026-10-21） | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 205/205 通过（3 项在线用例按设计跳过）；GCC 16.2 在 -O2 严格警告下检查改动的源码与测试 0 条警告 |
 | Linux 证据（CI 运行 39525823045、39526810353） | ubuntu-24.04，GCC 13.3.0：205/205 通过，Windows 与容器任务同时通过。首次运行在测试替身 mock_providers.hpp 中有 4 条 -Wmissing-field-initializers（ResolvedAudio 新字段未初始化），由 23c2271 修复后复跑 0 条项目警告 |
 | 已知限制 | 只验证 MP3（酷我标准品质的实际容器）；FLAC／M4A／Ogg／WAV／ADTS 的结构验证、标签写入与解密归 T30 及具体平台；不做完整解码证明；整曲判定依赖平台声明时长；处理器由 T17 的 Runner 在 processing 阶段调用，结果写入任务记录后才参与已完成结果复用的证据复核 |
+
+### T23 已接平台的集合功能落地：待验收（2026-10-22，Windows 通过，CI 待运行）
+
+| 项目 | 记录 |
+| --- | --- |
+| 交付 | 酷我（kuwo-native 新增 12 项能力，全部 HTTPS）：search_playlists、search_albums（`search.kuwo.cn/r.s` ft=playlist／album，单引号伪 JSON 由 `legacy_json` 转换）、playlist_detail／playlist_tracks（`nplserver.kuwo.cn/pl.svc`）、album_detail／album_tracks（`r.s` stype=albuminfo）、chart_detail／chart_tracks（`kbangserver.kuwo.cn/ksong.s`，encode=utf8）、charts（`wapi.kuwo.cn/api/pc/bang/list` 树的叶子，id 即 ksong.s 的榜单号）、categories（getTagList 中 digest 10000 的歌单标签，专区类条目不列）、category_playlists（getTagPlayList）、recommend_playlists（getRcmPlayList order=hot）。5sing（新增 3 项）：search_playlists（`home/json` type=1，每页固定 15 条，游标 `页码[:偏移]`）、playlist_detail（`song/getsonglist`）、playlist_tracks（`song/getsonglistsong`，上游忽略分页、一次返回整张歌单，游标为偏移量），3 个明文端点按 operation 登记。酷我 HTTP 客户端移入 `client.hpp`，搜索与集合共用 |
+| 规则落实 | 每次调用只请求一个上游页（5sing 歌单曲目除外：上游只给整表），不在后台枚举整张歌单；track_count 是平台声明，与当前页大小无关；酷我对未知歌单 pid 返回另一个空歌单，按 id 不符判 NOT_FOUND；未知专辑（无 albumid）与未知榜单（`{}`）为 NOT_FOUND；未知分类返回空页（与空分类无法区分）；非数字的分类或集合 id、其他来源的 id、非法游标与超限 limit 不发请求；wapi 的 code≠200 为带 kuwo_code 的失败；5sing code 13（操作太频繁）为可重试的 UPSTREAM_RATE_LIMITED，code 24 或 success=false 的歌单为 NOT_FOUND；5sing 网页歌单会截断长标题，因此只用 API。所有集合走 T21 的公共路由与游标（换 principal 为 CURSOR_EXPIRED），通用层无改动 |
+| 协议准备 | 2026-10-22 自中国大陆网络匿名实测，上表端点均返回 UTF-8（ksong.s 需 encode=utf8，否则为 GBK）；样本见 `tests/fixtures/providers/kuwo` 与 `tests/fixtures/providers/fivesing`（歌单曲目只保留前 5 首，请求标识置零） |
+| 离线契约 | `kuwo_collections_test.cpp`：伪 JSON 转换（引号、`\'`、未闭合）、歌单／专辑搜索映射与页码校验、同名不同专辑、歌单／专辑／榜单页（含专辑曲目的数字 albumId、榜单用 song_duration）、三种不存在、分类（67 个歌单标签）、分类与推荐歌单、榜单树（36 个）、能力对象的 URL／页码／游标／1 起页的 wapi、非法输入不发请求、只走 HTTPS、503 可重试、声明的能力；`fivesing_test.cpp`：歌单搜索（去高亮、空名、无简介）、歌单详情（占位简介、不存在、id 不符）、歌单曲目（完整标题、类型、不存在、code 13）、歌单 id 校验、游标页内续读与换页、偏移游标、非法输入不发请求；`fivesing_gate_test.cpp`：酷我歌单曲目经公共路由分页、他人游标 CURSOR_EXPIRED、榜单列表 catalog_kind=live、榜单详情、5sing 榜单 422 |
+| 在线验证 | Windows（2026-10-22，中国大陆网络）：`[online-kuwo]` 歌单搜索“周杰伦”取首个歌单前 10／177 首、专辑“叶惠美”11 首、榜单 36 个且热歌榜第 2 页 10 首、分类 67 个且首个分类有歌单、推荐歌单 5 个；`[online-fivesing]` 歌单搜索“古风”、详情“古风 by 云知月”、曲目 153 首分两页读取且不重复 |
+| Windows 证据 | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 300 项全部通过；GCC 16.2 -O2 严格警告检查改动的平台包源码与测试 0 条项目警告 |
+| Linux／macOS／容器证据 | 待 CI 运行；通过后补记运行号并改为已完成 |
+| 已知限制 | 酷我歌词未实现（newlyric 接口需 zlib 解压与 GB18030 解码，需新增依赖，另立任务）；两平台均未实现歌手（search_artists、artist_tracks、artist_albums）；5sing 没有专辑、榜单、分类与推荐（参考实现也未提供）；歌单与专辑链接解析未加入（parse_links 仍只识别单曲链接）；5sing 歌单曲目每次调用都取整表，超大歌单受上游响应大小上限约束；封面只透传公开地址 |
 
 ### T41 第二个真实平台扩展关口：已完成（2026-10-22，提交 8bf3bd4；选用 T22 5sing）
 

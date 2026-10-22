@@ -14,4 +14,6 @@
 | `url-bz-3177109.json` | 同上，只有 lq | 同上 |
 | `url-missing.json` | 同上，不存在的作品（code 28） | 无需处理 |
 
+歌单样本（T23，2026-10-22）：`search-playlist-gufeng-p1.json`（type=1，关键词“古风”）、`search-playlist-empty.json`、`songlist-59b6bcf8da767f5ace4bb449.json`（getsonglist）、`songlist-missing.json`（code 24）、`songlistsong-59b6bcf8da767f5ace4bb449-first5.json`（getsonglistsong，上游一次返回全部 153 首，样本只保留前 5 首）、`songlistsong-missing.json`。
+
 录制时用 HTTP Range 读取各档前 200 KB 的 MP3 帧头确认码率：sq 320、hq 192、lq 128 kbit/s；同一档的 primary 与 backup 返回相同长度、相同 Last-Modified，且没有 ETag。上游格式变化时重新录制并更新本表，不手工编造字段。

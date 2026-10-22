@@ -1,6 +1,7 @@
 #include "providers/kuwo/bundle.hpp"
 
 #include "providers/kuwo/capabilities.hpp"
+#include "providers/kuwo/collections.hpp"
 
 #include <utility>
 
@@ -30,6 +31,13 @@ ports::ProviderBundle make_bundle() {
         ports::CapabilityBinding::bind<ports::ILinkParser>(make_link_parser),
         ports::CapabilityBinding::bind<ports::IAssetResolver>(make_resolver),
     };
+    // T23: the collection capabilities verified on 2026-10-22.
+    for (auto& spec : collection_capabilities()) {
+        bundle.capabilities.push_back(std::move(spec));
+    }
+    for (auto& binding : collection_bindings()) {
+        bundle.bindings.push_back(std::move(binding));
+    }
     bundle.quality_hints = {domain::Quality::standard};
     return bundle;
 }

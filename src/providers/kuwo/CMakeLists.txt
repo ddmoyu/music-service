@@ -2,6 +2,9 @@
 add_library(music_service_provider_kuwo STATIC
     bundle.cpp
     capabilities.cpp
+    client.cpp
+    collections.cpp
+    parsing/collections.cpp
     parsing/parsers.cpp
     protocol/requests.cpp
 )

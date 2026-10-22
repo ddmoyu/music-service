@@ -47,6 +47,7 @@ add_executable(music_service_unit_tests
     unit/infrastructure/filesystem_test.cpp
     unit/infrastructure/observability_test.cpp
     unit/infrastructure/secret_store_test.cpp
+    unit/providers/kuwo_collections_test.cpp
     unit/providers/kuwo_test.cpp
     unit/providers/registry_test.cpp
     unit/runtime/admission_ledger_test.cpp

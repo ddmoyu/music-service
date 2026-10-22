@@ -230,6 +230,10 @@ std::string decode_text(std::string_view text) {
     return std::string{trim(out)};
 }
 
+std::vector<domain::ArtistSummary> parse_artists(std::string_view names, std::string_view ids) {
+    return artists_from(names, ids);
+}
+
 domain::Result<SearchPage> parse_search(std::string_view body) {
     auto document = json::parse(body, nullptr, false);
     if (document.is_discarded() || !document.is_object()) {

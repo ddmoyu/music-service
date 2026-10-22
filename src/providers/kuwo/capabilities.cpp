@@ -1,5 +1,6 @@
 #include "providers/kuwo/capabilities.hpp"
 
+#include "providers/kuwo/client.hpp"
 #include "providers/kuwo/parsing/parsers.hpp"
 #include "providers/kuwo/protocol/requests.hpp"
 
@@ -17,56 +18,6 @@ using domain::Error;
 using domain::ErrorCode;
 
 constexpr std::size_t max_query_bytes = 200;
-
-Error http_status_error(const ports::HttpResponseHead& head) {
-    const auto status = head.status;
-    if (status == 429) {
-        // The upstream client already fed Retry-After to admission; pass it on as a hint.
-        Error error{ErrorCode::upstream_rate_limited, "kuwo is limiting requests", true, {}};
-        error.details.push_back({"http_status", "429"});
-        if (auto wait = head.header("Retry-After"); wait && !wait->empty() &&
-                                                    wait->find_first_not_of("0123456789") == std::string::npos) {
-            error.details.push_back({"retry_after_seconds", std::move(*wait)});
-        }
-        return error;
-    }
-    Error error{ErrorCode::upstream_failed, "kuwo answered with an unexpected status", status >= 500, {}};
-    error.details.push_back({"http_status", std::to_string(status)});
-    return error;
-}
-
-// Shared request path: the upstream client with the operation's admission request.
-class Client {
-public:
-    explicit Client(const ports::ProviderSetup& setup)
-        : source_(setup.source), upstream_(setup.upstream), rate_limit_group_(setup.rate_limit_group) {}
-
-    domain::Result<ports::HttpResponse> fetch(ports::HttpRequest request, const ports::ProviderContext& context) const {
-        ports::AdmissionRequest base{context.identity.binding().principal_id(),
-                                     source_,
-                                     request.operation,
-                                     ports::TrafficClass::short_request,
-                                     context.identity,
-                                     {},
-                                     rate_limit_group_,
-                                     context.operation.deadline};
-        auto result = upstream_->fetch(std::move(request), base, context.operation);
-        if (!result) {
-            return std::move(result).error();
-        }
-        if (auto* pending = std::get_if<ports::PendingHop>(&result.value())) {
-            Error error{ErrorCode::service_busy, "upstream capacity is not available now", true, {}};
-            error.details.push_back({"admission", pending->deferred.blocked_dimension});
-            return error;
-        }
-        return std::get<ports::HttpResponse>(std::move(result).value());
-    }
-
-private:
-    domain::SourceId source_;
-    std::shared_ptr<ports::UpstreamHttp> upstream_;
-    std::string rate_limit_group_;
-};
 
 domain::Result<std::string> kuwo_rid(const domain::TrackRef& track) {
     if (track.source.value() != protocol::source) {
@@ -256,13 +207,6 @@ private:
 
     Client client_;
 };
-
-domain::Result<void> require_upstream(const ports::ProviderSetup& setup) {
-    if (!setup.upstream) {
-        return Error{ErrorCode::internal, "kuwo needs the upstream client", false, {}};
-    }
-    return domain::ok();
-}
 
 } // namespace
 

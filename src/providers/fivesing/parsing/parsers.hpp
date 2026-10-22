@@ -65,6 +65,26 @@ domain::Result<std::vector<AudioTier>> parse_song_urls(std::string_view body, co
 // Anything else is VALIDATION_FAILED. No network.
 domain::Result<WorkKey> parse_track_link(std::string_view link);
 
+// Playlists (T23). Playlist ids are 1..32 letters and digits (24 hex digits today).
+[[nodiscard]] bool is_playlist_id(std::string_view id) noexcept;
+
+struct PlaylistSearchPage {
+    std::vector<domain::Playlist> playlists;
+    std::uint64_t total{0};
+    std::uint32_t page{0}; // 1-based
+    std::uint32_t total_pages{0};
+};
+
+// search.5sing.kugou.com/home/json with type=1.
+domain::Result<PlaylistSearchPage> parse_playlist_search(std::string_view body);
+
+// song/getsonglist: one playlist. A missing playlist (code 24) is NOT_FOUND.
+domain::Result<domain::Playlist> parse_playlist_info(std::string_view body, std::string_view id);
+
+// song/getsonglistsong: every song of a playlist, in order; entries that are not a known
+// work type are left out. A missing playlist (success false) is NOT_FOUND.
+domain::Result<std::vector<domain::Track>> parse_playlist_songs(std::string_view body);
+
 // Decodes HTML character references, removes markup such as the search highlight
 // <em class="keyword"> and trims surrounding whitespace.
 [[nodiscard]] std::string clean_text(std::string_view text);
