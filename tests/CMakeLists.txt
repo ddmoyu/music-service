@@ -98,6 +98,7 @@ add_executable(music_service_integration_tests
     integration/media_test.cpp
     integration/publication_test.cpp
     integration/runner_test.cpp
+    integration/s3_gate_test.cpp
     integration/server_test.cpp
     integration/storage_test.cpp
     integration/transport_test.cpp
