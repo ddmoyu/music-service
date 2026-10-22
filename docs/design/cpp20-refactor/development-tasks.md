@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-22。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T19 **已完成**，T20 **受阻**（仅容器内的在线下载闭环，见实施记录），T29 **已完成**，T30 **已完成**（侧文件拆为子任务 T30.s，未开始），T21 **已完成**，T22 **已完成**，T41 **待验收**（CI 待运行，选用 5sing），S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-22。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T19 **已完成**，T20 **受阻**（仅容器内的在线下载闭环，见实施记录），T29 **已完成**，T30 **已完成**（侧文件拆为子任务 T30.s，未开始），T21 **已完成**，T22 **已完成**，T41 **已完成**（选用 5sing），S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -448,7 +448,7 @@ T20（S1 酷我端到端关口）除容器内的在线下载闭环外均已通�
 | Linux 证据（CI 运行 39525823045、39526810353） | ubuntu-24.04，GCC 13.3.0：205/205 通过，Windows 与容器任务同时通过。首次运行在测试替身 mock_providers.hpp 中有 4 条 -Wmissing-field-initializers（ResolvedAudio 新字段未初始化），由 23c2271 修复后复跑 0 条项目警告 |
 | 已知限制 | 只验证 MP3（酷我标准品质的实际容器）；FLAC／M4A／Ogg／WAV／ADTS 的结构验证、标签写入与解密归 T30 及具体平台；不做完整解码证明；整曲判定依赖平台声明时长；处理器由 T17 的 Runner 在 processing 阶段调用，结果写入任务记录后才参与已完成结果复用的证据复核 |
 
-### T41 第二个真实平台扩展关口：待验收（2026-10-22，选用 T22 5sing；Windows 通过，CI 待运行）
+### T41 第二个真实平台扩展关口：已完成（2026-10-22，提交 8bf3bd4；选用 T22 5sing）
 
 | 项目 | 记录 |
 | --- | --- |
@@ -457,7 +457,7 @@ T20（S1 酷我端到端关口）除容器内的在线下载闭环外均已通�
 | 关口用例 | `fivesing_gate_test.cpp` 的 `[gate][t41]`：真实进程同时载入两个真实协议包，两个 principal 各有自己的下载目录。注册：providers 列表含两源，`capability=resolve_audio` 两源、`capability=lyrics` 只有 5sing、`capability=search_playlists` 为空，执行方式均为 native、无授权方法，品质提示分别为 [standard] 与 [standard, high]。能力差异：酷我歌词 422 CAPABILITY_UNSUPPORTED、5sing 200；酷我 high 为 422 QUALITY_UNAVAILABLE，5sing high＋allow_lower 降为 standard；一个来源的 id 在另一来源为 400。身份隔离：A 的两源合并搜索第二次两源均命中缓存，B 的同一搜索两源都不命中并再次请求上游；A 同时下载酷我与 5sing、B 下载 5sing，三项并发完成，A 的 SSE 只有 A 的两项、B 的只有 B 的一项；两源任务经过完全相同的状态序列；文件分别落在各自目标目录，载荷与上游一致且标签完整；对方的任务与文件为 404，任务列表互不可见。下载复用：A 用新 key 再次提交两源均复用已完成文件、不再请求 CDN；B 的同一曲目单独下载（不跨 principal 复用） |
 | 真实来源证据 | 2026-10-22 Windows（中国大陆网络）：`kuwo_e2e.py`（酷我，3.6 s）与 `kuwo_e2e.py --source fivesing`（5sing，3.0 s）的完整在线闭环均通过，两者走同一控制入口、同一下载执行器与同一文件访问；T22 CI 见 T22 记录 |
 | Windows 证据 | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 291 项全部通过；`[gate]` 连续 5 次通过 |
-| Linux／macOS／容器证据 | 待 CI 运行；通过后补记运行号并改为已完成 |
+| Linux／macOS／容器证据 | CI 运行 39705296535：Linux GCC 13、macOS Clang、Windows MSVC 各 291／291 通过（含 `[t41]`），Linux 构建 0 条项目警告（T22 记录中 flac.cpp 的警告已消除）；容器构建与冒烟通过；5sing 在线闭环在三个运行器与容器内再次全部通过，酷我在线闭环仍为 code 407（T20 的既有缺口） |
 | 已知限制 | 两个来源都是匿名来源，账号隔离验证的是 principal 与匿名授权身份；带凭证账号的多账号隔离在第一个需要凭证的平台（如 T24／T25）复验。集合能力的真实落地归 T23 |
 
 ### T22 5sing 原生平台接入：已完成（2026-10-22，提交 371646e）
