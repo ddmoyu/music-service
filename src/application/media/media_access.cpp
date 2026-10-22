@@ -1,5 +1,6 @@
 #include "application/media/media_access.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace music_service::application::media {
@@ -49,16 +50,72 @@ domain::Result<AccessDescription> MediaAccessService::describe(const AccessReque
     if (request.kind == TargetKind::file) {
         return describe_file(request);
     }
+    return describe_asset(request);
+}
+
+domain::Result<AccessDescription> MediaAccessService::describe_asset(const AccessRequest& request) {
     // The asset must be the caller's and still valid before any feature answer.
-    auto asset = assets_->describe(request.owner_id, request.target_id);
-    if (!asset) {
-        return std::move(asset).error();
+    auto facts = assets_->delivery(request.owner_id, request.target_id);
+    if (!facts) {
+        return std::move(facts).error();
     }
-    if (request.mode == DeliveryMode::direct ||
-        (request.mode == DeliveryMode::automatic && features_.direct_media_urls)) {
+    const auto& asset = facts->descriptor;
+    if (facts->needs_processing) {
+        return Error{ErrorCode::delivery_unavailable,
+                     "this audio must be processed before it can be played",
+                     false,
+                     {{"asset", "decryption is required; download it instead"}}};
+    }
+    const bool can_direct = facts->shareable && !facts->needs_secrets;
+    if (request.mode == DeliveryMode::direct && !features_.direct_media_urls) {
         return unavailable("direct media URLs are not enabled");
     }
-    return unavailable("the online media proxy is not enabled");
+    if (request.mode == DeliveryMode::direct && !can_direct) {
+        return Error{ErrorCode::delivery_unavailable,
+                     "this audio address cannot be handed to clients",
+                     false,
+                     {{"mode", "direct needs a shareable address without secrets or decryption"}}};
+    }
+    const bool direct = request.mode == DeliveryMode::direct ||
+                        (request.mode == DeliveryMode::automatic && features_.direct_media_urls && can_direct);
+    if (!direct && !features_.media_proxy) {
+        return unavailable("the online media proxy is not enabled");
+    }
+
+    AccessDescription out;
+    out.kind = TargetKind::asset;
+    out.target_id = asset.asset_id;
+    out.content_type = content_type_of(asset.container.value_or(""));
+    out.actual_track = asset.actual_track;
+    out.actual_quality = asset.actual_quality;
+    const auto requested = clock_->now() + request.ttl.value_or(default_ttl_);
+    const auto expires_at = std::min(requested, asset.expires_at);
+    if (direct) {
+        auto url = assets_->direct_url(request.owner_id, asset.asset_id);
+        if (!url) {
+            return std::move(url).error();
+        }
+        out.delivery = "direct";
+        out.url = std::move(url).value();
+        out.auth = "url";
+        out.expires_at = expires_at; // when to ask again; the upstream decides its own
+        return out;
+    }
+    out.delivery = "proxy";
+    if (request.auth == MediaAuth::bearer) {
+        out.url = media_base_url_ + "/media/v1/assets/" + asset.asset_id;
+        out.auth = "bearer";
+        out.expires_at = asset.expires_at;
+        return out;
+    }
+    auto ticket = tickets_->issue({request.owner_id, request.token_id, TargetKind::asset, asset.asset_id, expires_at});
+    if (!ticket) {
+        return std::move(ticket).error();
+    }
+    out.url = media_base_url_ + "/media/v1/tickets/" + ticket->token;
+    out.auth = "url";
+    out.expires_at = ticket->expires_at;
+    return out;
 }
 
 domain::Result<AccessDescription> MediaAccessService::describe_file(const AccessRequest& request) {

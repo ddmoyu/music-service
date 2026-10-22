@@ -115,6 +115,8 @@ domain::Result<cfg::ServiceConfig> load_config(const Arguments& args, const Host
     options.build.providers = provider_sources(host);
     options.build.event_server = true;
     options.build.media_server = true;
+    options.build.media_proxy = true;
+    options.build.direct_media_urls = true;
     return infrastructure::config::load_service_config(options);
 }
 

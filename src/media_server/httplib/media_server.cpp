@@ -1,6 +1,7 @@
 #include "media_server/httplib/media_server.hpp"
 
 #include "application/accounts/scopes.hpp"
+#include "application/catalog/asset_service.hpp"
 #include "application/media/media_access.hpp"
 
 #ifdef _MSC_VER
@@ -17,6 +18,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <span>
+#include <stop_token>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -31,6 +36,7 @@ namespace {
 using json = nlohmann::json;
 namespace accounts = application::accounts;
 namespace media = application::media;
+namespace catalog = application::catalog;
 using domain::ErrorCode;
 using SteadyClock = std::chrono::steady_clock;
 
@@ -57,11 +63,16 @@ int status_for(ErrorCode code) {
     case ErrorCode::media_ticket_expired:
         return 410;
     case ErrorCode::destination_unavailable:
+    case ErrorCode::delivery_unavailable:
         return 422;
     case ErrorCode::caller_limit_exceeded:
         return 429;
     case ErrorCode::feature_unavailable:
         return 501;
+    case ErrorCode::upstream_failed:
+        return 502;
+    case ErrorCode::upstream_timeout:
+        return 504;
     case ErrorCode::service_busy:
     case ErrorCode::storage_unavailable:
         return 503;
@@ -163,31 +174,130 @@ bool none_match(const std::string& header, const std::string& etag) {
     return false;
 }
 
+// Upstream audio handed from the pool thread that reads it to the connection thread that
+// writes it. The queue holds at most bridge_buffer_bytes: a slow client makes the reader
+// wait (backpressure), and a client that leaves cancels the upstream through stop.
+struct Bridge {
+    explicit Bridge(std::size_t limit) : limit_bytes(limit) {}
+
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::optional<catalog::StreamHead> head;
+    std::optional<domain::Error> error;
+    std::deque<std::string> chunks;
+    std::size_t queued_bytes{0};
+    std::size_t limit_bytes;
+    bool done{false};      // the upstream transfer ended
+    bool cancelled{false}; // the client response ended
+    std::stop_source stop;
+
+    void cancel() {
+        {
+            const std::lock_guard lock{mutex};
+            cancelled = true;
+        }
+        stop.request_stop();
+        changed.notify_all();
+    }
+
+    // Pool side: false once the response is gone.
+    bool push(std::span<const char> bytes) {
+        std::unique_lock lock{mutex};
+        changed.wait(lock, [&] { return cancelled || queued_bytes == 0 || queued_bytes + bytes.size() <= limit_bytes; });
+        if (cancelled) {
+            return false;
+        }
+        chunks.emplace_back(bytes.data(), bytes.size());
+        queued_bytes += bytes.size();
+        changed.notify_all();
+        return true;
+    }
+
+    // Connection side: the next bytes, at most max; empty once the upstream ended (or the
+    // wait ran out, which the caller tells apart by done).
+    std::string pull(std::size_t max, std::chrono::steady_clock::time_point until) {
+        std::unique_lock lock{mutex};
+        changed.wait_until(lock, until, [&] { return !chunks.empty() || done || cancelled; });
+        if (chunks.empty()) {
+            return {};
+        }
+        auto& front = chunks.front();
+        std::string out;
+        if (front.size() <= max) {
+            out = std::move(front);
+            chunks.pop_front();
+        } else {
+            out = front.substr(0, max);
+            front.erase(0, max);
+        }
+        queued_bytes -= out.size();
+        changed.notify_all();
+        return out;
+    }
+};
+
+// The single range httplib parsed, as the upstream request header.
+std::string range_header(const std::pair<ssize_t, ssize_t>& range) {
+    const auto [first, last] = range;
+    if (first == -1) {
+        return "bytes=-" + std::to_string(last);
+    }
+    if (last == -1) {
+        return "bytes=" + std::to_string(first) + "-";
+    }
+    return "bytes=" + std::to_string(first) + "-" + std::to_string(last);
+}
+
+// What httplib will cut from a resource of total bytes for the range, to compare with the
+// span the upstream actually sent.
+std::optional<std::pair<std::uint64_t, std::uint64_t>> expected_span(const std::pair<ssize_t, ssize_t>& range,
+                                                                     std::uint64_t total) {
+    const auto [first, last] = range;
+    if (total == 0) {
+        return std::nullopt;
+    }
+    if (first == -1) {
+        const auto length = std::min<std::uint64_t>(static_cast<std::uint64_t>(last), total);
+        return std::pair{total - length, total - 1};
+    }
+    const auto begin = static_cast<std::uint64_t>(first);
+    if (begin >= total) {
+        return std::nullopt;
+    }
+    const auto end = last == -1 ? total - 1 : std::min<std::uint64_t>(static_cast<std::uint64_t>(last), total - 1);
+    return std::pair{begin, end};
+}
+
 thread_local SteadyClock::time_point request_started;
 
-// Response slots of media_limits: total, local files and per principal.
+// Response slots of media_limits: total, per principal, and per kind (local files or
+// upstream audio through the proxy).
 class Slots {
 public:
+    enum class Kind { local, upstream };
+
     explicit Slots(application::config::MediaLimits limits) : limits_(limits) {}
 
     // A release function, or the error to answer with.
-    domain::Result<std::shared_ptr<void>> acquire(const std::string& principal) {
+    domain::Result<std::shared_ptr<void>> acquire(const std::string& principal, Kind kind = Kind::local) {
         const std::lock_guard lock{mutex_};
         if (per_principal_[principal] >= limits_.per_principal) {
             return domain::Error{
                 ErrorCode::caller_limit_exceeded, "too many media responses for this caller", true, {}};
         }
-        if (total_ >= limits_.global || local_ >= limits_.local_files) {
+        auto& used = kind == Kind::local ? local_ : upstream_;
+        const auto cap = kind == Kind::local ? limits_.local_files : limits_.upstream;
+        if (total_ >= limits_.global || used >= cap) {
             return domain::Error{ErrorCode::service_busy, "the media service is busy", true, {}};
         }
         ++total_;
-        ++local_;
+        ++used;
         ++per_principal_[principal];
         // Released exactly once, when the last owner of the guard lets go.
-        return std::shared_ptr<void>{nullptr, [this, principal](void*) {
+        return std::shared_ptr<void>{nullptr, [this, principal, &used](void*) {
                                          const std::lock_guard release{mutex_};
                                          --total_;
-                                         --local_;
+                                         --used;
                                          if (--per_principal_[principal] == 0) {
                                              per_principal_.erase(principal);
                                          }
@@ -204,6 +314,7 @@ private:
     mutable std::mutex mutex_;
     std::uint32_t total_{0};
     std::uint32_t local_{0};
+    std::uint32_t upstream_{0};
     std::map<std::string, std::uint32_t> per_principal_;
 };
 
@@ -385,8 +496,7 @@ struct MediaServer::Impl {
             return;
         }
         if (grant->kind != media::TargetKind::file) {
-            send_error(res, {501, "FEATURE_UNAVAILABLE", "the online media proxy is not enabled", false, {}},
-                       request_id);
+            proxy(req, res, grant->owner_id, grant->target_id);
             return;
         }
         serve(req, res, grant->owner_id, grant->target_id, "inline");
@@ -396,12 +506,188 @@ struct MediaServer::Impl {
         if (refuse_query(req, res)) {
             return;
         }
-        if (!bearer(req, res, accounts::scope::media_read)) {
+        auto session = bearer(req, res, accounts::scope::media_read);
+        if (!session) {
             return;
         }
-        send_error(res, {501, "FEATURE_UNAVAILABLE", "the online media proxy is not enabled", false, {}},
-                   res.get_header_value("X-Request-Id"));
+        res.set_header("Cache-Control", "private, no-store");
+        proxy(req, res, session->principal.id, std::string{req.matches[1]});
     }
+
+    // Online audio through the proxy (api-contract.md 10.4, 10.5): the upstream answer is
+    // forwarded as it is, 200 stays 200 and 206 keeps the upstream's span; nothing is
+    // cached. A response holds an upstream slot and a pool thread until it ends.
+    void proxy(const httplib::Request& req, httplib::Response& res, const std::string& owner,
+               const std::string& asset_id) {
+        const auto request_id = res.get_header_value("X-Request-Id");
+        if (!options.media_proxy || !services.assets || !services.upstream_pool) {
+            send_error(res, {501, "FEATURE_UNAVAILABLE", "the online media proxy is not enabled", false, {}},
+                       request_id);
+            return;
+        }
+        const bool head_only = req.method == "HEAD";
+        if (!head_only && req.ranges.size() > 1) {
+            send_error(res,
+                       {400, "MULTIPLE_RANGES_UNSUPPORTED", "only one byte range per request is supported", false, {}},
+                       request_id);
+            return;
+        }
+        auto slot = slots.acquire(owner, Slots::Kind::upstream);
+        if (!slot) {
+            res.set_header("Retry-After", "1");
+            send_error(res, from_domain(slot.error()), request_id);
+            return;
+        }
+
+        catalog::StreamRequest stream_request{owner, asset_id, std::nullopt, std::nullopt,
+                                              SteadyClock::now() + options.stream.max_stream, {}};
+        // The client's If-Range is the upstream's own validator (the ETag forwarded below),
+        // so a stale one makes the upstream answer the whole resource.
+        if (!head_only && req.ranges.size() == 1) {
+            stream_request.range = range_header(req.ranges.front());
+            if (req.has_header("If-Range")) {
+                stream_request.if_range = req.get_header_value("If-Range");
+            }
+        }
+        auto bridge = std::make_shared<Bridge>(static_cast<std::size_t>(options.stream.bridge_buffer_bytes));
+        stream_request.stop = bridge->stop.get_token();
+        auto submitted = services.upstream_pool->submit(
+            [bridge, stream_request, assets = services.assets](std::stop_token) {
+                auto ended = assets->stream(
+                    stream_request,
+                    [&](const catalog::StreamHead& head) {
+                        {
+                            const std::lock_guard lock{bridge->mutex};
+                            bridge->head = head;
+                        }
+                        bridge->changed.notify_all();
+                        return true;
+                    },
+                    [&](std::span<const char> chunk) { return bridge->push(chunk); });
+                {
+                    const std::lock_guard lock{bridge->mutex};
+                    bridge->done = true;
+                    if (!ended) {
+                        bridge->error = std::move(ended).error();
+                    }
+                }
+                bridge->changed.notify_all();
+            });
+        if (!submitted) {
+            res.set_header("Retry-After", "1");
+            send_error(res, from_domain(submitted.error()), request_id);
+            return;
+        }
+
+        // Nothing is sent before the upstream answered: its errors become JSON errors.
+        std::optional<catalog::StreamHead> head;
+        {
+            std::unique_lock lock{bridge->mutex};
+            bridge->changed.wait_until(lock, SteadyClock::now() + options.stream.idle,
+                                       [&] { return bridge->head.has_value() || bridge->done || stopping; });
+            head = bridge->head;
+            if (!head) {
+                const auto error = bridge->error.value_or(
+                    domain::Error{ErrorCode::upstream_timeout, "the audio server did not answer in time", true, {}});
+                lock.unlock();
+                bridge->cancel();
+                send_error(res, from_domain(error), request_id);
+                return;
+            }
+        }
+
+        const auto content_type = head->content_type.value_or(media::content_type_of(head->container.value_or("")));
+        res.set_header("Content-Disposition", "inline");
+        if (head->etag) {
+            res.set_header("ETag", *head->etag);
+        }
+        if (head->accept_ranges) {
+            res.set_header("Accept-Ranges", "bytes");
+        }
+        if (head->status == 416) {
+            bridge->cancel();
+            res.status = 416;
+            if (head->total_bytes) {
+                res.set_header("Content-Range", "bytes */" + std::to_string(*head->total_bytes));
+            }
+            return;
+        }
+        if (head_only) {
+            bridge->cancel();
+            res.status = 200;
+            res.set_header("Content-Type", content_type);
+            if (head->total_bytes) {
+                res.set_header("Content-Length", std::to_string(*head->total_bytes));
+            }
+            return;
+        }
+
+        // httplib frames the body: a 206 is cut from a provider of the whole length, so the
+        // upstream span must be exactly the one httplib computes for the client's range.
+        std::uint64_t provider_length = 0;
+        std::uint64_t position = 0; // absolute offset of the next upstream byte
+        if (head->status == 206) {
+            const auto expected = head->total_bytes && !req.ranges.empty()
+                                      ? expected_span(req.ranges.front(), *head->total_bytes)
+                                      : std::nullopt;
+            if (!expected || !head->range || *expected != *head->range) {
+                bridge->cancel();
+                send_error(res, {502, "UPSTREAM_FAILED", "the audio server answered another range", true, {}},
+                           request_id);
+                return;
+            }
+            provider_length = *head->total_bytes;
+            position = head->range->first;
+            res.status = 206;
+        } else {
+            res.status = 200;
+            provider_length = head->content_length.value_or(0);
+        }
+
+        const auto idle = options.stream.idle;
+        auto release = [bridge, slot = std::move(slot).value()](bool) mutable {
+            bridge->cancel(); // a finished, failed or disconnected response ends the upstream
+            slot.reset();
+        };
+        if (provider_length > 0) {
+            res.set_content_provider(
+                static_cast<std::size_t>(provider_length), content_type,
+                [this, bridge, position, idle](std::size_t offset, std::size_t length,
+                                               httplib::DataSink& sink) mutable {
+                    if (stopping || offset != position) {
+                        return false; // only ever forward, never skip or repeat bytes
+                    }
+                    auto bytes = bridge->pull(std::min(chunk_bytes, length), SteadyClock::now() + idle);
+                    if (bytes.empty()) {
+                        return false; // ended early or stalled: the connection closes
+                    }
+                    position += bytes.size();
+                    return sink.write(bytes.data(), bytes.size());
+                },
+                std::move(release));
+            return;
+        }
+        // Unknown length: chunked, ending where the upstream ends.
+        res.set_chunked_content_provider(
+            content_type,
+            [this, bridge, idle](std::size_t, httplib::DataSink& sink) {
+                if (stopping) {
+                    return false;
+                }
+                auto bytes = bridge->pull(chunk_bytes, SteadyClock::now() + idle);
+                if (bytes.empty()) {
+                    const std::lock_guard lock{bridge->mutex};
+                    if (bridge->done && bridge->chunks.empty() && !bridge->error) {
+                        sink.done();
+                        return true;
+                    }
+                    return false;
+                }
+                return sink.write(bytes.data(), bytes.size());
+            },
+            std::move(release));
+    }
+
 
     void serve(const httplib::Request& req, httplib::Response& res, const std::string& owner,
                const std::string& file_id, std::string_view kind) {

@@ -1245,6 +1245,11 @@ struct ControlApi::Impl {
         const auto& d = described.value();
         const auto properties = properties_of(d.properties_json);
         const auto field = [&](const char* key) { return properties.contains(key) ? properties[key] : json(nullptr); };
+        const auto actual_track = d.actual_track ? ref_json(*d.actual_track) : field("actual_track");
+        const auto actual_quality = d.actual_quality ? json(std::string{domain::to_string(*d.actual_quality)})
+                                                     : field("actual_quality");
+        // Ticket and direct URLs are capabilities: never stored by a cache.
+        call.res.set_header("Cache-Control", "no-store");
         call.ok({{"target", {{"kind", application::media::to_string(d.kind)}, {"id", d.target_id}}},
                  {"delivery", d.delivery},
                  {"url", d.url},
@@ -1252,8 +1257,8 @@ struct ControlApi::Impl {
                  {"expires_at", optional_time(d.expires_at)},
                  {"content_type", d.content_type},
                  {"range_supported", d.range_supported ? json(*d.range_supported) : json(nullptr)},
-                 {"actual_track", field("actual_track")},
-                 {"actual_quality", field("actual_quality")}});
+                 {"actual_track", actual_track},
+                 {"actual_quality", actual_quality}});
     }
 
     void get_download_policy(Call& call) {

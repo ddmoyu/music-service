@@ -2,8 +2,10 @@
 
 #include "application/accounts/identity_admin.hpp"
 #include "application/config/service_config.hpp"
+#include "application/catalog/asset_service.hpp"
 #include "application/media/file_access.hpp"
 #include "application/media/media_tickets.hpp"
+#include "application/ports/runtime/executor.hpp"
 #include "domain/result.hpp"
 
 #include <chrono>
@@ -19,13 +21,17 @@ struct MediaServerOptions {
     application::config::MediaLimits limits;
     application::config::MediaStream stream;
     application::config::Cors cors;
-    bool media_proxy{false}; // online asset proxy (T34); assets answer 501 without it
+    bool media_proxy{false}; // online asset proxy; assets answer 501 without it
 };
 
 struct MediaServerServices {
     std::shared_ptr<const application::accounts::AccessTokenAuthenticator> authenticator;
     std::shared_ptr<application::media::FileAccessService> files;
     std::shared_ptr<application::media::MediaTicketService> tickets;
+    // Online assets for the proxy, and the bounded pool whose threads read their upstream
+    // (media_upstream.workers); both may be empty without media_proxy.
+    std::shared_ptr<application::catalog::AssetService> assets;
+    std::shared_ptr<application::ports::WorkExecutor> upstream_pool;
     // Whether a ticket's owner is still enabled and the token that asked for it unrevoked.
     std::function<bool(const std::string& owner_id, const std::string& token_id)> grant_valid;
     std::function<std::string()> new_request_id; // "req_..." ids
@@ -37,9 +43,12 @@ struct MediaServerServices {
 
 // The media entry (api-contract.md 10.4, 10.5) on its own cpp-httplib listener and worker
 // pool: GET/HEAD /media/v1/files/{file_id} with a files:read Bearer token and
-// /media/v1/tickets/{token} with a ticket from media-access; /media/v1/assets/{asset_id}
-// answers FEATURE_UNAVAILABLE until the online proxy exists. Published files only, read
-// from their bound destination without touching any platform.
+// /media/v1/tickets/{token} with a ticket from media-access, and /media/v1/assets/{asset_id}
+// with a media:read Bearer token for online audio (media_proxy, else FEATURE_UNAVAILABLE).
+// Files are read from their bound destination without touching any platform; online audio
+// is forwarded from the upstream as it answers (200 stays 200, a 206 keeps its span, 416
+// passes through), through a buffer of media_stream.bridge_buffer_bytes: a slow client
+// slows the upstream read and a client that leaves cancels it. Nothing is cached.
 //   - 200 with Content-Length, strong ETag and Accept-Ranges; one range (bytes=a-b, a-,
 //     -n) is 206 with Content-Range; no overlap with the file is 416 with
 //     "Content-Range: bytes */size"; several ranges are 400 MULTIPLE_RANGES_UNSUPPORTED;

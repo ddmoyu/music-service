@@ -118,6 +118,7 @@ struct ProcessHost::State {
     std::shared_ptr<application::media::MediaTicketService> tickets;
     std::shared_ptr<application::media::MediaAccessService> media_access;
     std::unique_ptr<media_server::MediaServer> media;
+    std::shared_ptr<runtime::BoundedExecutor> media_upstream_executor; // proxy reads (media_proxy)
     std::unique_ptr<api::ControlApi> control;
 
     StartupReport report;
@@ -214,6 +215,13 @@ struct ProcessHost::State {
             if (media) {
                 media->stop(); // responses in flight end at their next chunk
                 media.reset();
+            }
+            if (media_upstream_executor) {
+                // Ending responses cancelled their upstream reads; wait for those to return.
+                media_upstream_executor->stop_accepting();
+                media_upstream_executor->request_stop();
+                media_upstream_executor->join();
+                media_upstream_executor.reset();
             }
             if (control) {
                 control->stop(); // no new requests; those in flight finish
@@ -564,7 +572,7 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
         state->report.events_base_url = base_url(config.events, events_port.value(), config.public_urls.events_base);
     }
 
-    // Published files and their tickets (T19). The online proxy (media_proxy) is not built yet.
+    // Published files and their tickets (T19), and online audio through the proxy (T34).
     state->file_access = std::make_shared<application::media::FileAccessService>(
         inst.publications, state->files, [raw = state.get()](const std::string& principal, const std::string& destination) {
             for (const auto& d : raw->destinations) {
@@ -578,12 +586,18 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
     const auto per_owner_share = std::max<std::uint32_t>(1, config.handles.media_tickets / 4);
     state->tickets = std::make_shared<application::media::MediaTicketService>(state->codec, clock,
                                                                               config.handles.media_tickets, per_owner_share);
+    const bool media_proxy = config.media.enabled && config.features.media_proxy;
+    if (media_proxy) {
+        state->media_upstream_executor = std::make_shared<runtime::BoundedExecutor>(
+            "media-upstream", config.media_upstream.workers, config.media_upstream.workers);
+    }
     if (config.media.enabled) {
         state->media = std::make_unique<media_server::MediaServer>(
             media_server::MediaServerOptions{config.media, config.media_limits, config.media_stream, config.cors,
                                              config.features.media_proxy},
             media_server::MediaServerServices{
-                state->authenticator, state->file_access, state->tickets,
+                state->authenticator, state->file_access, state->tickets, state->assets,
+                state->media_upstream_executor,
                 [identities = inst.identities](const std::string& owner, const std::string& token_id) {
                     // Revoking the token or disabling the principal ends its tickets too.
                     auto principal = identities->get_principal(owner);
@@ -613,7 +627,9 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
     }
     const bool file_access = state->media != nullptr && config.features.file_access;
     state->media_access = std::make_shared<application::media::MediaAccessService>(
-        application::media::MediaFeatures{file_access, false, false}, state->report.media_base_url.value_or(""),
+        application::media::MediaFeatures{file_access, state->media != nullptr && media_proxy,
+                                          config.features.direct_media_urls},
+        state->report.media_base_url.value_or(""),
         config.lifetimes.media_access, state->file_access, state->tickets, state->assets, clock);
 
     api::ControlApiOptions api_options{config.control, config.http, config.cors, config.catalog,
@@ -624,6 +640,8 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
     // files (T19) are served; the online media proxy and direct URLs are declared once delivered.
     api_options.info.features.search = true;
     api_options.info.features.file_access = file_access;
+    api_options.info.features.media_proxy = state->media != nullptr && media_proxy;
+    api_options.info.features.direct_media_urls = config.features.direct_media_urls;
     api_options.info.media_base_url = state->report.media_base_url;
     api_options.info.features.downloads = true;
     api_options.info.features.progress_polling = true;

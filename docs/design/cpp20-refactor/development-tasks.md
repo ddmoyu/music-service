@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-22。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T19 **已完成**，T20 **受阻**（仅容器内的在线下载闭环，见实施记录），T29 **已完成**，T30 **已完成**（侧文件拆为子任务 T30.s，未开始），T21 **已完成**，T22 **已完成**，T41 **已完成**（选用 5sing），T23 **已完成**，T28、T31、T32 **待验收**（Windows 通过，CI 待 Actions 额度恢复后运行），S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-22。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T19 **已完成**，T20 **受阻**（仅容器内的在线下载闭环，见实施记录），T29 **已完成**，T30 **已完成**（侧文件拆为子任务 T30.s，未开始），T21 **已完成**，T22 **已完成**，T41 **已完成**（选用 5sing），T23 **已完成**，T28、T31、T32、T34 **待验收**（Windows 通过，CI 待 Actions 额度恢复后运行），S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,7 +262,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-T20（S1 酷我端到端关口）除容器内的在线下载闭环外均已通过：须在能访问酷我音源接口的网络上运行 `packaging/docker/e2e.sh` 后转为已完成，S1 随之通过。T29 的实现只依赖 T17 的执行代码，已先行交付；T30（标签库 TagLib v2.3.2，按 MPL-1.1 静态链接）已交付标签与 FLAC／M4A 验证，侧文件留作子任务 T30.s。T21 交付公共集合用例与路由；T22（5sing）作为第二个原生平台接入，T41 以酷我与 5sing 验证扩展关口；T23 为两平台接入歌单、专辑、榜单、分类与推荐；T28 以两平台与 100 个模拟来源验证 S2 基础扩展关口；T31 补齐清理、复用证据与数据库备份恢复；T32 以故障组合与资源计量验证 S3 关口。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+T20（S1 酷我端到端关口）除容器内的在线下载闭环外均已通过：须在能访问酷我音源接口的网络上运行 `packaging/docker/e2e.sh` 后转为已完成，S1 随之通过。T29 的实现只依赖 T17 的执行代码，已先行交付；T30（标签库 TagLib v2.3.2，按 MPL-1.1 静态链接）已交付标签与 FLAC／M4A 验证，侧文件留作子任务 T30.s。T21 交付公共集合用例与路由；T22（5sing）作为第二个原生平台接入，T41 以酷我与 5sing 验证扩展关口；T23 为两平台接入歌单、专辑、榜单、分类与推荐；T28 以两平台与 100 个模拟来源验证 S2 基础扩展关口；T31 补齐清理、复用证据与数据库备份恢复；T32 以故障组合与资源计量验证 S3 关口；T34 交付在线代理、受控直链与流桥接。T33、T24 依赖受阻的 T20，暂不能开始。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
@@ -447,6 +447,17 @@ T20（S1 酷我端到端关口）除容器内的在线下载闭环外均已通�
 | Windows 证据（2026-10-21） | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 205/205 通过（3 项在线用例按设计跳过）；GCC 16.2 在 -O2 严格警告下检查改动的源码与测试 0 条警告 |
 | Linux 证据（CI 运行 39525823045、39526810353） | ubuntu-24.04，GCC 13.3.0：205/205 通过，Windows 与容器任务同时通过。首次运行在测试替身 mock_providers.hpp 中有 4 条 -Wmissing-field-initializers（ResolvedAudio 新字段未初始化），由 23c2271 修复后复跑 0 条项目警告 |
 | 已知限制 | 只验证 MP3（酷我标准品质的实际容器）；FLAC／M4A／Ogg／WAV／ADTS 的结构验证、标签写入与解密归 T30 及具体平台；不做完整解码证明；整曲判定依赖平台声明时长；处理器由 T17 的 Runner 在 processing 阶段调用，结果写入任务记录后才参与已完成结果复用的证据复核 |
+
+### T34 在线代理、受控直链与流桥接：待验收（2026-10-22，Windows 通过，CI 待运行）
+
+| 项目 | 记录 |
+| --- | --- |
+| 前置 | T32 待验收（Windows 通过）；T19 已完成 |
+| 交付 | ① media-access 支持 asset：proxy＋ticket（票据期限取 ttl 与 asset 到期的较早者）、proxy＋bearer（`/media/v1/assets/{asset_id}`，expires_at 为 asset 到期）、direct（返回上游地址，期限同样受 asset 限制）与 auto；direct 需 direct_media_urls（否则 501 FEATURE_UNAVAILABLE），且地址须由平台声明可外发（ResolvedAudio 新增 shareable，默认 false，酷我与 5sing 均未声明）、不需要请求头或账号秘密、不需解密（否则 422 DELIVERY_UNAVAILABLE）；auto 仅在这些条件全部满足时选 direct，否则 proxy；proxy 需 media_proxy（否则 501）；需解密的音频两种方式都不可播放（422）；访问描述对 asset 给出 actual_track、actual_quality，响应 Cache-Control: no-store。② 代理：AssetService.stream 经公共上游入场（TrafficClass::media）读取上游，秘密头只放在 secret_headers；单段 Range 与 If-Range 原样转发，200／206／416 按上游实际应答转发（上游忽略 Range 就是 200），无长度时以 chunked 转发而不编造长度，206 的区间须与客户端请求一致，否则 502；只转发强 ETag。首个 200／206 固定资源的总长、ETag 与 Last-Modified；403／404／410 视为地址失效，按原实际曲目与要求重新解析一次，曲目、品质、容器与证据都一致才换用新地址，否则使 asset 过期（410 RESOURCE_EXPIRED），从不拼接不同资源。③ 流桥接：媒体入口把上游读取放到 media_upstream.workers 大小的有界线程池，经 media_stream.bridge_buffer_bytes 的有界队列交给连接线程：客户端不读时上游读取也停下，客户端断开或响应结束即通过 stop token 取消上游；每个代理响应占用 media_limits.upstream 额度（与本地文件额度分开，共用总额与每 principal 额度），发头前无额度为 429／503；停机时先停媒体监听再等待线程池退出。④ 构建能力：media_proxy、direct_media_urls 可在配置中启用，/api/v1/info 按实际启用情况报告 |
+| 验证 | `media_proxy_test.cpp`（`[media][proxy]`，真实进程＋模拟来源与 CDN）：完整 200 与 Content-Length／ETag／Accept-Ranges，bytes=100-199、-50、102000- 的 206 与 Content-Range，越界 416 带 `bytes */总长`，多段 400，过期 If-Range 得完整 200、匹配则 206，HEAD 只有头；Bearer 路由可读、无令牌 401；上游忽略 Range 时返回 200；无长度时以 chunked 返回且无 Content-Length。A31：需要 Cookie 的地址 direct 为 422、auto 选 proxy，秘密只出现在发往 CDN 的 secret_headers，不出现在访问描述、响应或普通请求头；可外发地址 auto 选 direct，响应 no-store。A16／A32：首个地址失效后同一票据透明续用新地址、内容不变、只多一次解析；新地址内容不同时返回 410 RESOURCE_EXPIRED，之后 media-access 也为 RESOURCE_EXPIRED；ttl=300 的访问描述不晚于 asset 到期。A24／A30：8 MiB 慢速资源，客户端读 256 KiB 后停读 1 秒，期间上游发送量不再增长且远少于一半；另一客户端同时读同一 asset 的另一区间不受影响；停读的客户端断开后上游被取消、媒体响应额度归零。A33：关闭代理时 asset 为 501、不发任何上游请求，文件访问照常 |
+| Windows 证据 | MSVC /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 316 项全部通过（5 项在线或按设计跳过）；`[proxy]` 连续 5 次通过 |
+| Linux／macOS／容器证据 | 待 GitHub Actions 额度恢复后运行 CI |
+| 已知限制 | 真实平台未声明可外发，direct 只在模拟来源上验证；代理在线验证（酷我、5sing 实际 CDN）尚未执行，S4 关口 T36 负责；身份撤销只拒绝新的代理请求，已在传输中的代理按传输预算或客户端断开结束，没有主动中断；代理不做缓存与转码；206 区间与请求不一致时直接 502，而不是改写区间；资产证据只比较总长与校验器，不校验内容哈希 |
 
 ### T32 S3 可靠性与资源关口：待验收（2026-10-22，Windows 通过，CI 待运行）
 

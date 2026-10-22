@@ -130,6 +130,9 @@ struct ResolvedAudio {
     std::optional<std::chrono::system_clock::time_point> expires_at;
     std::optional<std::int64_t> duration_ms; // length the platform declares for this resource
     ProcessingPlan processing{};             // required decryption and validation
+    // The platform allows handing url to clients as is (direct media URLs). Never set for
+    // addresses that need request_headers, decryption or account secrets in the URL.
+    bool shareable{false};
 };
 
 class IAssetResolver {

@@ -17,7 +17,7 @@
 | `runtime` | 有界执行器、统一上游入场账本（AdmissionLedger）、截止定时器、停机序列 | 静态库，T06 |
 | `api` | 控制入口（cpp-httplib）：Bearer 认证与 scope、JSON 信封与错误映射、请求 ID、CORS、请求体与类型限制；health、info、providers、limits、destinations、credentials、credential-defaults、admin/status、admin/download-policy、files 与 media-access 路由 | 静态库，T10 |
 | `event_server` | SSE 入口（cpp-httplib，独立监听与线程池）：`GET /events/v1/downloads` 的鉴权、scope、订阅额度与 JSON 错误，stream.ready、task.updated、注释心跳，连接期限、心跳时复核 token、溢出或停机结束流 | 静态库，T18 |
-| `media_server` | 媒体入口（cpp-httplib，独立监听与线程池）：`/media/v1/files/{file_id}`（Bearer）与 `/media/v1/tickets/{token}` 的单段 Range、416、If-Range、If-None-Match、HEAD、Content-Disposition，按 media_limits 发头前取得、结束或断开时归还的响应额度，日志中的票据脱敏；`/media/v1/assets` 在在线代理前返回 501 | 静态库，T19 |
+| `media_server` | 媒体入口（cpp-httplib，独立监听与线程池）：`/media/v1/files/{file_id}`（Bearer）与 `/media/v1/tickets/{token}` 的单段 Range、416、If-Range、If-None-Match、HEAD、Content-Disposition，按 media_limits 发头前取得、结束或断开时归还的响应额度，日志中的票据脱敏；`/media/v1/assets/{asset_id}`（Bearer）与指向 asset 的票据经桥接转发上游音频（media_proxy，T34）：Range、HEAD、416 与 If-Range 按上游实际应答转发，有界缓冲背压，断开即取消上游，单独的上游额度与 media_upstream 线程池 | 静态库，T19、T34 |
 | `server` | music-service 可执行程序：命令行、离线身份管理命令、ProcessHost 启停顺序与依赖组装、目标目录绑定校验、监听前的发布与取消恢复 | 静态库 server_core + 可执行程序，T10、T16 |
 
 依赖方向：application 依赖 domain；providers、downloads、audio_processing、infrastructure、runtime 和三个 HTTP 入口依赖 application 的端口与领域类型；只有 `server` 把具体实现组装在一起，业务层不反向依赖 HTTP、数据库或某个平台。

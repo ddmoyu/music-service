@@ -63,6 +63,32 @@ public:
         return std::pair{it->second.value, it->second.expires_at};
     }
 
+    // Changes the live value in place under the table's lock; the same errors as get().
+    // Returns the value after the change.
+    template <class Change>
+    domain::Result<Value> update(const std::string& owner, const std::string& id, Clock::time_point now,
+                                 Change change) {
+        const std::lock_guard lock{mutex_};
+        const auto it = entries_.find(id);
+        if (it == entries_.end() || it->second.owner != owner) {
+            return domain::Error{domain::ErrorCode::not_found, "no such handle", false, {}};
+        }
+        if (it->second.expires_at <= now) {
+            return domain::Error{domain::ErrorCode::resource_expired, "the handle has expired", false, {}};
+        }
+        change(it->second.value);
+        return it->second.value;
+    }
+
+    // Ends a live handle now: later lookups answer as for an expired one.
+    void expire(const std::string& owner, const std::string& id) {
+        const std::lock_guard lock{mutex_};
+        const auto it = entries_.find(id);
+        if (it != entries_.end() && it->second.owner == owner) {
+            it->second.expires_at = Clock::time_point{};
+        }
+    }
+
     [[nodiscard]] std::size_t size() const {
         const std::lock_guard lock{mutex_};
         return entries_.size();

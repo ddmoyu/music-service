@@ -37,7 +37,10 @@ struct AccessDescription {
     std::optional<std::chrono::system_clock::time_point> expires_at;
     std::string content_type;
     std::optional<bool> range_supported;
-    std::string properties_json{"{}"};
+    std::string properties_json{"{}"}; // files: the stored asset properties
+    // Assets: the recording and quality the address serves.
+    std::optional<domain::TrackRef> actual_track;
+    std::optional<domain::Quality> actual_quality;
 };
 
 struct MediaFeatures {
@@ -53,8 +56,12 @@ std::string content_type_of(std::string_view container);
 // an existing file or asset of the caller without a playback session. Files are always
 // read from the backend (direct is DELIVERY_UNAVAILABLE); auth=ticket issues a ticket
 // limited to the file and the requested lifetime, auth=bearer returns the Bearer URL with
-// no expiry (every request is authorized again). Online assets need media_proxy or
-// direct_media_urls, neither of which is available yet (FEATURE_UNAVAILABLE, T34).
+// no expiry (every request is authorized again).
+// Online assets (api-contract.md 10.2): direct hands out the upstream address only with
+// direct_media_urls enabled (else FEATURE_UNAVAILABLE) and for a shareable address that
+// needs no secret or decryption (else DELIVERY_UNAVAILABLE); auto picks direct only then
+// and the proxy otherwise; the proxy needs media_proxy (FEATURE_UNAVAILABLE). Audio that
+// must be decrypted cannot be streamed either way. Every expiry is capped by the asset's.
 class MediaAccessService {
 public:
     MediaAccessService(MediaFeatures features, std::string media_base_url, std::chrono::seconds default_ttl,
@@ -65,6 +72,7 @@ public:
 
 private:
     domain::Result<AccessDescription> describe_file(const AccessRequest& request);
+    domain::Result<AccessDescription> describe_asset(const AccessRequest& request);
 
     MediaFeatures features_;
     std::string media_base_url_;

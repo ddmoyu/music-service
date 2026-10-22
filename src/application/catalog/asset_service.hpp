@@ -14,6 +14,8 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -54,6 +56,49 @@ struct ProbeReport {
     std::vector<domain::ResourceWarning> warnings;
 };
 
+// One request for an asset's audio through the proxy (api-contract.md 10.4, 10.5).
+struct StreamRequest {
+    std::string owner_id;
+    std::string asset_id;
+    // One validated byte range to forward as is ("bytes=0-99", "bytes=100-", "bytes=-50");
+    // empty for the whole resource.
+    std::optional<std::string> range;
+    // The client's If-Range, forwarded with the range: a stale validator makes the
+    // upstream answer the whole resource.
+    std::optional<std::string> if_range;
+    std::chrono::steady_clock::time_point deadline;
+    std::stop_token stop;
+};
+
+// What the upstream answered, as the media entry may forward it: never its URL or headers
+// beyond these. status is 200, 206 or 416.
+struct StreamHead {
+    int status{200};
+    std::optional<std::uint64_t> content_length; // of this body
+    std::optional<std::uint64_t> total_bytes;    // of the whole resource, when known
+    std::optional<std::pair<std::uint64_t, std::uint64_t>> range; // 206: first and last byte
+    std::optional<std::string> content_type;     // the upstream's, when it names audio
+    std::optional<std::string> etag;             // the upstream's strong validator, if any
+    std::optional<std::string> container;        // declared by the platform
+    bool accept_ranges{false};
+};
+
+// What makes two upstream answers the same bytes: total size and validators.
+struct ResourceEvidence {
+    std::optional<std::uint64_t> total_bytes;
+    std::optional<std::string> etag;
+    std::optional<std::string> last_modified;
+    bool operator==(const ResourceEvidence&) const = default;
+};
+
+// What a media access description needs to know about an asset, without its URL.
+struct DeliveryFacts {
+    AssetDescriptor descriptor;
+    bool shareable{false};        // the platform allows handing the address to clients
+    bool needs_secrets{false};    // request headers or an account secret are required
+    bool needs_processing{false}; // decryption is declared
+};
+
 // Same-source resolve and bounded probe (feature-modules.md, 音源解析与探测). An
 // asset_id is bound to its owner and to the authorization identity that produced
 // it; it lives lifetimes.asset seconds, never past a known upstream expiry minus a
@@ -80,8 +125,30 @@ public:
     // RESOURCE_EXPIRED once it expired. Touches no account and no network.
     domain::Result<AssetDescriptor> describe(const std::string& owner_id, const std::string& asset_id);
 
+    // describe() plus what decides between direct and proxy delivery.
+    domain::Result<DeliveryFacts> delivery(const std::string& owner_id, const std::string& asset_id);
+
+    // The upstream address, for a direct media URL; only for a shareable asset without
+    // secrets (DELIVERY_UNAVAILABLE otherwise). Never logged by the caller.
+    domain::Result<std::string> direct_url(const std::string& owner_id, const std::string& asset_id);
+
+    // Streams the asset's audio for the media proxy. Blocking: on_head is called at most
+    // once, before any chunk, with the answer to forward (200, 206 or 416); then on_chunk
+    // until the body ends, a consumer returns false or the stop token fires. Errors before
+    // on_head are returned for the caller to answer with; after it the result only says
+    // how the transfer ended. The first answer fixes the resource's size and validators;
+    // a later answer that differs (also after refreshing an expired address) ends the
+    // asset with RESOURCE_EXPIRED instead of mixing two resources. An address the
+    // upstream refuses (403/404/410) is resolved again once for the same actual track and
+    // quality; anything else is RESOURCE_EXPIRED.
+    domain::Result<void> stream(const StreamRequest& request,
+                                const std::function<bool(const StreamHead&)>& on_head,
+                                const std::function<bool(std::span<const char>)>& on_chunk);
+
 private:
     struct Asset;
+
+    domain::Result<void> refresh(const std::string& owner_id, const std::string& asset_id);
 
     std::shared_ptr<const ports::ProviderDirectory> providers_;
     std::shared_ptr<accounts::CredentialService> credentials_;

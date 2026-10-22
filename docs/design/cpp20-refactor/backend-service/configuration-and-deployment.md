@@ -17,7 +17,7 @@
 | `config_version` | 1；配置版本与 API、数据库版本分别管理 |
 | `control` | host=127.0.0.1，port=17632，workers=16，connection_queue=64 |
 | `media` | enabled 按构建／阶段启用，host=127.0.0.1，port=17633，workers=12，connection_queue=16 |
-| `features` 媒体项 | file_access 随下载闭环启用；media_proxy=false、direct_media_urls=false，在线能力按验证结果启用 |
+| `features` 媒体项 | file_access 随下载闭环启用；media_proxy=false、direct_media_urls=false：两者已实现（T34），默认关闭，按部署需要显式启用；direct 只对平台声明可外发、无秘密头与解密的地址生效 |
 | `auth` | mode=bearer；principal、token 哈希与 scope 的唯一事实来源为 SQLite |
 | `events` | enabled 随下载闭环启用，host=127.0.0.1，port=17634，workers=16，connection_queue=16 |
 | `event_limits` | 全局订阅 14／每 principal 4；每订阅最多 128 条、256 KiB；单事件最大 16 KiB。同一 principal 的网页、桌面、CLI 及浏览器多标签共享该额度，超出返回 429，客户端退回 HTTP 查询 |
