@@ -53,6 +53,29 @@ BuildCapabilities full_build() {
 
 } // namespace
 
+TEST_CASE("output settings have bounded validated defaults", "[config][output]") {
+    const auto defaults = load("{}");
+    REQUIRE(defaults);
+    CHECK(defaults->downloads.output == domain::OutputOptions{});
+    const auto custom = load(R"({"downloads":{"output":{"name_format":"title_artist",
+        "folder_layout":"artist_album","embed_cover":false,"embed_lyrics":false,
+        "cover_max_bytes":1024,"metadata_timeout_seconds":2}}})");
+    REQUIRE(custom);
+    CHECK(custom->downloads.output.name_format == "title_artist");
+    CHECK(custom->downloads.output.folder_layout == "artist_album");
+    CHECK_FALSE(custom->downloads.output.embed_cover);
+    CHECK_FALSE(custom->downloads.output.embed_lyrics);
+    CHECK(custom->downloads.output.cover_max_bytes == 1024);
+    CHECK(custom->downloads.output.metadata_timeout_seconds == 2);
+    for (const auto* bad : {R"({"name_format":"../title"})", R"({"folder_layout":"other"})",
+                           R"({"cover_max_bytes":0})", R"({"cover_max_bytes":33554433})",
+                           R"({"metadata_timeout_seconds":0})", R"({"metadata_timeout_seconds":61})",
+                           R"({"embed_cover":"true"})", R"({"embed_lyrics":1})"}) {
+        INFO(bad);
+        CHECK_FALSE(load(std::string{"{\"downloads\":{\"output\":"} + bad + "}}"));
+    }
+}
+
 TEST_CASE("defaults apply without a configuration file", "[config]") {
     const auto config = load_service_config(options());
     REQUIRE(config);

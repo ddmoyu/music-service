@@ -32,6 +32,7 @@ add_executable(music_service_unit_tests
     unit/audio_processing/tagging_test.cpp
     unit/audio_processing/verifying_processor_test.cpp
     unit/downloads/resume_policy_test.cpp
+    unit/downloads/output_test.cpp
     unit/domain/account_test.cpp
     unit/domain/container_test.cpp
     unit/domain/download_intent_test.cpp
@@ -120,6 +121,7 @@ target_link_libraries(music_service_integration_tests PRIVATE
     music_service::runtime
     music_service::server_core
     music_service::third_party_httplib
+    music_service::third_party_taglib
     nlohmann_json::nlohmann_json
     music_service::project_warnings
     Catch2::Catch2WithMain

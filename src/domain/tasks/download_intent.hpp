@@ -6,6 +6,7 @@
 #include "domain/result.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -36,11 +37,26 @@ using SourceSelection = std::variant<SameSource, ManualTarget, AutoFallback>;
 
 // Effective product settings resolved from configuration by the application layer.
 // Versions are deterministic digests of the relevant configuration, not timestamps.
+struct OutputOptions {
+    std::string name_format{"artist_title"}; // title | artist_title | title_artist
+    std::string folder_layout{"flat"};      // flat | artist | artist_album
+    bool embed_cover{true};
+    bool embed_lyrics{true};
+    std::uint64_t cover_max_bytes{8 * 1024 * 1024};
+    std::uint32_t metadata_timeout_seconds{10};
+
+    friend bool operator==(const OutputOptions&, const OutputOptions&) = default;
+};
+
+Result<void> validate_output_options(const OutputOptions& options);
+
 struct ProductPolicy {
     std::string destination_id;
     std::string destination_config_version;
     std::string naming_config_version;
     std::string metadata_config_version;
+    // 旧意图不含此字段：恢复时仍只写基础标签并沿用原命名。
+    std::optional<OutputOptions> output{};
 
     friend bool operator==(const ProductPolicy&, const ProductPolicy&) = default;
 };

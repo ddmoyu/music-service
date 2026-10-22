@@ -142,6 +142,11 @@ NormalizedDownloadIntent::NormalizedDownloadIntent(std::string owner_id, TrackRe
       requirement_(requirement), metadata_policy_(metadata_policy), product_(std::move(product)) {}
 
 Result<NormalizedDownloadIntent> NormalizedDownloadIntent::normalize(DownloadIntentDraft draft) {
+    if (draft.product.output) {
+        if (auto checked = validate_output_options(*draft.product.output); !checked) {
+            return checked.error();
+        }
+    }
     if (!is_valid_service_id("prn_", draft.owner_id)) {
         return Error::validation("owner_id", "must be a prn_ service id");
     }
@@ -218,9 +223,33 @@ DownloadFingerprint fingerprint(const NormalizedDownloadIntent& intent) {
         .field("metadata.v", std::string_view{intent.product().metadata_config_version});
 
     DownloadFingerprint result;
+    if (const auto& output = intent.product().output) {
+        writer.field("output.name", std::string_view{output->name_format})
+            .field("output.folder", std::string_view{output->folder_layout})
+            .flag("output.cover", output->embed_cover)
+            .flag("output.lyrics", output->embed_lyrics)
+            .number("output.cover_max", output->cover_max_bytes)
+            .number("output.timeout", output->metadata_timeout_seconds);
+    }
     result.canonical = writer.str();
     result.digest = to_hex(fnv1a64(result.canonical));
     return result;
+}
+
+Result<void> validate_output_options(const OutputOptions& options) {
+    if (options.name_format != "title" && options.name_format != "artist_title" && options.name_format != "title_artist") {
+        return Error::validation("output.name_format", "must be title, artist_title or title_artist");
+    }
+    if (options.folder_layout != "flat" && options.folder_layout != "artist" && options.folder_layout != "artist_album") {
+        return Error::validation("output.folder_layout", "must be flat, artist or artist_album");
+    }
+    if (options.cover_max_bytes == 0 || options.cover_max_bytes > 32 * 1024 * 1024) {
+        return Error::validation("output.cover_max_bytes", "must be between 1 and 33554432");
+    }
+    if (options.metadata_timeout_seconds == 0 || options.metadata_timeout_seconds > 60) {
+        return Error::validation("output.metadata_timeout_seconds", "must be between 1 and 60");
+    }
+    return ok();
 }
 
 } // namespace music_service::domain

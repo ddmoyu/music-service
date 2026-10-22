@@ -12,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <utility>
 
 namespace music_service::application::ports {
 
@@ -39,6 +40,8 @@ struct TrackMetadata {
     std::optional<std::string> album;
     std::optional<std::string> lyrics; // unsynchronized text, or LRC kept as text
     std::optional<Picture> cover;
+    std::optional<std::uint32_t> track_number{};
+    std::optional<std::uint32_t> track_total{};
 };
 
 struct ProcessingRequest {
@@ -97,6 +100,8 @@ struct ProcessingReport {
     domain::Completeness completeness{domain::Completeness::unknown};
     std::vector<std::string> warnings;
     std::vector<StageReport> stages;
+    // 各元数据项的取得／写入结果；不包含地址、凭据或正文。
+    std::vector<std::pair<std::string, std::string>> metadata_fields{};
 };
 
 // Required decryption and validation, optional tags (feature-modules.md 10). A failed

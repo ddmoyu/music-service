@@ -260,6 +260,13 @@ domain::Result<void> validate_service_config(const cfg::ServiceConfig& config,
     check_features(config, build, problems);
     check_providers(config, build, problems);
     check_paths(config, problems);
+    if (auto checked = domain::validate_output_options(config.downloads.output); !checked) {
+        for (const auto& detail : checked.error().details) {
+            auto field = detail.field;
+            std::replace(field.begin(), field.end(), '.', '/');
+            problems.add("/downloads/" + field, detail.reason);
+        }
+    }
     if (problems.empty()) {
         return domain::ok();
     }

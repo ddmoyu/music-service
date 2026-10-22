@@ -64,6 +64,8 @@ domain::Result<std::vector<AudioTier>> parse_song_urls(std::string_view body, co
 // The key of a 5sing song link: 5sing.kugou.com/{yc|fc|bz}/{number}.html, http or https.
 // Anything else is VALIDATION_FAILED. No network.
 domain::Result<WorkKey> parse_track_link(std::string_view link);
+struct Link { std::string kind; std::string id; };
+domain::Result<Link> parse_link(std::string_view link);
 
 // Playlists (T23). Playlist ids are 1..32 letters and digits (24 hex digits today).
 [[nodiscard]] bool is_playlist_id(std::string_view id) noexcept;

@@ -1,0 +1,44 @@
+{
+  "code": 200,
+  "result": {
+    "albumCount": 21,
+    "albums": [
+      {
+        "id": 372081313,
+        "name": "叶惠美",
+        "picUrl": "https://p2.music.126.net/vwUBxTBt3BazxX8QllCxlg==/109951173094981144.jpg",
+        "size": 18,
+        "publishTime": 1777219200000,
+        "description": "",
+        "artists": [
+          {
+            "id": 0,
+            "name": "王珏子乔"
+          }
+        ],
+        "artist": {
+          "id": 0,
+          "name": ""
+        }
+      },
+      {
+        "id": 142564894,
+        "name": "叶惠美",
+        "picUrl": "https://p2.music.126.net/g_zVbY2IcfeAfuAJ7qxkBA==/109951167207055736.jpg",
+        "size": 1,
+        "publishTime": 1648456242884,
+        "description": "",
+        "artists": [
+          {
+            "id": 52036859,
+            "name": "账号已注销"
+          }
+        ],
+        "artist": {
+          "id": 52036859,
+          "name": "账号已注销"
+        }
+      }
+    ]
+  }
+}

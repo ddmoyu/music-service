@@ -166,7 +166,8 @@ bool has_items(const ports::TrackMetadata& metadata) {
     const bool artists = std::any_of(metadata.artists.begin(), metadata.artists.end(),
                                      [](const std::string& artist) { return !artist.empty(); });
     return !metadata.title.empty() || artists || (metadata.album && !metadata.album->empty()) ||
-           (metadata.lyrics && !metadata.lyrics->empty()) || (metadata.cover && !metadata.cover->data.empty());
+           (metadata.lyrics && !metadata.lyrics->empty()) || (metadata.cover && !metadata.cover->data.empty()) ||
+           (metadata.track_number && *metadata.track_number > 0);
 }
 
 Error metadata_failed(std::string reason, std::string message) {
@@ -333,11 +334,29 @@ domain::Result<ports::ProcessingReport> VerifyingProcessor::process(const ports:
 
     report.stages.push_back({"decrypt", ports::StageOutcome::skipped});
     report.stages.push_back({"validate", ports::StageOutcome::done});
+    const auto fields = [&](std::string_view status, const std::vector<std::string>& missing = {}) {
+        if (!request.metadata) return;
+        const auto& m = *request.metadata;
+        const std::pair<std::string_view, bool> present[] = {
+            {"title", !m.title.empty()}, {"artist", !m.artists.empty()}, {"album", m.album && !m.album->empty()},
+            {"cover", m.cover && !m.cover->data.empty()}, {"lyrics", m.lyrics && !m.lyrics->empty()},
+            {"track_number", m.track_number && *m.track_number > 0},
+            {"track_total", m.track_number && *m.track_number > 0 && m.track_total && *m.track_total >= *m.track_number}};
+        for (const auto& [name, exists] : present) {
+            if (exists) {
+                const auto key = name == "track_total" ? std::string_view{"track_number"} : name;
+                const bool failed = std::find(missing.begin(), missing.end(), key) != missing.end();
+                report.metadata_fields.emplace_back(name, failed ? "write_failed" : status);
+            }
+        }
+    };
     if (!wants_tags) {
+        fields("disabled");
         report.stages.push_back({"tags", ports::StageOutcome::skipped});
         return report;
     }
     if (!can_tag) {
+        fields("write_failed");
         report.stages.push_back({"tags", ports::StageOutcome::skipped});
         warn(ports::processing_warning::metadata_not_written);
         return report;
@@ -350,6 +369,7 @@ domain::Result<ports::ProcessingReport> VerifyingProcessor::process(const ports:
             return std::move(tagged).error();
         }
         report.stages.push_back({"tags", ports::StageOutcome::failed});
+        fields("write_failed");
         warn(ports::processing_warning::metadata_not_written);
         return report; // the validated input is published untagged
     }
@@ -378,6 +398,7 @@ domain::Result<ports::ProcessingReport> VerifyingProcessor::process(const ports:
     facts.size_bytes = output->size();
     facts.sha256 = std::move(output_digest).value();
     report.stages.push_back({"tags", ports::StageOutcome::done});
+    fields("written", tagged->missing);
     return report;
 }
 

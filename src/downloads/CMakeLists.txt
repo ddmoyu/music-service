@@ -6,6 +6,7 @@
 add_library(music_service_downloads STATIC
     finalizer.cpp
     maintenance.cpp
+    metadata_support.cpp
     recovery.cpp
     resume_policy.cpp
     runner.cpp

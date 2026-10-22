@@ -49,6 +49,8 @@ domain::Result<AudioEvidence> parse_audio(std::string_view body, std::string_vie
 // m.kuwo.cn/newh5app/play_detail/{rid}, http or https. Anything else is
 // VALIDATION_FAILED. No network.
 domain::Result<std::string> parse_track_link(std::string_view link);
+struct Link { std::string kind; std::string id; };
+domain::Result<Link> parse_link(std::string_view link);
 
 // Artists from Kuwo's '&'-joined names and ids; ids line up only when the counts match.
 [[nodiscard]] std::vector<domain::ArtistSummary> parse_artists(std::string_view names, std::string_view ids);

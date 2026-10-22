@@ -45,6 +45,13 @@ TagLib::PropertyMap wanted(const application::ports::TrackMetadata& metadata) {
     if (metadata.lyrics && !metadata.lyrics->empty()) {
         map.insert("LYRICS", TagLib::StringList(utf8(*metadata.lyrics)));
     }
+    if (metadata.track_number && *metadata.track_number > 0) {
+        auto number = std::to_string(*metadata.track_number);
+        if (metadata.track_total && *metadata.track_total >= *metadata.track_number) {
+            number += "/" + std::to_string(*metadata.track_total);
+        }
+        map.insert("TRACKNUMBER", TagLib::StringList(utf8(number)));
+    }
     return map;
 }
 
@@ -57,6 +64,9 @@ std::string item_name(const TagLib::String& key) {
     }
     if (key == "ALBUM") {
         return "album";
+    }
+    if (key == "TRACKNUMBER") {
+        return "track_number";
     }
     return "lyrics";
 }

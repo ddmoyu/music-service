@@ -48,6 +48,8 @@ struct SourcePage {
     std::optional<std::uint64_t> total;
     std::optional<bool> has_more;
     std::optional<std::string> next_cursor; // service cursor handle
+    std::optional<std::uint64_t> listed_total{};
+    std::optional<std::uint64_t> unavailable_count{};
 };
 
 struct CacheInfo {

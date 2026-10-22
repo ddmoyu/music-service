@@ -15,7 +15,7 @@ ports::ProviderBundle make_bundle() {
         .source = std::move(source).value(),
         .name = "5sing",
         .implementation_id = "fivesing-native",
-        .implementation_version = "0.1.0",
+        .implementation_version = "0.1.2",
     };
     // What T22 and T23 verified on 2026-10-22; nothing needs an account.
     bundle.capabilities = {

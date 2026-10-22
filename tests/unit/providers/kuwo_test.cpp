@@ -23,6 +23,17 @@
 using namespace music_service;
 using namespace music_service::test;
 namespace ports = application::ports;
+
+TEST_CASE("kuwo collection links distinguish playlists albums and tracks", "[kuwo][collections-b]") {
+    namespace p = providers::kuwo::parsing;
+    CHECK(unwrap(p::parse_link("https://www.kuwo.cn/playlist_detail/2234580349?from=share")).kind == "playlist");
+    CHECK(unwrap(p::parse_link("http://kuwo.cn/album_detail/1293/")).id == "1293");
+    CHECK(unwrap(p::parse_link("https://www.kuwo.cn/album_detail/1")).kind == "album");
+    CHECK(unwrap(p::parse_link("https://www.kuwo.cn/play_detail/1")).kind == "track");
+    for (const auto* link : {"https://www.kuwo.cn.evil/playlist_detail/1", "https://www.kuwo.cn/playlist_detail/../1",
+        "https://www.kuwo.cn/album_detail/abc", "https://www.kuwo.cn/playlist_detail/1/more",
+        "https://www.kuwo.cn/artist_detail/1", "https://www.kuwo.cn:9999/album_detail/1"}) CHECK_FALSE(p::parse_link(link));
+}
 namespace parsing = providers::kuwo::parsing;
 using domain::ErrorCode;
 

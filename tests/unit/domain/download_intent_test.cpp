@@ -1,6 +1,7 @@
 #include "test_support.hpp"
 
 #include "domain/tasks/download_intent.hpp"
+#include "infrastructure/storage/intent_codec.hpp"
 
 using namespace music_service::domain;
 using music_service::test::anonymous;
@@ -29,6 +30,30 @@ DownloadFingerprint fp(DownloadIntentDraft draft) {
 }
 
 } // namespace
+
+TEST_CASE("output settings survive storage and isolate reuse from legacy products", "[domain][intent][output]") {
+    namespace storage = music_service::infrastructure::storage;
+    const auto legacy = unwrap(NormalizedDownloadIntent::normalize(base_draft()));
+    const auto old = unwrap(storage::decode_intent(storage::encode_intent(legacy)));
+    CHECK_FALSE(old.product().output);
+    CHECK(fingerprint(old) == fingerprint(legacy));
+    auto draft = base_draft();
+    draft.product.output = OutputOptions{};
+    const auto base = fp(draft);
+    CHECK_FALSE(base == fingerprint(legacy));
+    const auto saved = unwrap(NormalizedDownloadIntent::normalize(draft));
+    const auto decoded = unwrap(storage::decode_intent(storage::encode_intent(saved)));
+    CHECK(decoded.product().output == draft.product.output);
+    CHECK(fingerprint(decoded) == base);
+    SECTION("name") { draft.product.output->name_format = "title"; }
+    SECTION("folders") { draft.product.output->folder_layout = "artist_album"; }
+    SECTION("cover") { draft.product.output->embed_cover = false; }
+    SECTION("lyrics") { draft.product.output->embed_lyrics = false; }
+    SECTION("size") { draft.product.output->cover_max_bytes = 1024; }
+    SECTION("budget") { draft.product.output->metadata_timeout_seconds = 2; }
+    CHECK_FALSE(fp(draft) == base);
+    CHECK(decoded.product().output == OutputOptions{});
+}
 
 TEST_CASE("the same intent produces the same fingerprint", "[domain][intent]") {
     const auto a = fp(base_draft());

@@ -6,6 +6,8 @@
 
 当前已接通酷我闭环，并接入 5sing 作为第二个平台（T22）：搜索、详情与解析，持久下载与重启恢复，SSE 与 HTTP 进度，已完成文件与媒体票据；媒体与事件监听默认启用。S1 关口（T20）的验收状态以[开发任务](docs/design/cpp20-refactor/development-tasks.md)中的最新实施记录为准。
 
+网易云已支持 standard／high／lossless（取决于账号及歌曲权限）、公共歌单／专辑搜索、分类、公共推荐与榜单分页；网易云、酷我、5sing 的集合链接可经公共 API 进入曲目列表。[独立验收客户端](packaging/e2e/collections.md)支持选择或全部分批提交，每批最多 100 项；已受理任务持久执行，未提交页不会在客户端关闭后继续展开。Hi-Res 独立待验收，最新阶段验收与适用范围见[补齐计划](docs/design/cpp20-refactor/reference-gap-plan.md)。
+
 ## 目录结构
 
 ```text

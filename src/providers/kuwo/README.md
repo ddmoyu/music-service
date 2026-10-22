@@ -1,6 +1,6 @@
 # 酷我适配器
 
-首个开发平台，source `kuwo`，实现 kuwo-native 0.1.0。当前只声明 T12 已验证的能力，均为匿名（不登记 Cookie profile，不发送 Cookie）：
+首个开发平台，source `kuwo`，实现 kuwo-native 0.1.2。能力均为匿名（不登记 Cookie profile，不发送 Cookie）。B 阶段补充 `www.kuwo.cn`／`kuwo.cn` 的 `/playlist_detail/{id}`、`/album_detail/{id}` 链接，返回 playlist／album，沿用现有集合详情与分页；仅接受默认端口，不展开短链。
 
 | 能力 | 端点（全部 HTTPS） | 说明 |
 | --- | --- | --- |

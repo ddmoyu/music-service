@@ -94,8 +94,67 @@ ports::HttpRequest song_url(std::string_view id, std::string_view level, const C
                  "resolve_audio", call);
 }
 
+ports::HttpRequest song_details(const std::vector<std::string>& ids, const Call& call) {
+    auto list = json::array();
+    for (const auto& id : ids) list.push_back({{"id", numeric(id)}});
+    auto request = weapi("v3/song/detail", {{"c", list.dump()}}, "playlist_tracks", call);
+    request.max_response_bytes = 2 * 1024 * 1024;
+    return request;
+}
+
+ports::HttpRequest search_collections(bool playlists, std::string_view keyword, std::uint32_t offset,
+                                      std::uint32_t limit, const Call& call) {
+    auto request = weapi("cloudsearch/pc",
+        {{"s", keyword}, {"type", playlists ? 1000 : 10}, {"limit", limit}, {"offset", offset}, {"total", true}},
+        playlists ? "search_playlists" : "search_albums", call);
+    request.max_response_bytes = 2 * 1024 * 1024;
+    return request;
+}
+
+ports::HttpRequest playlist(std::string_view id, const Call& call) {
+    // n=0：只请求曲目 ID 清单，当前页详情由调用方另取。
+    auto request = weapi("v3/playlist/detail", {{"id", numeric(id)}, {"n", 0}, {"s", 0}}, "playlist_detail", call);
+    request.max_response_bytes = 4 * 1024 * 1024;
+    return request;
+}
+
+ports::HttpRequest album(std::string_view id, const Call& call) {
+    // 上游没有专辑曲目分页参数，响应及解析数量均设上限。
+    auto request = weapi("v1/album/" + std::string{id}, json::object(), "album_detail", call);
+    request.max_response_bytes = 8 * 1024 * 1024;
+    return request;
+}
+
 ports::HttpRequest lyric(std::string_view id, const Call& call) {
     return weapi("song/lyric", json{{"id", numeric(id)}, {"lv", -1}, {"kv", -1}, {"tv", -1}}, "lyrics", call);
+}
+
+ports::HttpRequest categories(const Call& call) {
+    auto request = weapi("playlist/catalogue", json::object(), "categories", call);
+    request.max_response_bytes = 512 * 1024;
+    return request;
+}
+
+ports::HttpRequest category_playlists(std::string_view category, std::uint32_t offset,
+                                     std::uint32_t limit, const Call& call) {
+    auto request = weapi("playlist/list", {{"cat", category}, {"order", "hot"}, {"limit", limit},
+        {"offset", offset}, {"total", true}}, "category_playlists", call);
+    request.max_response_bytes = 2 * 1024 * 1024;
+    return request;
+}
+
+ports::HttpRequest recommendations(const Call& call) {
+    // Public fixed-size candidate set, not the account's personalized feed.
+    auto request = weapi("personalized/playlist", {{"limit", 30}, {"total", true}, {"n", 1000}},
+                         "recommend_playlists", call);
+    request.max_response_bytes = 2 * 1024 * 1024;
+    return request;
+}
+
+ports::HttpRequest charts(const Call& call) {
+    auto request = weapi("toplist", json::object(), "charts", call);
+    request.max_response_bytes = 2 * 1024 * 1024;
+    return request;
 }
 
 ports::HttpRequest account(const Call& call) {

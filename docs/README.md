@@ -4,6 +4,8 @@
 
 ## C++20 重构设计
 
+- [参考项目功能补齐计划](design/cpp20-refactor/reference-gap-plan.md)：A～C 已批准；A、B 的实现与验收记录，C 尚未开始。
+- [集合有限批次验收客户端](../packaging/e2e/collections.md)：三平台集合链接、网易云分页、选中或全部分批提交、停止与幂等重放。
 - [项目入口与构建](../README.md)：目录结构、构建与测试命令、当前进度。
 - [重构设计入口](design/cpp20-refactor/README.md)：当前方向、选型状态和文档导航。
 - [后端服务详细设计](design/cpp20-refactor/backend-service/README.md)：C++20 + cpp-httplib 主方案的模块与目录、公共模型、API 契约、任务运行时、配置与部署。

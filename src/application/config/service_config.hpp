@@ -1,5 +1,7 @@
 #pragma once
 
+#include "domain/tasks/download_intent.hpp"
+
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -112,6 +114,7 @@ struct Downloads {
     std::uint32_t max_attempts{3};
     std::uint32_t transport_retries{2};
     std::uint64_t max_file_bytes{2 * gib};
+    domain::OutputOptions output{};
 };
 
 struct Retry {

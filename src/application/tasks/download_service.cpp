@@ -91,10 +91,12 @@ DownloadService::DownloadService(std::shared_ptr<ports::TaskRepository> tasks,
                                  std::vector<DestinationRule> destinations,
                                  std::function<bool(const DestinationRule&)> destination_available,
                                  std::function<bool(const std::string&, const std::string&, std::uint64_t)> file_intact,
-                                 std::uint32_t max_batch_items, std::shared_ptr<ports::DownloadQueue> queue)
+                                 std::uint32_t max_batch_items, std::shared_ptr<ports::DownloadQueue> queue,
+                                 std::optional<domain::OutputOptions> output)
     : tasks_(std::move(tasks)), providers_(std::move(providers)), credentials_(std::move(credentials)),
       destinations_(std::move(destinations)), destination_available_(std::move(destination_available)),
-      file_intact_(std::move(file_intact)), max_batch_items_(max_batch_items), queue_(std::move(queue)) {}
+      file_intact_(std::move(file_intact)), max_batch_items_(max_batch_items), queue_(std::move(queue)),
+      output_(std::move(output)) {}
 
 void DownloadService::wake() const {
     if (queue_) {
@@ -171,6 +173,12 @@ domain::Result<domain::NormalizedDownloadIntent> DownloadService::prepare(const 
                                       request.metadata_policy,
                                       {rule.id, fnv_hex(rule.id + "\x1f" + rule.canonical_root), std::string{naming_version},
                                        std::string{metadata_version}}};
+    if (output_) {
+        draft.product.output = output_;
+        draft.product.naming_config_version = "naming-v2:" + output_->name_format + ":" + output_->folder_layout;
+        draft.product.metadata_config_version = std::string{"metadata-v2:"} +
+            (output_->embed_cover ? "cover:" : "no-cover:") + (output_->embed_lyrics ? "lyrics" : "no-lyrics");
+    }
     return domain::NormalizedDownloadIntent::normalize(std::move(draft));
 }
 

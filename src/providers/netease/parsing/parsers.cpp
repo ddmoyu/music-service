@@ -6,6 +6,10 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <cmath>
+#include <format>
+#include <set>
 #include <utility>
 
 namespace music_service::providers::netease::parsing {
@@ -41,6 +45,9 @@ domain::Result<json> parse_body(std::string_view body) {
     if (n == 301) {
         return Error{ErrorCode::credentials_required, "netease requires a signed-in account", false, {}};
     }
+    if (n == 403) return Error{ErrorCode::credentials_required, "netease denied access to the resource", false,
+                              {{"netease_code", "403"}}};
+    if (n == 404) return Error{ErrorCode::not_found, "netease has no such resource", false, {}};
     Error error{ErrorCode::upstream_failed, "netease refused the request", false, {}};
     if (n == 405) {
         error = Error{ErrorCode::upstream_rate_limited, "netease is limiting requests", true, {}};
@@ -115,6 +122,15 @@ domain::Result<domain::Track> track_of(const json& song) {
         }
     }
     if (const auto album = song.find("al"); album != song.end() && album->is_object()) {
+        if (auto picture = text(*album, "picUrl"); picture && !picture->empty()) {
+            auto url = application::transport::Url::parse(*picture);
+            if (url && url->host().ends_with(".music.126.net")) {
+                track.artwork = "https://" + url->host() + url->target();
+            }
+        }
+        if (const auto count = integer(*album, "size"); count && *count > 0 && *count <= 65535) {
+            track.track_total = static_cast<std::uint32_t>(*count);
+        }
         if (auto album_name = text(*album, "name"); album_name && !album_name->empty()) {
             domain::AlbumSummary summary{std::move(*album_name), std::nullopt};
             if (const auto album_id = id_of(*album)) {
@@ -124,6 +140,12 @@ domain::Result<domain::Track> track_of(const json& song) {
         }
     }
     // A missing or zero duration stays unknown.
+    if (const auto number = integer(song, "no"); number && *number > 0 && *number <= 65535) {
+        track.track_number = static_cast<std::uint32_t>(*number);
+    }
+    if (track.track_total && track.track_number && *track.track_total < *track.track_number) {
+        track.track_total.reset();
+    }
     if (const auto duration = integer(song, "dt"); duration && *duration > 0) {
         track.duration_ms = *duration;
     }
@@ -154,15 +176,17 @@ std::optional<std::string_view> query_value(std::string_view target, std::string
         return std::nullopt;
     }
     auto query = target.substr(question + 1);
+    std::optional<std::string_view> result;
     while (!query.empty()) {
         const auto end = query.find('&');
         const auto pair = query.substr(0, end);
         query = end == std::string_view::npos ? std::string_view{} : query.substr(end + 1);
         if (pair.size() > name.size() && pair.substr(0, name.size()) == name && pair[name.size()] == '=') {
-            return pair.substr(name.size() + 1);
+            if (result) return std::nullopt; // 同名参数不能产生歧义引用。
+            result = pair.substr(name.size() + 1);
         }
     }
-    return std::nullopt;
+    return result;
 }
 
 } // namespace
@@ -245,6 +269,7 @@ domain::Result<AudioEvidence> parse_audio(std::string_view body, std::string_vie
         return protocol_error("player url has no code");
     }
     evidence.code = static_cast<int>(*code);
+    evidence.fee = integer(entry, "fee");
     if (evidence.code != 200) {
         return evidence;
     }
@@ -332,15 +357,264 @@ domain::Result<Account> parse_account(std::string_view body) {
     return account;
 }
 
-domain::Result<std::string> parse_track_link(std::string_view link) {
-    const auto refuse = [] { return Error::validation("link", "is not a netease song link"); };
+namespace {
+std::optional<std::uint64_t> count_of(const json& value, const char* key) {
+    auto n = integer(value, key);
+    return n && *n >= 0 ? std::optional<std::uint64_t>{static_cast<std::uint64_t>(*n)} : std::nullopt;
+}
+
+domain::Artwork picture_of(const json& value, const char* key) {
+    auto s = text(value, key);
+    if (!s) return {};
+    auto u = application::transport::Url::parse(*s);
+    if (!u || !u->host().ends_with(".music.126.net")) return {};
+    return "https://" + u->host() + u->target();
+}
+
+std::optional<std::string> date_of(const json& value, const char* key, bool date_only) {
+    auto n = integer(value, key);
+    if (!n || *n <= 0 || *n > 4102444800000LL) return {};
+    auto time = std::chrono::sys_time<std::chrono::milliseconds>{std::chrono::milliseconds{*n}};
+    if (date_only) return std::format("{:%F}", std::chrono::floor<std::chrono::days>(time));
+    return std::format("{:%FT%TZ}", std::chrono::floor<std::chrono::seconds>(time));
+}
+
+domain::Result<domain::Playlist> playlist_of(const json& item) {
+    auto id = id_of(item);
+    auto name = text(item, "name");
+    if (!id || !name || name->empty()) return protocol_error("playlist lacks id or name");
+    domain::Playlist p{*ref_of(*id)};
+    p.name = *name;
+    p.description = text(item, "description");
+    p.artwork = picture_of(item, "coverImgUrl");
+    if (!p.artwork) p.artwork = picture_of(item, "picUrl");
+    p.track_count = count_of(item, "trackCount");
+    p.play_count = count_of(item, "playCount");
+    if (!p.play_count) {
+        const auto n = item.find("playCount");
+        if (n != item.end() && n->is_number_float()) {
+            const auto value = n->get<double>();
+            if (std::isfinite(value) && value >= 0 && value < 9.22e18 && std::floor(value) == value)
+                p.play_count = static_cast<std::uint64_t>(value);
+        }
+    }
+    p.updated_at = date_of(item, "updateTime", false);
+    if (auto creator = item.find("creator"); creator != item.end() && creator->is_object())
+        p.creator = text(*creator, "nickname");
+    return p;
+}
+
+domain::Result<domain::Album> album_of(const json& item) {
+    auto id = id_of(item);
+    auto title = text(item, "name");
+    if (!id || !title || title->empty()) return protocol_error("album lacks id or name");
+    domain::Album a{*ref_of(*id)};
+    a.title = *title;
+    a.description = text(item, "description");
+    a.artwork = picture_of(item, "picUrl");
+    a.track_count = count_of(item, "size");
+    a.release_date = date_of(item, "publishTime", true);
+    auto artists = item.find("artists");
+    if (artists != item.end() && artists->is_array()) {
+        for (const auto& v : *artists) {
+            auto name = text(v, "name");
+            if (name && !name->empty()) a.artists.push_back({*name, id_of(v) ? ref_of(*id_of(v)) : std::nullopt});
+        }
+    }
+    if (a.artists.empty()) {
+        auto v = item.find("artist");
+        if (v != item.end() && v->is_object()) {
+            if (auto name = text(*v, "name"); name && !name->empty())
+                a.artists.push_back({*name, id_of(*v) ? ref_of(*id_of(*v)) : std::nullopt});
+        }
+    }
+    return a;
+}
+
+std::string revision_of(const json& header, const std::vector<std::string>& ids) {
+    // 非秘密检测标记；公开游标由应用层绑定集合、身份和页大小。
+    const auto encoded = json{{"ids", ids}, {"count", header.value("trackCount", json{})},
+        {"updated", header.value("trackUpdateTime", json{})}, {"size", header.value("size", json{})}}.dump();
+    std::uint64_t h = 14695981039346656037ULL;
+    for (const unsigned char c : encoded) { h ^= c; h *= 1099511628211ULL; }
+    return std::format("{:016x}", h);
+}
+
+template<class T, class Parse>
+domain::Result<CollectionSearch<T>> search_collection(std::string_view body, const char* list_key,
+                                                     const char* count_key, Parse parse) {
+    auto doc = parse_body(body);
+    if (!doc) return doc.error();
+    auto r = doc->find("result");
+    if (r == doc->end() || !r->is_object()) return protocol_error("search has no result");
+    auto total = count_of(*r, count_key);
+    if (!total) return protocol_error("search has no count");
+    CollectionSearch<T> found{{}, *total};
+    auto list = r->find(list_key);
+    if (list == r->end() && *total == 0) return found;
+    if (list == r->end() || !list->is_array() || list->size() > 50) return protocol_error("invalid search list");
+    for (const auto& value : *list) {
+        auto item = parse(value);
+        if (!item) return item.error();
+        found.items.push_back(std::move(*item));
+    }
+    return found;
+}
+} // namespace
+
+domain::Result<CollectionSearch<domain::Playlist>> parse_playlist_search(std::string_view body) {
+    return search_collection<domain::Playlist>(body, "playlists", "playlistCount", playlist_of);
+}
+domain::Result<CollectionSearch<domain::Album>> parse_album_search(std::string_view body) {
+    return search_collection<domain::Album>(body, "albums", "albumCount", album_of);
+}
+
+domain::Result<std::vector<domain::Category>> parse_categories(std::string_view body) {
+    auto doc = parse_body(body);
+    if (!doc) return doc.error();
+    auto sub = doc->find("sub");
+    auto groups = doc->find("categories");
+    if (sub == doc->end() || !sub->is_array() || sub->size() > 256 ||
+        groups == doc->end() || !groups->is_object()) return protocol_error("invalid category directory");
+    std::vector<domain::Category> result;
+    std::set<std::string> ids;
+    if (auto all = doc->find("all"); all != doc->end() && !all->is_null()) {
+        auto name = text(*all, "name");
+        if (!name || name->empty()) return protocol_error("invalid all category");
+        result.push_back({"全部", *name}); // Upstream cat parameter, display name is 全部歌单.
+        ids.insert("全部");
+    }
+    for (const auto& item : *sub) {
+        auto name = text(item, "name");
+        auto group = integer(item, "category");
+        if (!name || !domain::PlatformId::parse(*name) || !ids.insert(*name).second || !group)
+            return protocol_error("invalid or duplicate category");
+        auto label = text(*groups, std::to_string(*group).c_str());
+        result.push_back({*name, *name, std::move(label)});
+    }
+    return result;
+}
+
+domain::Result<std::vector<domain::Chart>> parse_charts(std::string_view body) {
+    auto doc = parse_body(body);
+    if (!doc) return doc.error();
+    auto list = doc->find("list");
+    if (list == doc->end() || !list->is_array() || list->size() > 256) return protocol_error("invalid chart directory");
+    std::vector<domain::Chart> result;
+    std::set<std::string> ids;
+    for (const auto& item : *list) {
+        auto id = id_of(item);
+        auto name = text(item, "name");
+        if (!id || !name || name->empty() || !ids.insert(*id).second) return protocol_error("invalid or duplicate chart");
+        domain::Chart chart{*ref_of(*id)};
+        chart.name = *name;
+        chart.description = text(item, "description");
+        chart.update_hint = text(item, "updateFrequency");
+        chart.updated_at = date_of(item, "trackUpdateTime", false);
+        chart.track_count = count_of(item, "trackCount");
+        result.push_back(std::move(chart));
+    }
+    return result;
+}
+
+domain::Result<DiscoveryPlaylists> parse_discovery_playlists(std::string_view body, bool recommendations) {
+    auto doc = parse_body(body);
+    if (!doc) return doc.error();
+    DiscoveryPlaylists result;
+    if (!recommendations) {
+        result.total = count_of(*doc, "total");
+        auto more = doc->find("more");
+        if (!result.total || more == doc->end() || !more->is_boolean()) return protocol_error("missing playlist paging facts");
+        result.more = more->get<bool>();
+    }
+    auto list = doc->find(recommendations ? "result" : "playlists");
+    if (list == doc->end() || !list->is_array() || list->size() > (recommendations ? 30U : 50U))
+        return protocol_error("invalid discovery playlist list");
+    std::set<std::string> seen;
+    for (const auto& item : *list) {
+        auto playlist = playlist_of(item);
+        if (!playlist) return playlist.error();
+        if (!seen.insert(playlist->ref.id.value()).second) return protocol_error("duplicate discovery playlist");
+        if (recommendations) playlist->description = text(item, "copywriter");
+        result.items.push_back(std::move(*playlist));
+    }
+    if (result.more && result.items.empty()) return protocol_error("empty page cannot have more items");
+    return result;
+}
+
+domain::Result<PlaylistData> parse_playlist(std::string_view body, std::string_view id) {
+    auto doc = parse_body(body);
+    if (!doc) return doc.error();
+    auto p = doc->find("playlist");
+    if (p != doc->end() && p->is_null()) return Error{ErrorCode::not_found, "playlist not found", false, {}};
+    if (p == doc->end() || !p->is_object()) return protocol_error("response lacks playlist");
+    auto detail = playlist_of(*p);
+    if (!detail) return detail.error();
+    if (detail->ref.id.value() != id) return protocol_error("playlist id mismatch");
+    auto ids = p->find("trackIds");
+    if (ids == p->end() || !ids->is_array() || ids->size() > max_playlist_ids)
+        return protocol_error("missing or oversized trackIds (maximum 10000)");
+    PlaylistData result{std::move(*detail), {}, {}};
+    for (const auto& v : *ids) {
+        auto song = id_of(v);
+        if (!song) return protocol_error("invalid playlist track id");
+        result.ids.push_back(*song);
+    }
+    result.revision = revision_of(*p, result.ids);
+    return result;
+}
+
+domain::Result<AlbumData> parse_album(std::string_view body, std::string_view id) {
+    auto doc = parse_body(body);
+    if (!doc) return doc.error();
+    auto a = doc->find("album");
+    if (a != doc->end() && a->is_null()) return Error{ErrorCode::not_found, "album not found", false, {}};
+    if (a == doc->end() || !a->is_object()) return protocol_error("response lacks album");
+    auto detail = album_of(*a);
+    if (!detail) return detail.error();
+    if (detail->ref.id.value() != id) return protocol_error("album id mismatch");
+    auto songs = doc->find("songs");
+    if (songs == doc->end() || !songs->is_array() || songs->size() > max_album_tracks)
+        return protocol_error("missing or oversized album songs (maximum 2000)");
+    AlbumData result{std::move(*detail), {}, {}};
+    std::vector<std::string> ids;
+    for (const auto& song : *songs) {
+        auto track = track_of(song);
+        if (!track) return track.error();
+        // 总数来自歌曲确属的专辑；不使用歌单位置或当前页大小填曲号。
+        if (track->album && track->album->ref && track->album->ref->id.value() == id && result.detail.track_count &&
+            *result.detail.track_count <= 65535 && (!track->track_number || *result.detail.track_count >= *track->track_number))
+            track->track_total = static_cast<std::uint32_t>(*result.detail.track_count);
+        ids.push_back(track->ref.id.value());
+        result.tracks.push_back(std::move(*track));
+    }
+    result.revision = revision_of(*a, ids);
+    return result;
+}
+
+domain::Result<std::vector<domain::Track>> parse_tracks(std::string_view body) {
+    auto doc = parse_body(body);
+    if (!doc) return doc.error();
+    auto songs = doc->find("songs");
+    if (songs == doc->end() || !songs->is_array() || songs->size() > 50) return protocol_error("invalid song detail batch");
+    std::vector<domain::Track> tracks;
+    for (const auto& song : *songs) {
+        auto track = track_of(song);
+        if (!track) return track.error();
+        tracks.push_back(std::move(*track));
+    }
+    return tracks;
+}
+
+domain::Result<Link> parse_link(std::string_view link) {
+    const auto refuse = [] { return Error::validation("link", "is not a supported netease link"); };
     // The web player keeps its route in the fragment: /#/song?id=N.
     std::string text{link};
     if (const auto hash = text.find("/#/"); hash != std::string::npos) {
         text.erase(hash + 1, 2);
     }
     auto url = application::transport::Url::parse(text);
-    if (!url) {
+    if (!url || url->port() != (url->is_https() ? 443 : 80)) {
         return refuse();
     }
     const auto& host = url->host();
@@ -351,18 +625,22 @@ domain::Result<std::string> parse_track_link(std::string_view link) {
     if (!path.empty() && path.back() == '/' && path.size() > 1) {
         path.remove_suffix(1);
     }
-    std::optional<std::string_view> id;
-    if (path == "/song" || path == "/m/song") {
-        id = query_value(url->target(), "id");
-    } else if (path.substr(0, 6) == "/song/") {
-        id = path.substr(6);
-    } else if (path.substr(0, 8) == "/m/song/") {
-        id = path.substr(8);
+    if (path.starts_with("/m/")) path.remove_prefix(2);
+    for (const auto* kind : {"song", "playlist", "album"}) {
+        const auto prefix = "/" + std::string{kind};
+        std::optional<std::string_view> id;
+        if (path == prefix) id = query_value(url->target(), "id");
+        else if (path.starts_with(prefix + "/")) id = path.substr(prefix.size() + 1);
+        if (id && is_valid_song_id(*id)) return Link{std::string{kind} == "song" ? "track" : kind, std::string{*id}};
     }
-    if (!id || !is_valid_song_id(*id)) {
-        return Error::validation("link", "does not name a netease song id");
-    }
-    return std::string{*id};
+    return refuse();
+}
+
+domain::Result<std::string> parse_track_link(std::string_view link) {
+    auto parsed = parse_link(link);
+    if (!parsed) return parsed.error();
+    if (parsed->kind != "track") return Error::validation("link", "is not a netease song link");
+    return parsed->id;
 }
 
 } // namespace music_service::providers::netease::parsing

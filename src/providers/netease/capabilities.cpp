@@ -1,4 +1,5 @@
 #include "providers/netease/capabilities.hpp"
+#include "providers/netease/client.hpp"
 
 #include "providers/netease/parsing/parsers.hpp"
 #include "providers/netease/protocol/requests.hpp"
@@ -33,66 +34,10 @@ std::string secret_key() {
     return key_source()();
 }
 
-Error http_status_error(const ports::HttpResponseHead& head) {
-    if (head.status == 429) {
-        Error error{ErrorCode::upstream_rate_limited, "netease is limiting requests", true, {}};
-        error.details.push_back({"http_status", "429"});
-        return error;
-    }
-    Error error{ErrorCode::upstream_failed, "netease answered with an unexpected status", head.status >= 500, {}};
-    error.details.push_back({"http_status", std::to_string(head.status)});
-    return error;
-}
-
 // The cookie of the bound user, if this call has one.
 std::string_view cookie_of(const ports::ProviderContext& context) {
     return context.secret ? context.secret->reveal() : std::string_view{};
 }
-
-protocol::Call call_for(std::string_view cookie) {
-    return {secret_key(), protocol::csrf_of(cookie).value_or("")};
-}
-
-class Client {
-public:
-    explicit Client(const ports::ProviderSetup& setup)
-        : source_(setup.source), upstream_(setup.upstream), rate_limit_group_(setup.rate_limit_group) {}
-
-    // A weapi call whose answer must be HTTP 200; the body is returned as is.
-    domain::Result<std::string> body(ports::HttpRequest request, const ports::ProviderContext& context,
-                                     std::string_view cookie = {}) const {
-        if (!cookie.empty()) {
-            protocol::with_cookie(request, cookie);
-        }
-        ports::AdmissionRequest base{context.identity.binding().principal_id(),
-                                     source_,
-                                     request.operation,
-                                     ports::TrafficClass::short_request,
-                                     context.identity,
-                                     {},
-                                     rate_limit_group_,
-                                     context.operation.deadline};
-        auto result = upstream_->fetch(std::move(request), base, context.operation);
-        if (!result) {
-            return std::move(result).error();
-        }
-        if (auto* pending = std::get_if<ports::PendingHop>(&result.value())) {
-            Error error{ErrorCode::service_busy, "upstream capacity is not available now", true, {}};
-            error.details.push_back({"admission", pending->deferred.blocked_dimension});
-            return error;
-        }
-        auto response = std::get<ports::HttpResponse>(std::move(result).value());
-        if (response.head.status != 200) {
-            return http_status_error(response.head);
-        }
-        return std::move(response.body);
-    }
-
-private:
-    domain::SourceId source_;
-    std::shared_ptr<ports::UpstreamHttp> upstream_;
-    std::string rate_limit_group_;
-};
 
 domain::Result<void> require_upstream(const ports::ProviderSetup& setup) {
     if (!setup.upstream) {
@@ -183,15 +128,15 @@ public:
     explicit Links(domain::SourceId source) : source_(std::move(source)) {}
 
     domain::Result<ports::ParsedLink> parse_link(std::string_view link) override {
-        auto id = parsing::parse_track_link(link);
+        auto id = parsing::parse_link(link);
         if (!id) {
             return std::move(id).error();
         }
-        auto platform_id = domain::PlatformId::parse(*id);
+        auto platform_id = domain::PlatformId::parse(id->id);
         if (!platform_id) {
             return std::move(platform_id).error();
         }
-        return ports::ParsedLink{"track", {source_, std::move(platform_id).value()}};
+        return ports::ParsedLink{id->kind, {source_, std::move(platform_id).value()}};
     }
 
 private:
@@ -230,14 +175,14 @@ public:
         if (!id) {
             return std::move(id).error();
         }
-        // Only standard quality is implemented: strict higher requests fail here,
-        // allow_lower falls back to it.
-        constexpr std::array offered{domain::Quality::standard};
-        if (auto chosen = domain::choose_quality(requirement, offered); !chosen) {
-            return std::move(chosen).error();
-        }
+        // Hi-Res has no independently verified sample; never advertise it as lossless.
+        constexpr std::array offered{domain::Quality::standard, domain::Quality::high, domain::Quality::lossless};
+        auto chosen = domain::choose_quality(requirement, offered);
+        if (!chosen) return chosen.error();
+        const auto level = *chosen == domain::Quality::lossless ? "lossless" :
+                           *chosen == domain::Quality::high ? "exhigh" : "standard";
         const auto cookie = cookie_of(context);
-        auto body = client_.body(protocol::song_url(*id, "standard", call_for(cookie)), context, cookie);
+        auto body = client_.body(protocol::song_url(*id, level, call_for(cookie)), context, cookie);
         if (!body) {
             return std::move(body).error();
         }
@@ -257,6 +202,7 @@ public:
                         false,
                         {}};
             error.details.push_back({"netease_song_code", "-110"});
+            if (evidence->fee) error.details.push_back({"netease_fee", std::to_string(*evidence->fee)});
             return error;
         }
         default: {
@@ -276,6 +222,15 @@ public:
                                       *evidence->bitrate_bps <= 160000;
             if (standard_mp3) {
                 quality = domain::Quality::standard;
+            } else if (evidence->level == "exhigh" && evidence->container == "mp3" &&
+                       evidence->bitrate_bps && *evidence->bitrate_bps >= 300000 && *evidence->bitrate_bps <= 340000) {
+                quality = domain::Quality::high;
+            } else if (evidence->level == "lossless" && evidence->container == "flac" &&
+                       evidence->bitrate_bps && *evidence->bitrate_bps > 0) {
+                quality = domain::Quality::lossless;
+            }
+            if (!quality && requirement.requested != domain::Quality::standard) {
+                return Error{ErrorCode::quality_unavailable, "netease returned an unverified quality tier", false, {}};
             }
             // No trial marker and a length: the platform hands out the whole song. Audio
             // verification checks the bytes.
@@ -323,6 +278,10 @@ public:
         }
         auto account = parsing::parse_account(*body);
         if (!account) {
+            if (account.error().code == ErrorCode::credentials_required) {
+                verification.status = ports::VerificationStatus::invalid;
+                return verification;
+            }
             return std::move(account).error();
         }
         if (!account->signed_in) {
@@ -342,6 +301,10 @@ private:
 };
 
 } // namespace
+
+protocol::Call call_for(std::string_view cookie) {
+    return {secret_key(), protocol::csrf_of(cookie).value_or("")};
+}
 
 void set_secret_key_source_for_testing(SecretKeySource source) {
     const std::lock_guard lock{key_mutex};

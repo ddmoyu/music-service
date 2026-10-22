@@ -28,6 +28,17 @@ using namespace music_service;
 using namespace music_service::test;
 namespace ports = application::ports;
 namespace parsing = providers::fivesing::parsing;
+
+TEST_CASE("5sing playlist links extract songListId instead of the owner id", "[fivesing][collections-b]") {
+    const auto link = unwrap(parsing::parse_link("http://5sing.kugou.com/62571411/dj/59b6bcf8da767f5ace4bb449.html"));
+    CHECK(link.kind == "playlist");
+    CHECK(link.id == "59b6bcf8da767f5ace4bb449");
+    CHECK(unwrap(parsing::parse_link("https://5sing.kugou.com/62571411/dj/59b6bcf8da767f5ace4bb449.html?x=1")).id == link.id);
+    CHECK(unwrap(parsing::parse_link("https://5sing.kugou.com/fc/16394286.html")).kind == "track");
+    for (const auto* url : {"https://5sing.kugou.com.evil/62571411/dj/abc.html", "https://5sing.kugou.com/user/dj/abc.html",
+                           "https://5sing.kugou.com/62571411/dj/.html", "https://5sing.kugou.com/62571411/album/abc.html",
+                           "https://5sing.kugou.com/62571411/dj/abc.html/extra"}) CHECK_FALSE(parsing::parse_link(url));
+}
 namespace protocol = providers::fivesing::protocol;
 using domain::ErrorCode;
 

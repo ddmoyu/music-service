@@ -88,7 +88,10 @@ app_profile 的 version 是管理配置中的正整数，应用身份或授权�
   "upstream": {"short_workers": 8, "queue": 64, "per_source_short": 2, "max_total_connections": 16},
   "catalog": {"default_sources": ["kuwo"], "max_sources_per_request": 8},
   "providers": {"kuwo": {"enabled": true, "implementation": "native"}},
-  "downloads": {"workers": 3, "per_source": 2, "max_attempts": 3, "transport_retries": 2},
+  "downloads": {"workers": 3, "per_source": 2, "max_attempts": 3, "transport_retries": 2,
+    "output": {"name_format": "artist_title", "folder_layout": "flat",
+      "embed_cover": true, "embed_lyrics": true, "cover_max_bytes": 8388608,
+      "metadata_timeout_seconds": 10}},
   "features": {"file_access": true, "media_proxy": false, "direct_media_urls": false, "automatic_fallback": false, "transcoding": false},
   "logging": {"format": "json", "level": "info"}
 }

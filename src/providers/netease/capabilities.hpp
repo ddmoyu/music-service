@@ -27,7 +27,8 @@ domain::Result<std::shared_ptr<ports::ITrackSearch>> make_search(const ports::Pr
 domain::Result<std::shared_ptr<ports::ITrackDetail>> make_detail(const ports::ProviderSetup& setup);
 domain::Result<std::shared_ptr<ports::ILinkParser>> make_link_parser(const ports::ProviderSetup& setup);
 domain::Result<std::shared_ptr<ports::ILyrics>> make_lyrics(const ports::ProviderSetup& setup);
-// Standard quality (128 kbit/s MP3) only. Anonymous works for songs the platform lets
+// Standard (128 kbit/s MP3), high (exhigh/320 kbit/s MP3) and lossless (FLAC).
+// The returned tier is evidence, not the requested tier. Anonymous works for songs the platform lets
 // everyone play; songs that need a membership or purchase are CREDENTIALS_REQUIRED
 // without a suitable account, and a trial clip is reported as a preview, never as the
 // song. No copyright (or no such song) is NOT_FOUND.
@@ -38,5 +39,18 @@ domain::Result<std::shared_ptr<ports::ICredentialVerifier>> make_verifier(const 
 
 // For tests: the same objects with a fixed weapi secret key.
 void set_secret_key_source_for_testing(SecretKeySource source);
+
+domain::Result<std::shared_ptr<ports::PlaylistSearch>> make_playlist_search(const ports::ProviderSetup& setup);
+domain::Result<std::shared_ptr<ports::AlbumSearch>> make_album_search(const ports::ProviderSetup& setup);
+domain::Result<std::shared_ptr<ports::PlaylistDetail>> make_playlist_detail(const ports::ProviderSetup& setup);
+domain::Result<std::shared_ptr<ports::AlbumDetail>> make_album_detail(const ports::ProviderSetup& setup);
+domain::Result<std::shared_ptr<ports::PlaylistTracks>> make_playlist_tracks(const ports::ProviderSetup& setup);
+domain::Result<std::shared_ptr<ports::AlbumTracks>> make_album_tracks(const ports::ProviderSetup& setup);
+domain::Result<std::shared_ptr<ports::ICategories>> make_categories(const ports::ProviderSetup& setup);
+domain::Result<std::shared_ptr<ports::CategoryPlaylists>> make_category_playlists(const ports::ProviderSetup& setup);
+domain::Result<std::shared_ptr<ports::IRecommendedPlaylists>> make_recommendations(const ports::ProviderSetup& setup);
+domain::Result<std::shared_ptr<ports::ICharts>> make_charts(const ports::ProviderSetup& setup);
+domain::Result<std::shared_ptr<ports::ChartDetail>> make_chart_detail(const ports::ProviderSetup& setup);
+domain::Result<std::shared_ptr<ports::ChartTracks>> make_chart_tracks(const ports::ProviderSetup& setup);
 
 } // namespace music_service::providers::netease

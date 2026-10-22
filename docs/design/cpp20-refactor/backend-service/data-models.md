@@ -65,12 +65,12 @@ AccountBinding 表达稳定的账号选择，不含 token、Cookie、secret_ref 
 
 | 模型 | 字段 |
 | --- | --- |
-| `Track` | ref、title、artists、album、duration_ms、version、artwork、context_ref、links、可选 external_ids（如 isrc，附证据来源） |
+| `Track` | ref、title、artists、album、duration_ms、version、artwork、track_number、track_total、context_ref、links、可选 external_ids（如 isrc，附证据来源） |
 | `ArtistSummary` | name，ref 可为 null；多个艺术家保留数组，不只拼成展示字符串 |
 | `AlbumSummary` | title、ref，可为空；保留与歌单不同的语义 |
 | `VersionInfo` | kind：studio／live／remix／cover／instrumental／unknown，label、evidence |
 | `Playlist` | ref、name、creator、description、artwork、track_count、play_count、updated_at |
-| `Album` | ref、title、artists、release_date、track_count、artwork |
+| `Album` | ref、title、artists、release_date、track_count、artwork、可选 description |
 | `Category` | source、id、name、group、catalog_kind |
 | `Chart` | ref、name、description、update_hint、updated_at、track_count、catalog_kind |
 
@@ -112,6 +112,8 @@ AccountBinding 表达稳定的账号选择，不含 token、Cookie、secret_ref 
 
 集合曲目和分类歌单使用同一游标约定。底层页码／偏移由 Provider 转换，服务不暴露 SDK 私有游标给客户端解释。游标失效返回 `410 CURSOR_EXPIRED`，来源或查询不匹配返回 `400 CURSOR_MISMATCH`。
 
+0.1.2 集合分页增加 `listed_total`（可见清单长度）和 `unavailable_count`（本页有 ID 但缺详情的位置数），未知为 null；`total` 保留上游声明值。分页按原列表位置推进，缺详情不改变后续偏移；重复引用保留为重复位置。可检测到曲目顺序／数量／版本变更时使旧游标失效，服务页缓存和上游响应不构成原子快照。
+
 `SourceResult` 包含 source、status（ok／failed／unsupported／disabled）、elapsed_ms、page、error、cache。ok 且 returned=0 才是已知无结果；超时必须为 failed。混合结果使用 HTTP 200，meta.partial=true；所有已执行来源失败时按 API 错误规则返回，仍附逐源明细。
 
 ## 下载任务快照
@@ -132,6 +134,10 @@ phase 用 status 表达，`stage` 用于 processing 内部的 decrypt／validate
 公开进度检查点提交也递增 version；HTTP 与 SSE 使用同一版本。每次领取额外生成私有 execution_id，状态写入同时检查执行世代与预期版本，旧尝试的迟到回调不能覆盖新执行。execution_id、租约和秘密引用不在普通 Task 投影中返回。续传进度包含已确认的既有字节；重新下载时进度可重置，不保证跨尝试单调递增。
 
 `metadata_policy`：`best_effort`（默认）、`required`、`skip`。best_effort 允许标签失败而音频 completed，metadata_status 为 partial／failed 并列出 warnings；required 失败则不发布最终资产；skip 明确不写标签。
+
+0.1.1 的新任务默认获取可用封面和歌词。`result.metadata_fields` 为字段到状态的对象：`written`、`unavailable`（平台未提供可信字段或明确无歌词）、`unsupported`（无能力）、`disabled`、`fetch_failed`、`write_failed`。当前报告字段为 title、artist、album、cover、lyrics、track_number、track_total；未提供的基础标签／曲号可以省略，客户端须兼容未知新字段。`required` 要求可提供的启用字段成功获取和写入，不把缺失／不支持当失败；获取失败不能冒充缺失。部分获取失败使 `metadata_status=partial`，警告包含 METADATA_PARTIAL 及字段原因。每项图片／歌词获取沿用任务取消、绝对期限和公共入场；子请求超时可在 best_effort 下继续，不会重置任务预算。
+
+`track_number`、`track_total` 为正整数或 null，来自专辑元数据而非歌单位置；未知不生成 0/0。曲号与总数写入 MP3／FLAC／M4A；无曲号时不单独写总数。配置取值、原文／译文规则与升级兼容见 [输出配置](../../../../config/README.md#下载文件输出011)。
 
 `attempt` 统计已开始的任务级资源解析与传输尝试，排队时为 0，上限使用 downloads.max_attempts，包含首次。领取产生 execution_id，但不自动消耗 attempt；首次获准执行该逻辑尝试时持久递增，admission 等待后的再领取沿用该 attempt。只有 RetryPolicy 判定结束旧尝试并开始新的上游重试时才再递增。单次传输内部网络重试另计，使用 downloads.transport_retries；任务绝对时间预算自首次逻辑尝试开始计时，此后的所有等待和重试均受其约束。具体边界见[运行时](runtime-and-tasks.md)。
 

@@ -1,0 +1,30 @@
+{
+  "code": 200,
+  "result": {
+    "playlistCount": 461,
+    "playlists": [
+      {
+        "id": 6792103822,
+        "name": "周杰伦-Jay 『网易云精选』",
+        "coverImgUrl": "http://p1.music.126.net/WFQ4EKF5QabD33U3NUOPWQ==/109951169535051638.jpg",
+        "description": "【持续更新】欢迎投稿，每一首歌曲都是大海捞针找的希望喜欢，不喜勿喷！每一首都有独特的情绪和故事铺陈，聆听这段时光音景——如同你内心最真实的回响独白。\n\n封面：周杰伦\n\n感谢网易云，感谢官方。",
+        "trackCount": 143,
+        "playCount": 34037108,
+        "creator": {
+          "nickname": "Buradarrr"
+        }
+      },
+      {
+        "id": 10057662169,
+        "name": "周杰伦全免费听 ",
+        "coverImgUrl": "http://p1.music.126.net/81CiiInNcgv6fwA4uuei1A==/109951169594663161.jpg",
+        "description": "周杰伦的歌如同一幅美丽的风景画，旋律、风景、歌词和情感相互交融，让人沉醉其中",
+        "trackCount": 34,
+        "playCount": 3819250,
+        "creator": {
+          "nickname": "念着倒才傻n186"
+        }
+      }
+    ]
+  }
+}

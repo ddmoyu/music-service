@@ -358,15 +358,15 @@ public:
     explicit Links(domain::SourceId source) : source_(std::move(source)) {}
 
     domain::Result<ports::ParsedLink> parse_link(std::string_view link) override {
-        auto key = parsing::parse_track_link(link);
+        auto key = parsing::parse_link(link);
         if (!key) {
             return std::move(key).error();
         }
-        auto id = domain::PlatformId::parse(key->platform_id());
+        auto id = domain::PlatformId::parse(key->id);
         if (!id) {
             return std::move(id).error();
         }
-        return ports::ParsedLink{"track", {source_, std::move(id).value()}};
+        return ports::ParsedLink{key->kind, {source_, std::move(id).value()}};
     }
 
 private:

@@ -32,9 +32,42 @@ domain::Result<SearchPage> parse_search(std::string_view body);
 // protocol error.
 domain::Result<domain::Track> parse_detail(std::string_view body, std::string_view id);
 
+inline constexpr std::size_t max_playlist_ids = 10000;
+inline constexpr std::size_t max_album_tracks = 2000;
+struct PlaylistData {
+    domain::Playlist detail;
+    std::vector<std::string> ids;
+    std::string revision; // 更新标记及有序 ID 清单的指纹，用于检测翻页期间变化
+};
+struct AlbumData {
+    domain::Album detail;
+    std::vector<domain::Track> tracks;
+    std::string revision;
+};
+template<class T> struct CollectionSearch {
+    std::vector<T> items;
+    std::uint64_t total{};
+};
+domain::Result<PlaylistData> parse_playlist(std::string_view body, std::string_view id);
+domain::Result<AlbumData> parse_album(std::string_view body, std::string_view id);
+domain::Result<std::vector<domain::Track>> parse_tracks(std::string_view body);
+domain::Result<CollectionSearch<domain::Playlist>> parse_playlist_search(std::string_view body);
+domain::Result<CollectionSearch<domain::Album>> parse_album_search(std::string_view body);
+domain::Result<std::vector<domain::Category>> parse_categories(std::string_view body);
+domain::Result<std::vector<domain::Chart>> parse_charts(std::string_view body);
+struct DiscoveryPlaylists {
+    std::vector<domain::Playlist> items;
+    std::optional<std::uint64_t> total;
+    bool more{};
+};
+domain::Result<DiscoveryPlaylists> parse_discovery_playlists(std::string_view body, bool recommendations);
+struct Link { std::string kind; std::string id; };
+domain::Result<Link> parse_link(std::string_view link);
+
 // What player/url/v1 says about the audio of the requested id.
 struct AudioEvidence {
     int code{0};                 // per-song code: 200 playable, 404 no copyright or no song, -110 needs a paying account
+    std::optional<std::int64_t> fee; // Preserve upstream entitlement category without inferring account access.
     std::string url;             // https on a *.music.126.net host when code is 200
     std::string container;       // "type", e.g. "mp3"
     std::string level;           // e.g. "standard"

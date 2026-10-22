@@ -220,6 +220,12 @@ features 反映实际构建及运行配置；客户端不能把该示例的布�
 
 曲目／歌单列表 data 为 `{items, page}`，详情 data 为实体对象。集合的 track_count 允许未知，返回的当前页大小不等于集合完整大小。不支持某种详情时明确返回 CAPABILITY_UNSUPPORTED，而不是用搜索结果伪装完整详情。
 
+阶段 B 增加可选分页事实：`page.listed_total` 为上游可见 ID／歌曲清单长度，`page.unavailable_count` 为本页有 ID 但缺失详情的位置数。未知为 null；`page.total` 仍是上游声明总数，不能用返回条数替代。网易云按原位置推进游标，可能出现 items 为空但仍有 next_cursor 的页。检测到集合曲目变更返回 CURSOR_EXPIRED；不承诺固定时刻快照。Album 增加可选 `description`，未知为 null。
+
+阶段 C：网易云开放分类／分类歌单、公共推荐、榜单目录／详情／曲目，使用上述公共路由。发现请求不携带账号 Cookie，catalog_kind=live。分类 ID 为该来源的分类名称（全部歌单为 `全部`）；榜单 ID 必须来自榜单目录。热歌榜 `3778678` 的曲目页可作为有界热门列表，来源仍是榜单。推荐上游没有分页，首次读取最多 30 项、total=null、listed_total 为实际候选数；后续页使用按身份和页大小绑定的短时快照，10 分钟／容量淘汰／服务重启后 CURSOR_EXPIRED。分类／曲目每页上限分别为 50／100；分类 total 保留上游声明，榜单 total 来自完整集合声明。
+
+网易云 `resolve_audio` 的 high 映射 exhigh，lossless 映射 FLAC；实际返回档位可能受账号、歌曲或购买权限制。strict 降级返回 QUALITY_UNAVAILABLE；allow_lower 返回实际档位及 QUALITY_LOWERED。Hi-Res 未注册支持，严格请求拒绝，允许降级时最多尝试 lossless；试听仍按 allow_preview 判定。凭据验证 301／403／account=null 为 invalid，不因会员标记承诺每首歌可下载。
+
 links/parse 返回 `{matched, kind, ref}`，kind 为 track／playlist／album／artist。未匹配时 200 matched=false；支持的短链可有限展开，目标仍须属于平台允许范围，不实现任意地址跳转代理。
 
 v1 为单实体解析契约；文本含多个不同的已识别实体时返回 400 VALIDATION_FAILED，要求缩小输入范围。重复出现同一实体不视为多个目标。
@@ -521,5 +527,7 @@ paused 只停止领取新任务，已有任务继续；取消活动任务仍走�
 6. 用户点取消则调用取消接口并等终态；关闭 SSE、停止轮询或关闭窗口不等于取消。
 
 ## 14. 契约验证清单
+
+0.1.1 兼容扩展：歌曲的 `artwork` 在有可信平台封面时为 HTTPS URL；`track_number`、`track_total` 为正整数或 null。下载结果新增 `metadata_fields`，取值见 [任务模型](data-models.md#下载任务)。客户端忽略不认识的可选字段即可；下载请求无需增加参数。输出默认配置由服务端 `downloads.output` 控制，并在受理时固定；单任务仍可使用 `metadata_policy`。
 
 重点验证 JSON 示例可解析、单位一致、逐源分页不重复第一页、所有错误有 request_id、下载提交可靠持久化、同键幂等、批次创建原子性、资源 owner 隔离、状态转换竞争、媒体票据范围与到期、Range／If-Range／304／416，以及关闭前端后任务生命周期独立。

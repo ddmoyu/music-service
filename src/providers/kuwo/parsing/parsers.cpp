@@ -394,4 +394,20 @@ domain::Result<std::string> parse_track_link(std::string_view link) {
     return std::string{rid};
 }
 
+domain::Result<Link> parse_link(std::string_view link) {
+    if (auto song = parse_track_link(link)) return Link{"track", *song};
+    auto url = application::transport::Url::parse(link);
+    if (!url || (url->host() != "www.kuwo.cn" && url->host() != "kuwo.cn") ||
+        url->port() != (url->is_https() ? 443 : 80))
+        return domain::Error::validation("link", "is not a supported kuwo link");
+    auto path = url->path();
+    if (path.ends_with('/')) path.remove_suffix(1);
+    for (const auto* kind : {"playlist", "album"}) {
+        const auto prefix = "/" + std::string{kind} + "_detail/";
+        if (path.starts_with(prefix) && is_valid_rid(path.substr(prefix.size())))
+            return Link{kind, std::string{path.substr(prefix.size())}};
+    }
+    return domain::Error::validation("link", "is not a supported kuwo collection link");
+}
+
 } // namespace music_service::providers::kuwo::parsing

@@ -377,6 +377,17 @@ void read_document(Reader& r, const json& doc, const std::filesystem::path& base
                                    {"max_attempts", [&](const json& x, const std::string& q) { r.number(x, q, d.max_attempts, 1, 100); }},
                                    {"transport_retries", [&](const json& x, const std::string& q) { r.number(x, q, d.transport_retries, 0, 100); }},
                                    {"max_file_bytes", [&](const json& x, const std::string& q) { r.number(x, q, d.max_file_bytes, 1, json_safe_max); }},
+                                   {"output", [&](const json& x, const std::string& q) {
+                                       auto& o = d.output;
+                                       r.object(x, q, {
+                                           {"name_format", [&](const json& y, const std::string& z) { r.string(y, z, o.name_format); }},
+                                           {"folder_layout", [&](const json& y, const std::string& z) { r.string(y, z, o.folder_layout); }},
+                                           {"embed_cover", [&](const json& y, const std::string& z) { r.boolean(y, z, o.embed_cover); }},
+                                           {"embed_lyrics", [&](const json& y, const std::string& z) { r.boolean(y, z, o.embed_lyrics); }},
+                                           {"cover_max_bytes", [&](const json& y, const std::string& z) { r.number(y, z, o.cover_max_bytes, 1, 32 * 1024 * 1024); }},
+                                           {"metadata_timeout_seconds", [&](const json& y, const std::string& z) { r.number(y, z, o.metadata_timeout_seconds, 1, 60); }},
+                                       });
+                                   }},
                                });
                   }},
                  {"retry",

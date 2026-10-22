@@ -84,8 +84,8 @@ std::string encode_intent(const domain::NormalizedDownloadIntent& intent) {
 
     const auto& requirement = intent.requirement();
     const auto& product = intent.product();
-    const json document{
-        {"schema", schema_version},
+    json document{
+        {"schema", product.output ? 2 : schema_version},
         {"owner_id", intent.owner_id()},
         {"original_track", ref_to_json(intent.original_track())},
         {"selection", selection},
@@ -100,6 +100,12 @@ std::string encode_intent(const domain::NormalizedDownloadIntent& intent) {
           {"naming_config_version", product.naming_config_version},
           {"metadata_config_version", product.metadata_config_version}}},
     };
+    if (product.output) {
+        const auto& o = *product.output;
+        document["product"]["output"] = {{"name_format", o.name_format}, {"folder_layout", o.folder_layout},
+            {"embed_cover", o.embed_cover}, {"embed_lyrics", o.embed_lyrics},
+            {"cover_max_bytes", o.cover_max_bytes}, {"metadata_timeout_seconds", o.metadata_timeout_seconds}};
+    }
     return document.dump();
 }
 
@@ -109,7 +115,8 @@ domain::Result<domain::NormalizedDownloadIntent> decode_intent(std::string_view 
         return corrupt("not a JSON object");
     }
     try {
-        if (doc.at("schema").get<int>() != schema_version) {
+        const auto schema = doc.at("schema").get<int>();
+        if (schema != schema_version && schema != 2) {
             return corrupt("unsupported schema");
         }
         auto original = ref_from_json(doc.at("original_track"));
@@ -178,6 +185,19 @@ domain::Result<domain::NormalizedDownloadIntent> decode_intent(std::string_view 
              product.at("naming_config_version").get<std::string>(),
              product.at("metadata_config_version").get<std::string>()},
         };
+        if (schema == 2) {
+            const auto& o = product.at("output");
+            // 先以宽类型读取和核验，避免负数或溢出被截成合法的无符号值。
+            const auto bytes = o.at("cover_max_bytes").get<std::int64_t>();
+            const auto timeout = o.at("metadata_timeout_seconds").get<std::int64_t>();
+            if (bytes <= 0 || bytes > 32 * 1024 * 1024 || timeout <= 0 || timeout > 60) {
+                return corrupt("invalid output limits");
+            }
+            draft.product.output = domain::OutputOptions{o.at("name_format").get<std::string>(),
+                o.at("folder_layout").get<std::string>(), o.at("embed_cover").get<bool>(),
+                o.at("embed_lyrics").get<bool>(), static_cast<std::uint64_t>(bytes),
+                static_cast<std::uint32_t>(timeout)};
+        }
         return domain::NormalizedDownloadIntent::normalize(std::move(draft));
     } catch (const json::exception&) {
         return corrupt("missing or mistyped field");

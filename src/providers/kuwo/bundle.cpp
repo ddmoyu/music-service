@@ -15,7 +15,7 @@ ports::ProviderBundle make_bundle() {
         .source = std::move(source).value(),
         .name = "酷我音乐",
         .implementation_id = "kuwo-native",
-        .implementation_version = "0.1.0",
+        .implementation_version = "0.1.2",
     };
     // Only what T12 verified: anonymous search, details, song links and standard
     // quality audio. No credentials are registered; nothing needs them yet.

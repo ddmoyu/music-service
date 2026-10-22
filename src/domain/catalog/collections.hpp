@@ -34,6 +34,7 @@ struct Album {
     std::optional<std::string> release_date{}; // YYYY, YYYY-MM or YYYY-MM-DD
     std::optional<std::uint64_t> track_count{};
     Artwork artwork{};
+    std::optional<std::string> description{};
 };
 
 // An artist as a search result: the name and an id that its track and album lists take.

@@ -11,3 +11,4 @@ ffmpeg -f lavfi -i "sine=frequency=440:sample_rate=8000:duration=3" -ac 1 -map_m
 | --- | --- | --- |
 | `sine-3s.flac` | 19,604 字节 | FLAC，8000 Hz，单声道，24000 样本（3.000 秒） |
 | `sine-3s.m4a` | 9,407 字节 | 品牌 M4A，AAC，8000 Hz，单声道；顶层盒 ftyp、moov、free、mdat |
+| `cover.png` | 67 字节 | 与 tagging_test 的内存样本一致，1×1 透明 PNG；用于封面正文结构检查和 Runner 标签读回，无远程来源 |

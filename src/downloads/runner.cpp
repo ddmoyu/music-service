@@ -3,6 +3,8 @@
 #include "application/transport/http_rules.hpp"
 #include "application/transport/upstream_client.hpp"
 #include "downloads/resume_policy.hpp"
+#include "downloads/metadata_support.hpp"
+#include "application/transport/url.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -230,6 +232,8 @@ private:
     std::optional<RunReport> prepare();
     std::optional<RunReport> resolve();
     std::optional<RunReport> choose_name();
+    std::optional<RunReport> collect_metadata(const domain::Track& track);
+    std::optional<RunReport> metadata_error(std::string field, const Error& cause);
     std::optional<RunReport> enter_downloading();
     std::optional<RunReport> download();
     std::optional<RunReport> process();
@@ -278,6 +282,8 @@ private:
     Progress progress_;
     std::optional<ports::ProcessingReport> report_;
     std::optional<ports::TrackMetadata> metadata_; // from the track detail, for the tags
+    std::vector<std::pair<std::string, std::string>> metadata_fields_;
+    std::vector<std::string> metadata_warnings_;
 };
 
 template <class Write> domain::Result<ports::TaskRecord> Execution::write(Write&& call) {
@@ -572,6 +578,9 @@ std::optional<RunReport> Execution::choose_name() {
     const bool named = checkpoint_ && checkpoint_->track == key && !checkpoint_->name.empty();
     const auto policy = intent_->metadata_policy();
     name_ = named ? checkpoint_->name : s_.file_name(actual_->source.value() + "-" + actual_->id.value());
+    if (intent_->product().output && policy == domain::MetadataPolicy::skip) {
+        metadata_fields_ = {{"cover", "disabled"}, {"lyrics", "disabled"}};
+    }
     if (named && policy == domain::MetadataPolicy::skip) {
         return std::nullopt;
     }
@@ -601,8 +610,98 @@ std::optional<RunReport> Execution::choose_name() {
         metadata.album = track->album->title;
     }
     metadata_ = std::move(metadata);
+    if (intent_->product().output) {
+        if (!named) name_ = output_name(*track, *intent_->product().output, s_.file_name);
+        if (policy != domain::MetadataPolicy::skip) {
+            metadata_->track_number = track->track_number;
+            metadata_->track_total = track->track_total;
+            return collect_metadata(*track);
+        }
+        return std::nullopt;
+    }
     if (!named && !track->title.empty()) {
         name_ = s_.file_name(artists.empty() ? track->title : artists + " - " + track->title);
+    }
+    return std::nullopt;
+}
+
+std::optional<RunReport> Execution::metadata_error(std::string field, const Error& cause) {
+    if (stop_requested() || cause.code == ErrorCode::canceled || admission_deferred(cause) ||
+        s_.clock->steady_now() >= deadline_) {
+        return on_error(cause, resume_stage());
+    }
+    metadata_fields_.emplace_back(field, "fetch_failed");
+    if (intent_->metadata_policy() == domain::MetadataPolicy::required) {
+        return on_error(error(ErrorCode::metadata_failed, "required metadata could not be obtained",
+                              cause.retryable || cause.code == ErrorCode::deadline_exceeded,
+                              field, std::string{domain::to_string(cause.code)}), resume_stage());
+    }
+    metadata_warnings_.push_back("METADATA_PARTIAL");
+    metadata_warnings_.push_back(field == "cover" ? "COVER_FETCH_FAILED" : "LYRICS_FETCH_FAILED");
+    return std::nullopt;
+}
+
+std::optional<RunReport> Execution::collect_metadata(const domain::Track& track) {
+    const auto& options = *intent_->product().output;
+    const auto bounded = [&] {
+        return ports::OperationContext{std::min(deadline_, s_.clock->steady_now() +
+                                                std::chrono::seconds{options.metadata_timeout_seconds}),
+                                        context().stop};
+    };
+    if (!options.embed_cover) {
+        metadata_fields_.emplace_back("cover", "disabled");
+    } else if (!track.artwork) {
+        metadata_fields_.emplace_back("cover", "unavailable");
+    } else {
+        // 封面由可信平台详情给出；图片请求绝不携带账号 Cookie 或音源秘密头。
+        const auto url = application::transport::Url::parse(*track.artwork);
+        if (!url || !url->is_https()) {
+            if (auto ended = metadata_error("cover", Error::validation("artwork", "requires HTTPS"))) return ended;
+        } else {
+            const auto ctx = bounded();
+            ports::HttpRequest request;
+            request.url = url->str();
+            request.operation = "artwork";
+            request.max_response_bytes = static_cast<std::size_t>(options.cover_max_bytes);
+            const ports::AdmissionRequest base{task_.owner_id, actual_->source, "artwork",
+                ports::TrafficClass::short_request, lease_->identity, {}, {}, ctx.deadline};
+            auto fetched = s_.upstream->fetch(std::move(request), base, ctx);
+            if (!fetched) {
+                if (auto ended = metadata_error("cover", fetched.error())) return ended;
+            } else if (const auto* pending = std::get_if<ports::PendingHop>(&*fetched)) {
+                return on_error(error(ErrorCode::service_busy, "artwork request is waiting for admission", true,
+                                      "admission", pending->deferred.blocked_dimension), resume_stage());
+            } else {
+                auto response = std::get<ports::HttpResponse>(std::move(*fetched));
+                const auto mime = picture_mime(response.body);
+                if (response.head.status != 200 || response.body.size() > options.cover_max_bytes || !mime) {
+                    if (auto ended = metadata_error("cover", error(ErrorCode::upstream_failed,
+                            "the cover response is not a supported image", response.head.status >= 500))) return ended;
+                } else {
+                    metadata_->cover = ports::Picture{*mime, std::move(response.body)};
+                }
+            }
+        }
+    }
+    if (!options.embed_lyrics) {
+        metadata_fields_.emplace_back("lyrics", "disabled");
+    } else {
+        auto port = s_.providers->capability<ports::ILyrics>(actual_->source.value());
+        if (!port && port.error().code == ErrorCode::capability_unsupported) {
+            metadata_fields_.emplace_back("lyrics", "unsupported");
+        } else if (!port) {
+            if (auto ended = metadata_error("lyrics", port.error())) return ended;
+        } else {
+            const ports::ProviderContext call{bounded(), lease_->identity, std::nullopt, secret_};
+            auto lyrics = (*port)->lyrics(call, *actual_);
+            if (!lyrics) {
+                if (auto ended = metadata_error("lyrics", lyrics.error())) return ended;
+            } else {
+                auto text = embedded_lyrics(*lyrics);
+                if (text.empty()) metadata_fields_.emplace_back("lyrics", "unavailable");
+                else metadata_->lyrics = std::move(text);
+            }
+        }
     }
     return std::nullopt;
 }
@@ -1003,6 +1102,12 @@ std::optional<RunReport> Execution::process() {
             warnings_.push_back(w);
         }
     }
+    for (const auto& warning : metadata_warnings_) {
+        if (std::find(report->warnings.begin(), report->warnings.end(), warning) == report->warnings.end()) {
+            report->warnings.push_back(warning);
+        }
+    }
+    for (const auto& field : metadata_fields_) report->metadata_fields.push_back(field);
     report_ = std::move(report).value();
     return std::nullopt;
 }

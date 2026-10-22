@@ -7,6 +7,7 @@
 #include "../unit/providers/mock_providers.hpp"
 
 #include "application/accounts/credential_service.hpp"
+#include "application/tasks/download_service.hpp"
 #include "application/transport/upstream_client.hpp"
 #include "audio_processing/verifying_processor.hpp"
 #include "downloads/runner.hpp"
@@ -25,6 +26,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
+#include <mpegfile.h>
+#include <tpropertymap.h>
+#include <tvariant.h>
 
 #include <atomic>
 #include <filesystem>
@@ -95,9 +99,11 @@ public:
     std::atomic<bool> holding{false};
     // Called after each delivered chunk with the bytes sent so far (the runner has handled it).
     std::function<void(std::size_t)> after_chunk;
+    std::function<domain::Result<ports::HttpResponse>(const ports::HttpRequest&, const ports::OperationContext&)> fetch;
 
-    domain::Result<ports::HttpResponse> request(const ports::HttpRequest&, const ports::UpstreamLease&,
-                                                const ports::OperationContext&) override {
+    domain::Result<ports::HttpResponse> request(const ports::HttpRequest& request, const ports::UpstreamLease&,
+                                                const ports::OperationContext& context) override {
+        if (fetch) return fetch(request, context);
         return domain::Error{ErrorCode::upstream_failed, "not scripted", false, {}};
     }
 
@@ -188,6 +194,22 @@ Reply serve_range(const ports::HttpRequest& request, const std::string& bytes) {
 struct ResolverScript {
     std::atomic<int> calls{0};
     std::function<domain::Result<ports::ResolvedAudio>(const domain::TrackRef&)> answer;
+    std::function<domain::Result<domain::Track>(const domain::TrackRef&)> detail;
+    std::function<domain::Result<domain::TrackLyrics>(const ports::ProviderContext&)> lyrics;
+};
+
+class MetadataScript final : public ports::ITrackDetail, public ports::ILyrics {
+public:
+    explicit MetadataScript(std::shared_ptr<ResolverScript> s) : script(std::move(s)) {}
+    domain::Result<domain::Track> track_detail(const ports::ProviderContext&, const domain::TrackRef& ref) override {
+        if (script->detail) return script->detail(ref);
+        return domain::Track{ref, "detail", {}, {}, 1000, {}};
+    }
+    domain::Result<domain::TrackLyrics> lyrics(const ports::ProviderContext& c, const domain::TrackRef&) override {
+        if (script->lyrics) return script->lyrics(c);
+        return domain::TrackLyrics{{}, {}, {}, true, {}};
+    }
+    std::shared_ptr<ResolverScript> script;
 };
 
 class ScriptedResolver final : public ports::IAssetResolver {
@@ -219,6 +241,17 @@ private:
 // Catalog (search, detail "detail") plus anonymous audio from the script.
 ports::ProviderBundle scripted(std::string_view name, std::shared_ptr<ResolverScript> script) {
     auto bundle = mock_catalog(name);
+    bundle.bindings[1] = ports::CapabilityBinding::bind<ports::ITrackDetail>(
+        [script](const ports::ProviderSetup&) -> domain::Result<std::shared_ptr<ports::ITrackDetail>> {
+            return std::shared_ptr<ports::ITrackDetail>{std::make_shared<MetadataScript>(script)};
+        });
+    if (name == "src") {
+        bundle.capabilities.push_back({.key = "lyrics"});
+        bundle.bindings.push_back(ports::CapabilityBinding::bind<ports::ILyrics>(
+            [script](const ports::ProviderSetup&) -> domain::Result<std::shared_ptr<ports::ILyrics>> {
+                return std::shared_ptr<ports::ILyrics>{std::make_shared<MetadataScript>(script)};
+            }));
+    }
     bundle.capabilities.push_back({.key = "resolve_audio"});
     bundle.bindings.push_back(ports::CapabilityBinding::bind<ports::IAssetResolver>(
         [script](const ports::ProviderSetup&) -> domain::Result<std::shared_ptr<ports::IAssetResolver>> {
@@ -302,6 +335,8 @@ struct Runs {
                                           {domain::Quality::standard, domain::QualityPolicy::strict, false},
                                           domain::MetadataPolicy::best_effort,
                                           {"dst_main", "d1", "n1", "m1"}};
+        draft.product.output = output;
+        draft.metadata_policy = metadata_policy;
         auto intent = unwrap(domain::NormalizedDownloadIntent::normalize(std::move(draft)));
         const auto key = "key-" + std::string{source} + "-" + std::string{id} + "-" + who;
         return unwrap(tasks->create({std::move(intent), key, "h", false})).task.task_id;
@@ -341,6 +376,8 @@ struct Runs {
     std::string owner;
     std::string other;
     std::string audio = mp3();
+    std::optional<domain::OutputOptions> output;
+    domain::MetadataPolicy metadata_policy{domain::MetadataPolicy::best_effort};
 };
 
 template <class Predicate> bool eventually(Predicate&& done, std::chrono::milliseconds budget = 10s) {
@@ -362,6 +399,243 @@ ports::AdmissionRequest download_slot(const std::string& owner, std::string_view
 }
 
 } // namespace
+
+TEST_CASE("one accepted batch permission failure leaves completed files and other items intact", "[runner][collections-b]") {
+    Runs r{"batch-permissions"};
+    using namespace application::tasks;
+    DownloadService service{r.tasks, r.registry, r.credentials,
+        {{"dst_main", infrastructure::filesystem::path_to_utf8(r.root), {r.owner}, true}}, {},
+        [&](const std::string&, const std::string& path, std::uint64_t size) {
+            const auto file = r.root / infrastructure::filesystem::path_from_utf8(path);
+            return fs::is_regular_file(file) && fs::file_size(file) == size;
+        }, 100};
+    r.script->answer = [](const domain::TrackRef& ref) -> domain::Result<ports::ResolvedAudio> {
+        if (ref.id.value() == "2") return domain::Error{ErrorCode::credentials_required, "subscription required", false, {}};
+        return ports::ResolvedAudio{ref, domain::Quality::standard, domain::Completeness::unknown,
+            "mp3", 128000, "https://cdn.test/" + ref.id.value() + ".mp3", {}, {}, 30010, ports::ProcessingPlan{}};
+    };
+    const std::vector<DownloadRequest> items{{track("src", "1")}, {track("src", "2")}, {track("src", "3")}, {track("src", "1")}};
+    const auto accepted = unwrap(service.create_batch(r.owner, items, "batch-permission-001", "four"));
+    REQUIRE(accepted.created_count == 3);
+    REQUIRE(accepted.reused_count == 1);
+    for (int i = 0; i < 3; ++i) (void)r.run_next();
+    const auto view = unwrap(service.get_batch(r.owner, accepted.batch_id));
+    CHECK(view.items[0].task.status == TaskStatus::completed);
+    CHECK(view.items[1].task.status == TaskStatus::failed);
+    REQUIRE(view.items[1].task.error_json);
+    CHECK(json::parse(*view.items[1].task.error_json)["code"] == "CREDENTIALS_REQUIRED");
+    CHECK(view.items[2].task.status == TaskStatus::completed);
+    CHECK(view.items[3].task.task_id == view.items[0].task.task_id);
+    for (const std::size_t index : {0U, 2U}) {
+        const auto result = json::parse(*view.items[index].task.result_json);
+        const auto asset = unwrap(r.publications->get_asset(r.owner, result["file_id"].get<std::string>()));
+        CHECK(without_id3v2(read_bytes(r.root / infrastructure::filesystem::path_from_utf8(asset.relative_path))) == r.audio);
+    }
+    const auto reused = unwrap(service.create_batch(r.owner, {items[0], items[2]}, "batch-permission-002", "reuse"));
+    CHECK(reused.created_count == 0);
+    CHECK(reused.reused_count == 2);
+}
+
+TEST_CASE("new downloads fetch bounded metadata and publish readable tags in folders", "[runner][output]") {
+    Runs r{"metadata-output"};
+    r.output = domain::OutputOptions{};
+    r.output->folder_layout = "artist_album";
+    r.script->detail = [](const domain::TrackRef& ref) -> domain::Result<domain::Track> {
+        return domain::Track{ref, "晴天", {{"歌手甲", {}}, {"歌手乙", {}}}, domain::AlbumSummary{"专辑", {}},
+                             30010, {}, "https://img.test/cover.png", 3, 12};
+    };
+    const auto cover = read_bytes(fs::path{MUSIC_SERVICE_TEST_FIXTURES} / "audio/cover.png");
+    int cover_calls = 0;
+    int lyric_calls = 0;
+    r.transport->fetch = [&](const ports::HttpRequest& req, const ports::OperationContext& ctx)
+        -> domain::Result<ports::HttpResponse> {
+        ++cover_calls;
+        CHECK(req.url == "https://img.test/cover.png");
+        CHECK(req.secret_headers.empty());
+        CHECK(req.headers.empty());
+        CHECK(req.max_response_bytes == 8 * 1024 * 1024);
+        CHECK(ctx.deadline <= r.clock->steady_now() + 10s);
+        return ports::HttpResponse{{200, {}, req.url}, cover};
+    };
+    r.script->lyrics = [&](const ports::ProviderContext& ctx) -> domain::Result<domain::TrackLyrics> {
+        ++lyric_calls;
+        CHECK(ctx.operation.deadline <= r.clock->steady_now() + 10s);
+        return domain::TrackLyrics{"[00:01]original", "[00:02]翻译", {}, false, {}};
+    };
+    const auto id = r.create();
+    // Changing the defaults after acceptance must not alter this task's stored snapshot.
+    r.output->folder_layout = "flat";
+    r.output->embed_cover = false;
+    CHECK(r.run_next().outcome == RunOutcome::completed);
+    const auto task = r.get(id);
+    REQUIRE(task.result_json);
+    const auto result = json::parse(*task.result_json);
+    CHECK(result["metadata_fields"]["cover"] == "written");
+    CHECK(result["metadata_fields"]["lyrics"] == "written");
+    CHECK(result["metadata_fields"]["track_number"] == "written");
+    const auto asset = unwrap(r.publications->get_asset(r.owner, result["file_id"].get<std::string>()));
+    CHECK(asset.relative_path == "歌手甲, 歌手乙/专辑/歌手甲, 歌手乙 - 晴天.mp3");
+    const auto path = r.root / infrastructure::filesystem::path_from_utf8(asset.relative_path);
+    TagLib::MPEG::File tagged(path.c_str());
+    REQUIRE(tagged.isValid());
+    CHECK(tagged.properties()["TRACKNUMBER"] == TagLib::StringList("3/12"));
+    CHECK(tagged.properties()["LYRICS"].front().to8Bit(true) == "[00:01]original\n\n[translation]\n[00:02]翻译");
+    const auto pictures = tagged.complexProperties("PICTURE");
+    REQUIRE(pictures.size() == 1);
+    CHECK(pictures.front().value("data").toByteVector() == TagLib::ByteVector(cover.data(), static_cast<unsigned int>(cover.size())));
+    CHECK(pictures.front().value("mimeType").toString() == "image/png");
+    CHECK(without_id3v2(read_bytes(path)) == r.audio);
+    CHECK(cover_calls == 1);
+    CHECK(lyric_calls == 1);
+}
+
+TEST_CASE("metadata acquisition failures obey policy and never masquerade as absence", "[runner][output]") {
+    Runs r{"metadata-errors"};
+    r.output = domain::OutputOptions{};
+    r.output->cover_max_bytes = 64;
+    r.script->detail = [](const domain::TrackRef& ref) -> domain::Result<domain::Track> {
+        return domain::Track{ref, "detail", {}, {}, 30010, {}, "https://img.test/a", {}, {}};
+    };
+    int calls = 0;
+    int status = 404;
+    std::string bytes = "not found";
+    bool timeout = false;
+    bool required = false;
+    SECTION("404 best effort") {}
+    SECTION("wrong image body") { status = 200; bytes = "<html>not an image</html>"; }
+    SECTION("body over configured limit") { status = 200; bytes.assign(65, 'x'); }
+    SECTION("child deadline exhausted") { timeout = true; }
+    SECTION("required 404") { required = true; }
+    SECTION("required timeout retries") { required = true; timeout = true; }
+    if (required) r.metadata_policy = domain::MetadataPolicy::required;
+    r.transport->fetch = [&](const ports::HttpRequest& req, const ports::OperationContext&) -> domain::Result<ports::HttpResponse> {
+        ++calls;
+        if (timeout) return domain::Error{ErrorCode::deadline_exceeded, "metadata budget expired", false, {}};
+        return ports::HttpResponse{{status, {}, req.url}, bytes};
+    };
+    const auto id = r.create();
+    const auto report = r.run_next();
+    CHECK(calls == 1);
+    const auto task = r.get(id);
+    if (required) {
+        CHECK(report.outcome == (timeout ? RunOutcome::waiting_retry : RunOutcome::failed));
+        CHECK_FALSE(task.result_json);
+        CHECK_FALSE(fs::exists(r.root / "detail.mp3"));
+        CHECK(r.publications->pending()->empty());
+    } else {
+        CHECK(report.outcome == RunOutcome::completed);
+        REQUIRE(task.result_json);
+        const auto result = json::parse(*task.result_json);
+        CHECK(result["metadata_status"] == "partial");
+        CHECK(result["metadata_fields"]["cover"] == "fetch_failed");
+        CHECK(result["metadata_fields"]["lyrics"] == "unavailable");
+    }
+}
+
+TEST_CASE("metadata disabled and legacy tasks make no optional fetches", "[runner][output]") {
+    Runs r{"metadata-disabled"};
+    bool skip = false;
+    bool legacy = false;
+    SECTION("skip policy") { skip = true; }
+    SECTION("independent switches") {}
+    SECTION("old snapshot") { legacy = true; }
+    if (!legacy) {
+        r.output = domain::OutputOptions{};
+        if (!skip) { r.output->embed_cover = false; r.output->embed_lyrics = false; }
+    }
+    if (skip) r.metadata_policy = domain::MetadataPolicy::skip;
+    r.script->detail = [](const domain::TrackRef& ref) -> domain::Result<domain::Track> {
+        return domain::Track{ref, "detail", {}, {}, 30010, {}, "https://img.test/a", {}, {}};
+    };
+    r.transport->fetch = [](const ports::HttpRequest&, const ports::OperationContext&) -> domain::Result<ports::HttpResponse> {
+        CHECK(false);
+        return domain::Error{ErrorCode::internal, "unexpected fetch", false, {}};
+    };
+    r.script->lyrics = [](const ports::ProviderContext&) -> domain::Result<domain::TrackLyrics> {
+        CHECK(false);
+        return domain::TrackLyrics{};
+    };
+    const auto id = r.create();
+    CHECK(r.run_next().outcome == RunOutcome::completed);
+    const auto result = json::parse(*r.get(id).result_json);
+    if (!legacy) {
+        CHECK(result["metadata_fields"]["cover"] == "disabled");
+        CHECK(result["metadata_fields"]["lyrics"] == "disabled");
+    }
+}
+
+TEST_CASE("required metadata permits confirmed absent cover and instrumental lyrics", "[runner][output]") {
+    Runs r{"metadata-absent"};
+    r.output = domain::OutputOptions{};
+    r.metadata_policy = domain::MetadataPolicy::required;
+    bool unsupported = false;
+    SECTION("instrumental") {}
+    SECTION("no lyric capability") { unsupported = true; }
+    const auto id = r.create(unsupported ? "busy" : "src");
+    CHECK(r.run_next().outcome == RunOutcome::completed);
+    const auto result = json::parse(*r.get(id).result_json);
+    CHECK(result["metadata_fields"]["cover"] == "unavailable");
+    CHECK(result["metadata_fields"]["lyrics"] == (unsupported ? "unsupported" : "unavailable"));
+    CHECK(result["metadata_status"] == "complete");
+}
+
+TEST_CASE("hostile and long metadata publishes stable paths without escaping or overwriting", "[runner][output]") {
+    Runs r{"metadata-paths"};
+    r.output = domain::OutputOptions{};
+    r.output->folder_layout = "artist_album";
+    r.output->name_format = "title";
+    r.output->embed_cover = false;
+    r.output->embed_lyrics = false;
+    std::string label = "CON";
+    SECTION("reserved and traversal components") {}
+    SECTION("long UTF-8 components") { for (int i = 0; i < 100; ++i) label += "中文"; }
+    r.script->detail = [&](const domain::TrackRef& ref) -> domain::Result<domain::Track> {
+        return domain::Track{ref, label, {{"../../" + label, {}}}, domain::AlbumSummary{label + "<>|", {}}, 30010, {}};
+    };
+    std::vector<std::string> paths;
+    for (const auto* track_id : {"1", "2"}) {
+        const auto id = r.create("src", track_id);
+        CHECK(r.run_next().outcome == RunOutcome::completed);
+        const auto result = json::parse(*r.get(id).result_json);
+        const auto asset = unwrap(r.publications->get_asset(r.owner, result["file_id"].get<std::string>()));
+        paths.push_back(asset.relative_path);
+        const auto relative = infrastructure::filesystem::path_from_utf8(asset.relative_path);
+        CHECK_FALSE(relative.is_absolute());
+        for (const auto& part : relative) CHECK(part != "..");
+        CHECK(without_id3v2(read_bytes(r.root / relative)) == r.audio);
+    }
+    CHECK(paths[0] != paths[1]);
+    CHECK(paths[1].ends_with(" (2).mp3"));
+}
+
+TEST_CASE("cancel during cover acquisition releases admission and never publishes", "[runner][output]") {
+    Runs r{"metadata-cancel"};
+    r.output = domain::OutputOptions{};
+    r.script->detail = [](const domain::TrackRef& ref) -> domain::Result<domain::Track> {
+        return domain::Track{ref, "detail", {}, {}, 30010, {}, "https://img.test/a", {}, {}};
+    };
+    std::atomic<bool> entered{false};
+    r.transport->fetch = [&](const ports::HttpRequest&, const ports::OperationContext& c) -> domain::Result<ports::HttpResponse> {
+        entered = true;
+        while (!c.stop.stop_requested() && std::chrono::steady_clock::now() < c.deadline) std::this_thread::sleep_for(5ms);
+        return domain::Error{ErrorCode::canceled, "canceled", false, {}};
+    };
+    auto executor = std::make_shared<runtime::BoundedExecutor>("downloads", 1, 1);
+    downloads::DownloadScheduler scheduler{{1, 20ms}, r.tasks, r.ledger, r.runner, executor, r.clock};
+    const auto id = r.create();
+    scheduler.start();
+    REQUIRE(eventually([&] { return entered.load(); }));
+    CHECK(unwrap(r.tasks->request_cancel(r.owner, id)).status == TaskStatus::canceling);
+    scheduler.request_stop(id);
+    CHECK(eventually([&] { return r.get(id).status == TaskStatus::canceled; }));
+    CHECK_FALSE(fs::exists(r.root / "detail.mp3"));
+    CHECK(r.ledger->usage().total == 0);
+    scheduler.stop_claiming();
+    executor->stop_accepting();
+    executor->request_stop();
+    executor->join();
+    scheduler.join();
+}
 
 TEST_CASE("a claimed task is downloaded, verified and published", "[downloads][runner]") {
     Runs r{"complete"};
@@ -678,6 +952,42 @@ TEST_CASE("an expired address is resolved again and the same resource resumes (A
     CHECK(header(last, "If-Range") == "\"v1\"");
     CHECK(without_id3v2(read_bytes(r.root / "detail.mp3")) == r.audio);
     CHECK(r.get(id).attempt == 2);
+}
+
+TEST_CASE("an expired address changing quality discards the partial file", "[downloads][runner][stage-c]") {
+    Runs r{"quality-change"};
+    int resolved = 0;
+    r.script->answer = [&](const domain::TrackRef& t) -> domain::Result<ports::ResolvedAudio> {
+        ++resolved;
+        return ports::ResolvedAudio{t, resolved == 1 ? domain::Quality::high : domain::Quality::standard,
+            domain::Completeness::unknown, "mp3", 128000,
+            "https://cdn.test/quality-" + std::to_string(resolved) + ".mp3", {}, {}, 30010, ports::ProcessingPlan{}};
+    };
+    int first_url = 0;
+    r.transport->answer = [&](const ports::HttpRequest& request) {
+        if (request.url == "https://cdn.test/quality-1.mp3") {
+            if (++first_url == 1) {
+                auto reply = serve_range(request, r.audio);
+                reply.reset_after = 90000;
+                return reply;
+            }
+            return Reply{403, {{"Content-Type", "text/html"}}, "expired"};
+        }
+        return serve_range(request, r.audio);
+    };
+    const auto id = r.create();
+    CHECK(r.run_next().outcome == RunOutcome::waiting_retry);
+    const auto task = r.get(id);
+    REQUIRE(task.next_retry_at);
+    CHECK(r.run_next(*task.next_retry_at).outcome == RunOutcome::completed);
+    CHECK(resolved == 2);
+    const auto requests = r.transport->requests();
+    const auto& last = requests.back();
+    CHECK(last.url == "https://cdn.test/quality-2.mp3");
+    CHECK_FALSE(header(last, "Range"));
+    CHECK_FALSE(header(last, "If-Range"));
+    CHECK(without_id3v2(read_bytes(r.root / "detail.mp3")) == r.audio);
+    CHECK(json::parse(r.get(id).execution_json.value())["actual_quality"] == "standard");
 }
 
 TEST_CASE("Retry-After moves the next attempt later, within its cap", "[downloads][runner]") {

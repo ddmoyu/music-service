@@ -528,4 +528,20 @@ domain::Result<WorkKey> parse_track_link(std::string_view link) {
     return WorkKey{std::string{type}, std::string{number}};
 }
 
+domain::Result<Link> parse_link(std::string_view link) {
+    if (auto song = parse_track_link(link)) return Link{"track", song->platform_id()};
+    auto url = application::transport::Url::parse(link);
+    if (!url || url->host() != "5sing.kugou.com" || url->port() != (url->is_https() ? 443 : 80))
+        return domain::Error::validation("link", "is not a supported 5sing link");
+    // 平台搜索返回 /{userId}/dj/{songListId}.html；用户 ID 不是歌单 ID。
+    const auto path = url->path();
+    const auto marker = path.find("/dj/");
+    if (path.starts_with('/') && path.ends_with(".html") && marker != std::string_view::npos && marker > 1 &&
+        is_work_number(path.substr(1, marker - 1))) {
+        const auto id = path.substr(marker + 4, path.size() - marker - 4 - 5);
+        if (is_playlist_id(id)) return Link{"playlist", std::string{id}};
+    }
+    return domain::Error::validation("link", "is not a supported 5sing playlist link");
+}
+
 } // namespace music_service::providers::fivesing::parsing

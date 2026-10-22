@@ -1,6 +1,6 @@
 # 5sing 适配器
 
-第二个原生平台（T22），source `fivesing`，实现 fivesing-native 0.1.0。只声明 2026-10-22 实测过的能力，均为匿名（不登记 Cookie profile，不发送 Cookie）：
+第二个原生平台（T22），source `fivesing`，实现 fivesing-native 0.1.2。只声明 2026-10-22 实测过的能力，均为匿名（不登记 Cookie profile，不发送 Cookie）。B 阶段补充 `5sing.kugou.com/{userId}/dj/{songListId}.html` 歌单链接，引用取 songListId，不把 userId 当集合 ID；沿用现有集合详情与分页。
 
 | 能力 | 端点 | 说明 |
 | --- | --- | --- |

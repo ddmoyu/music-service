@@ -9,6 +9,7 @@ cmake-build-*/
 CMakeUserPresets.json
 
 # Local environment and editor state.
+/.local-secrets/
 .env
 .env.*
 !.env.example
@@ -18,3 +19,6 @@ CMakeUserPresets.json
 *.suo
 .DS_Store
 Thumbs.db
+
+# Python acceptance clients.
+__pycache__/

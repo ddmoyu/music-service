@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 // NetEase Cloud Music request construction. Every call is a weapi POST to
 // https://music.163.com/weapi/<path>, confirmed anonymously over HTTPS on 2026-10-22
@@ -35,6 +36,16 @@ application::ports::HttpRequest search_tracks(std::string_view keyword, std::uin
 
 // v3/song/detail for one song id.
 application::ports::HttpRequest song_detail(std::string_view id, const Call& call);
+application::ports::HttpRequest song_details(const std::vector<std::string>& ids, const Call& call);
+application::ports::HttpRequest search_collections(bool playlists, std::string_view keyword,
+    std::uint32_t offset, std::uint32_t limit, const Call& call);
+application::ports::HttpRequest playlist(std::string_view id, const Call& call);
+application::ports::HttpRequest album(std::string_view id, const Call& call);
+application::ports::HttpRequest categories(const Call& call);
+application::ports::HttpRequest category_playlists(std::string_view category, std::uint32_t offset,
+    std::uint32_t limit, const Call& call);
+application::ports::HttpRequest recommendations(const Call& call);
+application::ports::HttpRequest charts(const Call& call);
 
 // song/enhance/player/url/v1 at the given level ("standard" is 128 kbit/s).
 application::ports::HttpRequest song_url(std::string_view id, std::string_view level, const Call& call);

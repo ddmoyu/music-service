@@ -1,0 +1,573 @@
+{
+  "code": 200,
+  "album": {
+    "id": 512175,
+    "name": "男女情歌对唱冠军全记录",
+    "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg",
+    "size": 26,
+    "publishTime": 1170604800000,
+    "description": "\n最强的对唱阵容，让你一次拥有……关于暗恋的，失恋的，热恋的，最感动的男女情歌对唱。\n\n如果你想 或者作个最强的“恋爱达人”，还是曾经“有一点动心”想要大声的呼喊“好寂寞”。\n\n周杰伦+温岚 王力宏+Rain+J-Lim，COCO+Vanness 罗志祥+小S，周渝民+大S 光良+范玮琪…等\n\n最强的对唱阵容，让你一次拥有！\n",
+    "artists": [
+      {
+        "id": 122455,
+        "name": "群星"
+      }
+    ],
+    "artist": {
+      "id": 122455,
+      "name": "群星"
+    }
+  },
+  "songs": [
+    {
+      "id": 5257138,
+      "name": "屋顶",
+      "dt": 319039,
+      "no": 1,
+      "ar": [
+        {
+          "id": 6452,
+          "name": "周杰伦"
+        },
+        {
+          "id": 9612,
+          "name": "温岚"
+        },
+        {
+          "id": 5360,
+          "name": "吴宗宪"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257139,
+      "name": "好寂寞",
+      "dt": 332146,
+      "no": 2,
+      "ar": [
+        {
+          "id": 7652,
+          "name": "范玮琪"
+        },
+        {
+          "id": 2842,
+          "name": "光良"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257140,
+      "name": "千年之恋",
+      "dt": 306311,
+      "no": 3,
+      "ar": [
+        {
+          "id": 13283,
+          "name": "信乐团"
+        },
+        {
+          "id": 7538,
+          "name": "戴爱玲"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257141,
+      "name": "让我爱你",
+      "dt": 301882,
+      "no": 4,
+      "ar": [
+        {
+          "id": 6484,
+          "name": "周渝民"
+        },
+        {
+          "id": 203362,
+          "name": "徐熙媛"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257142,
+      "name": "默默爱你",
+      "dt": 137020,
+      "no": 5,
+      "ar": [
+        {
+          "id": 8331,
+          "name": "李玟"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257143,
+      "name": "让我取暖",
+      "dt": 266774,
+      "no": 6,
+      "ar": [
+        {
+          "id": 9106,
+          "name": "彭羚"
+        },
+        {
+          "id": 5346,
+          "name": "王力宏"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257144,
+      "name": "爱我",
+      "dt": 291921,
+      "no": 7,
+      "ar": [
+        {
+          "id": 3692,
+          "name": "林志炫"
+        },
+        {
+          "id": 8298,
+          "name": "柯以敏"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257145,
+      "name": "谈心",
+      "dt": 211493,
+      "no": 8,
+      "ar": [
+        {
+          "id": 7221,
+          "name": "蔡淳佳"
+        },
+        {
+          "id": 6070,
+          "name": "游鸿明"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257146,
+      "name": "心动心痛",
+      "dt": 231253,
+      "no": 9,
+      "ar": [
+        {
+          "id": 9950,
+          "name": "许慧欣"
+        },
+        {
+          "id": 3737,
+          "name": "刘畊宏"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257147,
+      "name": "窗外",
+      "dt": 269146,
+      "no": 10,
+      "ar": [
+        {
+          "id": 5360,
+          "name": "吴宗宪"
+        },
+        {
+          "id": 60976,
+          "name": "Joanna"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257148,
+      "name": "有一点动心",
+      "dt": 230466,
+      "no": 11,
+      "ar": [
+        {
+          "id": 6454,
+          "name": "张信哲"
+        },
+        {
+          "id": 8402,
+          "name": "刘嘉玲"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257149,
+      "name": "爱错了时候",
+      "dt": 281936,
+      "no": 12,
+      "ar": [
+        {
+          "id": 5799,
+          "name": "薛忠铭"
+        },
+        {
+          "id": 9490,
+          "name": "坣娜"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p2.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257150,
+      "name": "雪人",
+      "dt": 285233,
+      "no": 13,
+      "ar": [
+        {
+          "id": 7662,
+          "name": "范晓萱"
+        },
+        {
+          "id": 5346,
+          "name": "王力宏"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p2.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257151,
+      "name": "屋顶",
+      "dt": 331371,
+      "no": 14,
+      "ar": [
+        {
+          "id": 5360,
+          "name": "吴宗宪"
+        },
+        {
+          "id": 9612,
+          "name": "温岚"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p2.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257152,
+      "name": "完美的互动",
+      "dt": 239546,
+      "no": 15,
+      "ar": [
+        {
+          "id": 5346,
+          "name": "王力宏"
+        },
+        {
+          "id": 124593,
+          "name": "Rain"
+        },
+        {
+          "id": 125625,
+          "name": "林贞熙"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257153,
+      "name": "Hip Hop Tonight",
+      "dt": 208091,
+      "no": 16,
+      "ar": [
+        {
+          "id": 5382,
+          "name": "吴建豪"
+        },
+        {
+          "id": 8331,
+          "name": "李玟"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257154,
+      "name": "恋爱达人 (OT: I Believe)",
+      "dt": 208626,
+      "no": 17,
+      "ar": [
+        {
+          "id": 9962,
+          "name": "elephant DEE 徐熙娣"
+        },
+        {
+          "id": 3694,
+          "name": "罗志祥"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257155,
+      "name": "爱死你",
+      "dt": 246720,
+      "no": 18,
+      "ar": [
+        {
+          "id": 8926,
+          "name": "莫文蔚"
+        },
+        {
+          "id": 3617,
+          "name": "柯有伦"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257156,
+      "name": "你的电话",
+      "dt": 232506,
+      "no": 19,
+      "ar": [
+        {
+          "id": 12994,
+          "name": "脱拉库"
+        },
+        {
+          "id": 8363,
+          "name": "蓝心湄"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257157,
+      "name": "La La La",
+      "dt": 251681,
+      "no": 20,
+      "ar": [
+        {
+          "id": 8330,
+          "name": "卢巧音"
+        },
+        {
+          "id": 12994,
+          "name": "脱拉库"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257158,
+      "name": "Set Me Free",
+      "dt": 341053,
+      "no": 21,
+      "ar": [
+        {
+          "id": 8926,
+          "name": "莫文蔚"
+        },
+        {
+          "id": 3063,
+          "name": "黄义达"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257159,
+      "name": "爱的天使",
+      "dt": 240946,
+      "no": 22,
+      "ar": [
+        {
+          "id": 7219,
+          "name": "蔡依林"
+        },
+        {
+          "id": 188971,
+          "name": "安志杰"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257160,
+      "name": "刀马旦",
+      "dt": 192075,
+      "no": 23,
+      "ar": [
+        {
+          "id": 6452,
+          "name": "周杰伦"
+        },
+        {
+          "id": 8331,
+          "name": "李玟"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257161,
+      "name": "好心分手",
+      "dt": 182933,
+      "no": 24,
+      "ar": [
+        {
+          "id": 8330,
+          "name": "卢巧音"
+        },
+        {
+          "id": 5346,
+          "name": "王力宏"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257162,
+      "name": "平衡点",
+      "dt": 289360,
+      "no": 25,
+      "ar": [
+        {
+          "id": 5360,
+          "name": "吴宗宪"
+        },
+        {
+          "id": 9612,
+          "name": "温岚"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    },
+    {
+      "id": 5257163,
+      "name": "2001的留言",
+      "dt": 258226,
+      "no": 26,
+      "ar": [
+        {
+          "id": 5357,
+          "name": "伍思凯"
+        },
+        {
+          "id": 8331,
+          "name": "李玟"
+        }
+      ],
+      "al": {
+        "id": 512175,
+        "name": "男女情歌对唱冠军全记录",
+        "picUrl": "https://p1.music.126.net/81BsxxhomJ4aJZYvEbyPkw==/109951165671182684.jpg"
+      }
+    }
+  ]
+}

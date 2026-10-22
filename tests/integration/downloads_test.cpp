@@ -19,6 +19,7 @@
 #include "providers/registry/provider_registry.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -41,7 +42,7 @@ using domain::TaskStatus;
 namespace {
 
 struct Downloads {
-    explicit Downloads(std::string_view name, sqlite::TaskRepositoryOptions options = {})
+    explicit Downloads(std::string_view name, sqlite::TaskRepositoryOptions options = {}, std::uint32_t batch_limit = 3)
         : dir(fs::temp_directory_path() / infrastructure::filesystem::path_from_utf8("music-service-下载-" +
                                                                                      std::string{name})) {
         fs::remove_all(dir);
@@ -78,7 +79,7 @@ struct Downloads {
                 const auto found = files.find(destination + "|" + path);
                 return found != files.end() && found->second == size;
             },
-            3);
+            batch_limit);
     }
     ~Downloads() {
         service.reset();
@@ -149,6 +150,37 @@ std::size_t total_tasks(Downloads& d, const std::string& owner) {
 }
 
 } // namespace
+
+TEST_CASE("a 230 item collection submits as 100 100 30 and keeps batch atomicity", "[downloads][collections-b]") {
+    Downloads d{"collection-230", {}, 100};
+    std::ifstream file(fs::path{MUSIC_SERVICE_TEST_FIXTURES} / "collections/230-tracks.json");
+    const auto fixture = nlohmann::json::parse(file);
+    std::vector<DownloadRequest> items;
+    for (const auto& item : fixture["items"]) items.push_back(d.request(item["source"].get<std::string>(), item["id"].get<std::string>()));
+    REQUIRE(items.size() == 230);
+    std::size_t offset = 0;
+    for (const std::size_t count : {100U, 100U, 30U}) {
+        const std::vector<DownloadRequest> page(items.begin() + static_cast<std::ptrdiff_t>(offset),
+                                              items.begin() + static_cast<std::ptrdiff_t>(offset + count));
+        const auto key = "collection-batch-" + std::to_string(offset);
+        const auto result = unwrap(d.service->create_batch(d.owner, page, key, key));
+        CHECK(result.created_count == count);
+        REQUIRE(result.items.size() == count);
+        for (std::size_t i = 0; i < count; ++i) CHECK(result.items[i].intent.original_track() == items[offset + i].track);
+        const auto replay = unwrap(d.service->create_batch(d.owner, page, key, key));
+        CHECK(replay.replayed);
+        CHECK(replay.batch_id == result.batch_id);
+        CHECK(d.service->create_batch(d.owner, page, key, "changed").error().code == ErrorCode::idempotency_conflict);
+        offset += count;
+        CHECK(total_tasks(d, d.owner) == offset);
+    }
+    CHECK(d.service->create_batch(d.owner, std::vector<DownloadRequest>(items.begin(), items.begin() + 101),
+                                  "collection-too-large", "101").error().code == ErrorCode::validation_failed);
+    const auto invalid = d.service->create_batch(d.owner, {d.request("both", "new"), d.request("missing", "1")},
+                                                  "collection-bad-item", "bad");
+    CHECK_FALSE(invalid);
+    CHECK(total_tasks(d, d.owner) == 230);
+}
 
 TEST_CASE("idempotency keys replay the first outcome without redoing the checks", "[downloads]") {
     Downloads d{"idempotency"};

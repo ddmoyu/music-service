@@ -116,15 +116,15 @@ public:
     explicit Links(domain::SourceId source) : source_(std::move(source)) {}
 
     domain::Result<ports::ParsedLink> parse_link(std::string_view link) override {
-        auto rid = parsing::parse_track_link(link);
+        auto rid = parsing::parse_link(link);
         if (!rid) {
             return std::move(rid).error();
         }
-        auto id = domain::PlatformId::parse(*rid);
+        auto id = domain::PlatformId::parse(rid->id);
         if (!id) {
             return std::move(id).error();
         }
-        return ports::ParsedLink{"track", {source_, std::move(id).value()}};
+        return ports::ParsedLink{rid->kind, {source_, std::move(id).value()}};
     }
 
 private:

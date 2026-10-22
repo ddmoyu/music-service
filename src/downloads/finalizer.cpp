@@ -44,6 +44,8 @@ std::string metadata_status(const ports::ProcessingReport& report) {
 }
 
 std::string result_of(const ports::ProcessingReport& report) {
+    json metadata = json::object();
+    for (const auto& [field, status] : report.metadata_fields) metadata[field] = status;
     json processing{{"processor", report.processor_id},
                     {"version", report.processor_version},
                     {"completeness", std::string{domain::to_string(report.completeness)}}};
@@ -51,6 +53,7 @@ std::string result_of(const ports::ProcessingReport& report) {
         processing["duration_ms"] = *report.facts.duration_ms;
     }
     return json{{"metadata_status", metadata_status(report)},
+                {"metadata_fields", std::move(metadata)},
                 {"warnings", report.warnings},
                 {"processing", std::move(processing)}}
         .dump();

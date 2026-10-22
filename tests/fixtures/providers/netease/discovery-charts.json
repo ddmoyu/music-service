@@ -1,0 +1,13 @@
+{
+  "code": 200,
+  "list": [
+    {
+      "id": 3778678,
+      "name": "热歌榜",
+      "description": "云音乐热歌榜：云音乐用户一周内收听所有线上歌曲官方TOP排行榜，每日更新。",
+      "trackCount": 200,
+      "updateFrequency": "更新21首",
+      "trackUpdateTime": 1792654903505
+    }
+  ]
+}

@@ -18,3 +18,11 @@
 | `account-anonymous.json` | `w/nuser/account/get`，不带 Cookie（无效 Cookie 的应答相同） | 无需处理 |
 | `account-user-synthetic.json` | 构造：已登录账号的 `account`／`profile` 结构 | 编号与昵称均为虚构 |
 | `needs-login-synthetic.json`、`rate-limited-synthetic.json` | 构造：weapi 顶层 code 301（需要登录）与 405（操作频繁） | 无 |
+| `collection-playlist.json` | `v3/playlist/detail`，3778678 热歌榜，n=0、s=0；200 个 trackIds | 仅保留集合公共元数据、曲目 ID；creator 仅保留公开昵称 |
+| `collection-album.json` | `v1/album/512175`，26 首 | 仅保留公开集合与歌曲元数据 |
+| `collection-search-playlists.json` | `cloudsearch/pc`，type=1000，周杰伦，offset=0、limit=2 | 仅保留查询结果所需公共字段 |
+| `collection-search-albums.json` | `cloudsearch/pc`，type=10，叶惠美，offset=0、limit=2 | 仅保留查询结果所需公共字段 |
+
+B 阶段集合样本同于 2026-10-22 匿名录得。超过 500 项、空集合、缺失歌曲、顺序变更、错误与容量边界在测试中按相同结构构造；这些构造样本不作为真实平台容量的证明。
+
+C 阶段 `discovery-categories.json`、`discovery-category-page.json`、`discovery-recommendations.json`、`discovery-charts.json` 同于 2026-10-22 匿名实测，分别来自 playlist/catalogue、playlist/list（华语，limit=2）、personalized/playlist（limit=30，fixture 仅留前两项）、toplist（fixture 仅留 3778678）。只保留解析所需公共字段，不保存 Cookie、私人账号或签名音源地址。高品质、普通／会员／购买限制、过期账号与错误组合在测试中按真实字段结构构造；真实 VIP1 下载与文件证据另见补齐计划 C 阶段记录。

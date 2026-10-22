@@ -3,6 +3,8 @@
 add_library(music_service_provider_netease STATIC
     bundle.cpp
     capabilities.cpp
+    collections.cpp
+    discovery.cpp
     parsing/parsers.cpp
     protocol/requests.cpp
     protocol/weapi.cpp

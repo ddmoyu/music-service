@@ -173,6 +173,8 @@ domain::Result<ListResult<Item>> CatalogService::list_of(const ListRequest& requ
     result.cache = page->cache;
     result.page = SourcePage{limit, found.page.page.returned, found.page.page.total, found.page.page.has_more,
                              std::nullopt};
+    result.page.listed_total = found.page.page.listed_total;
+    result.page.unavailable_count = found.page.page.unavailable_count;
     if (found.next_cursor) {
         auto handle = list_cursors_->put(request.owner_id,
                                          ListCursor{std::string{key}, request.source, request.id, limit, identity,

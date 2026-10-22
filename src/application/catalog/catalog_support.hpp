@@ -46,7 +46,7 @@ inline std::shared_ptr<const ports::SecretBytes> share_secret(std::optional<port
 
 // Rough cached sizes; the caches bound bytes, not items.
 inline std::size_t item_bytes(const domain::Track& track) {
-    std::size_t bytes = 256 + track.title.size() + track.ref.id.value().size();
+    std::size_t bytes = 256 + track.title.size() + track.ref.id.value().size() + track.artwork.value_or("").size();
     for (const auto& artist : track.artists) {
         bytes += 64 + artist.name.size();
     }
@@ -60,7 +60,8 @@ inline std::size_t item_bytes(const domain::Playlist& p) {
            p.description.value_or("").size() + p.artwork.value_or("").size();
 }
 inline std::size_t item_bytes(const domain::Album& a) {
-    std::size_t bytes = 256 + a.title.size() + a.ref.id.value().size() + a.artwork.value_or("").size();
+    std::size_t bytes = 256 + a.title.size() + a.ref.id.value().size() + a.artwork.value_or("").size() +
+                        a.description.value_or("").size();
     for (const auto& artist : a.artists) {
         bytes += 64 + artist.name.size();
     }

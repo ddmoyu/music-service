@@ -35,6 +35,9 @@ struct Track {
     std::optional<AlbumSummary> album;
     std::optional<std::int64_t> duration_ms;
     VersionInfo version;
+    std::optional<std::string> artwork{};
+    std::optional<std::uint32_t> track_number{};
+    std::optional<std::uint32_t> track_total{};
 };
 
 // One source's page. total and has_more may be unknown.
@@ -43,6 +46,8 @@ struct PageInfo {
     std::uint32_t returned{0};
     std::optional<std::uint64_t> total;
     std::optional<bool> has_more;
+    std::optional<std::uint64_t> listed_total{}; // 上游可见 ID 清单长度，不代表可播放总数
+    std::optional<std::uint64_t> unavailable_count{}; // 本页有 ID 但未取得详情的条目数
 };
 
 template <class Item> struct SourcePage {

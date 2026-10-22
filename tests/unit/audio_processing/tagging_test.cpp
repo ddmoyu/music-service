@@ -96,6 +96,8 @@ ports::TrackMetadata metadata() {
     m.album = "叶惠美";
     m.lyrics = "故事的小黄花";
     m.cover = ports::Picture{"image/png", png()};
+    m.track_number = 3;
+    m.track_total = 12;
     return m;
 }
 
@@ -135,6 +137,7 @@ void check_common(TagLib::File& file) {
     CHECK(properties["ARTIST"] == artists);
     CHECK(properties["ALBUM"] == TagLib::StringList(utf8("叶惠美")));
     CHECK(properties["LYRICS"] == TagLib::StringList(utf8("故事的小黄花")));
+    CHECK(properties["TRACKNUMBER"] == TagLib::StringList("3/12"));
     const auto pictures = file.complexProperties("PICTURE");
     REQUIRE(pictures.size() == 1);
     const auto cover = png();
@@ -144,6 +147,19 @@ void check_common(TagLib::File& file) {
 }
 
 } // namespace
+
+TEST_CASE("unknown or zero track numbers never create zero track tags", "[audio][tags][output]") {
+    TempDir dir{"unknown-track"};
+    auto req = request(dir.file("input.part", mp3_frames(200)));
+    req.metadata->track_number.reset();
+    SECTION("missing number") {}
+    SECTION("zero number") { req.metadata->track_number = 0; }
+    VerifyingProcessor processor;
+    const auto result = processor.process(req, context());
+    REQUIRE(result);
+    TagLib::MPEG::File file(result->output.c_str());
+    CHECK(file.properties()["TRACKNUMBER"].isEmpty());
+}
 
 TEST_CASE("MP3 tags go into a copy and read back as ID3v2.4", "[audio][tags][mp3]") {
     TempDir dir{"mp3"};

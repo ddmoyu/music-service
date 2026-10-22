@@ -313,7 +313,9 @@ json track_json(const domain::Track& track) {
                  {{"kind", version_kind(track.version.kind)},
                   {"label", optional_string(track.version.label)},
                   {"evidence", std::move(evidence)}}},
-                {"artwork", nullptr},
+                {"artwork", optional_string(track.artwork)},
+                {"track_number", track.track_number ? json(*track.track_number) : json(nullptr)},
+                {"track_total", track.track_total ? json(*track.track_total) : json(nullptr)},
                 // No supported source needs private context yet.
                 {"context_ref", nullptr}};
 }
@@ -359,7 +361,8 @@ json album_json(const domain::Album& a) {
                 {"artists", artists_json(a.artists)},
                 {"release_date", optional_string(a.release_date)},
                 {"track_count", optional_uint(a.track_count)},
-                {"artwork", optional_string(a.artwork)}};
+                {"artwork", optional_string(a.artwork)},
+                {"description", optional_string(a.description)}};
 }
 
 json artist_json(const domain::Artist& a) {
@@ -397,7 +400,9 @@ json page_json(const application::catalog::SourcePage& p) {
                 {"returned", p.returned},
                 {"total", optional_uint(p.total)},
                 {"has_more", p.has_more ? json(*p.has_more) : json(nullptr)},
-                {"next_cursor", optional_string(p.next_cursor)}};
+                {"next_cursor", optional_string(p.next_cursor)},
+                {"listed_total", optional_uint(p.listed_total)},
+                {"unavailable_count", optional_uint(p.unavailable_count)}};
 }
 
 json catalog_kind_json(const std::optional<ports::CatalogKind>& kind) {

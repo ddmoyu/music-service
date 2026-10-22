@@ -49,6 +49,41 @@
 | `logging` | `format`（json／text）、`level`（trace／debug／info／warn／error） |
 | `destinations[]` | `id`、`name`、`root`、`principals`、`accept_new_tasks` |
 
+## 下载文件输出（0.1.1）
+
+在现有配置中添加 `downloads.output`；省略时使用下列默认值。修改后重启服务，仅影响新受理任务。
+
+```json
+{
+  "downloads": {
+    "output": {
+      "name_format": "artist_title",
+      "folder_layout": "flat",
+      "embed_cover": true,
+      "embed_lyrics": true,
+      "cover_max_bytes": 8388608,
+      "metadata_timeout_seconds": 10
+    }
+  }
+}
+```
+
+| 配置 | 允许值和含义 |
+| --- | --- |
+| `name_format` | `title` 歌名；`artist_title` 歌手 - 歌名；`title_artist` 歌名 - 歌手 |
+| `folder_layout` | `flat` 平铺；`artist` 歌手目录；`artist_album` 歌手／专辑目录 |
+| `embed_cover`、`embed_lyrics` | 布尔值，独立控制嵌入；任务 `metadata_policy=skip` 时均不获取、不写入 |
+| `cover_max_bytes` | 1～33554432 字节，默认 8 MiB；仅接收通过结构检查的 JPEG／PNG，不缩放、不转码 |
+| `metadata_timeout_seconds` | 1～60 秒；每次封面或歌词获取预算，且不超过当前任务／尝试剩余期限 |
+
+缺失歌手／专辑目录分别用 `未知歌手`／`未知专辑`；歌名为空时用 source-id。每段限制为 60 个 UTF-8 字节并清理路径字符与 Windows 保留名，防止元数据带入目录跳转；同名文件沿用原有编号避让，不覆盖。目标根仍需满足系统路径约束。
+
+网易云从详情取得可信封面及专辑曲号；总曲数无可信字段则不写。5sing 使用已有歌词能力，不把上传者头像当作歌曲封面；酷我尚无歌词能力。本阶段不为缺失封面另发专辑查询。
+
+`best_effort`（默认）下获取失败允许发布音频，结果列出 `METADATA_PARTIAL` 与 `COVER_FETCH_FAILED`／`LYRICS_FETCH_FAILED`；`required` 下获取／写入失败按错误可重试性重试或失败，失败不发布。平台没有提供可信封面、明确没有歌词或不支持歌词时不会使 required 失败。原文 LRC 保持不变，译文以空行、`[translation]`、译文 LRC 独立附加，不按行强行合并。
+
+这些选项全部进入持久下载意图和复用指纹。升级前的 schema 1 任务保留旧命名及基础标签行为；新任务使用 schema 2 快照。幂等重放仍返回最初任务；新配置下的新请求不会复用旧配置产物。旧版程序不支持 schema 2 意图，回退程序前应恢复对应旧版备份。
+
 ## 启动前的组合检查
 
 - 构建中没有的功能（媒体／事件入口、在线代理、直链、自动换源、转码、外部工具、未编入的平台）不能启用。
