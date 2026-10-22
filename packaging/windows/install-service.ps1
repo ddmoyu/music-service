@@ -21,6 +21,20 @@ param(
     [int]$Port = 17632
 )
 $ErrorActionPreference = 'Stop'
+# The program writes UTF-8; read it as such (paths may be Chinese).
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
+# Gives the whole tree to $Account. secrets/ and backups/ admit their owner only (OWNER
+# RIGHTS), so a directory handed over first could no longer be listed: everything is
+# listed while it is still readable, then owners change deepest first, the root last.
+function Set-TreeOwner([string]$Path, [string]$Account) {
+    $items = @(Get-ChildItem -LiteralPath $Path -Recurse -Force | ForEach-Object { $_.FullName })
+    $items = $items | Sort-Object { $_.Length } -Descending
+    foreach ($item in @($items) + @($Path)) {
+        icacls $item /setowner $Account /C /Q | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "cannot make $Account the owner of $item" }
+    }
+}
 
 $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -69,8 +83,8 @@ sc.exe failure $Name reset= 86400 actions= restart/5000/restart/30000//0 | Out-N
 
 # The service account owns its data; secrets/ grants its owner only, so ownership is what
 # gives the account access there. The program re-applies owner-only rights on start.
-icacls $DataDir /setowner $account /T /C /Q | Out-Null
 icacls $DataDir /grant "${account}:(OI)(CI)F" /Q | Out-Null
+Set-TreeOwner $DataDir $account
 icacls $ConfigDir /grant "${account}:(OI)(CI)RX" /Q | Out-Null
 icacls (Resolve-Path $DownloadDir).Path /grant "${account}:(OI)(CI)M" /Q | Out-Null
 
@@ -82,8 +96,24 @@ if (-not (Test-Path $source)) {
     New-ItemProperty -Path $source -Name TypesSupported -PropertyType DWord -Value 7 | Out-Null
 }
 
-Start-Service -Name $Name
-(Get-Service -Name $Name).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+$log = Join-Path $DataDir 'logs\music-service.log'
+try {
+    Start-Service -Name $Name
+    (Get-Service -Name $Name).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+} catch {
+    # Show why before anyone removes the data.
+    Write-Warning "$Name did not start: $_"
+    if (Test-Path $log) {
+        Write-Host "== last lines of $log"
+        Get-Content $log -Tail 20 -Encoding UTF8 | Out-Host
+    }
+    Write-Host '== event log'
+    Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = $Name } -MaxEvents 5 -ErrorAction SilentlyContinue |
+        Format-List TimeCreated, Message | Out-Host
+    Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Service Control Manager' } -MaxEvents 3 -ErrorAction SilentlyContinue |
+        Format-List TimeCreated, Message | Out-Host
+    throw
+}
 & $exe --config $config healthcheck
 if ($LASTEXITCODE -ne 0) { throw "$Name is running but not ready; see $(Join-Path $DataDir 'logs\music-service.log')" }
-Write-Host "$Name is running as $account; logs: $(Join-Path $DataDir 'logs\music-service.log')"
+Write-Host "$Name is running as $account; logs: $log"

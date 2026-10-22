@@ -18,6 +18,7 @@ function Assert([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw "service smoke test failed: $Message" }
 }
 
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'service smoke test needs an elevated PowerShell (Run as administrator); nothing was changed'
@@ -41,8 +42,11 @@ try {
     $token = (Get-Content (Join-Path $configDir 'bootstrap-token.txt') -TotalCount 1).Trim()
     $info = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/v1/info" -Headers @{ Authorization = "Bearer $token" }
     Assert ($info.data.service -eq 'music-service') 'info with the bootstrap token'
-    $owner = (Get-Acl (Join-Path $configDir 'data\secrets')).Owner
-    Assert ($owner -eq "NT SERVICE\$name") "secrets/ is owned by $owner"
+    foreach ($dir in @('secrets', 'secrets\credentials', 'backups')) {
+        # The administrator may no longer read these; the owner is still visible.
+        $owner = (Get-Acl (Join-Path $configDir "data\$dir")).Owner
+        Assert ($owner -eq "NT SERVICE\$name") "$dir is owned by $owner"
+    }
 
     Stop-Service -Name $name
     $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(90))
