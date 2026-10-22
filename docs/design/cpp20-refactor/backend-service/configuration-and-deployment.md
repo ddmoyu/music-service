@@ -144,7 +144,7 @@ SQLite 统一保存 token 哈希、principal 和 scopes。init 通过受权限�
 
 平台注册的授权工厂负责协议，CredentialService 负责租约与刷新合并；配置只有应用秘密不会自动开启未实现的刷新／登录能力。身份键与提交规则见[账号模型](data-models.md#账号绑定与授权身份)和[内部契约](internal-contracts.md#62-凭证和秘密提交)。
 
-首版使用操作系统文件权限保护秘密：secrets 目录与秘密文件在 POSIX 上为 0700／0600，在 Windows 上为仅所有者与 SYSTEM 可访问的受保护 ACL；每个秘密是 `secrets/credentials/sec_*.secret` 中一个只写一次的文件，更新时写入新引用，不覆盖旧文件。后续系统密钥管理作为 SecretStore 适配，备份须包含对应密钥策略。
+首版使用操作系统文件权限保护秘密：secrets 目录与秘密文件在 POSIX 上为 0700／0600，在 Windows 上为仅所有者、SYSTEM 与 Administrators 组可访问的受保护 ACL（2026-10-22 起加入 Administrators：管理员本可随时取得所有权，排除他们并不构成边界，却会让以服务虚拟账户运行时管理员无法执行离线管理命令）；每个秘密是 `secrets/credentials/sec_*.secret` 中一个只写一次的文件，更新时写入新引用，不覆盖旧文件。后续系统密钥管理作为 SecretStore 适配，备份须包含对应密钥策略。
 
 入站 TLS 使用 httplib 或反向代理；出站校验证书链与主机名。启用平台却缺少必需 HTTPS 构建时启动失败。
 
@@ -163,7 +163,7 @@ data_dir/
     credentials/                  # SecretStore 私有文件，sec_*.secret，只写一次
   cache/                           # 可丢弃，不存唯一任务事实
   logs/                            # 文件日志启用时使用；容器可仅 stdout
-  backups/                         # 仅所有者：迁移前自动备份与 restore 替换下的数据库
+  backups/                         # 与 secrets 相同的受限权限：迁移前自动备份与 restore 替换下的数据库
 
 destination_root/
   .music-service-work/

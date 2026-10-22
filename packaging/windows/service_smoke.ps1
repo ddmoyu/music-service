@@ -4,7 +4,8 @@
 #   - install-service.ps1 copies the program to an install directory with a Chinese name,
 #     registers it as NT SERVICE\<name>, starts it, healthcheck passes;
 #   - the bootstrap token works against the running service; the data belongs to the
-#     service account and secrets/ is not readable through inherited rights;
+#     service account and secrets/ grants only its owner, SYSTEM and Administrators;
+#   - an administrator can run offline management commands while it is stopped;
 #   - the log file under data_dir receives the startup and shutdown records;
 #   - Stop-Service ends it cleanly (exit code 0) and the instance lock is free afterwards;
 #   - a restart serves the same token; uninstall-service.ps1 -RemoveData removes it.
@@ -45,10 +46,18 @@ try {
     $token = (Get-Content (Join-Path $configDir 'bootstrap-token.txt') -TotalCount 1).Trim()
     $info = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/v1/info" -Headers @{ Authorization = "Bearer $token" }
     Assert ($info.data.service -eq 'music-service') 'info with the bootstrap token'
+    # By SID: account names are localized on some systems.
+    $sid = [System.Security.Principal.SecurityIdentifier]
+    $serviceSid = (New-Object System.Security.Principal.NTAccount("NT SERVICE\$name")).Translate($sid).Value
+    $allowed = @('S-1-3-4', 'S-1-5-18', 'S-1-5-32-544') # OWNER RIGHTS, SYSTEM, Administrators
     foreach ($dir in @('secrets', 'secrets\credentials', 'backups')) {
-        # The administrator may no longer read these; the owner is still visible.
-        $owner = (Get-Acl (Join-Path $configDir "data\$dir")).Owner
-        Assert ($owner -eq "NT SERVICE\$name") "$dir is owned by $owner"
+        $acl = Get-Acl (Join-Path $configDir "data\$dir")
+        $owner = $acl.GetOwner($sid).Value
+        Assert ($owner -eq $serviceSid) "$dir is owned by $($acl.Owner)"
+        # Protected: only the owner, SYSTEM and Administrators, nothing inherited.
+        Assert $acl.AreAccessRulesProtected "$dir inherits permissions"
+        $others = @($acl.GetAccessRules($true, $true, $sid) | Where-Object { $_.IdentityReference.Value -notin $allowed })
+        Assert ($others.Count -eq 0) "$dir also grants $($others.IdentityReference.Value -join ', ')"
     }
 
     Stop-Service -Name $name

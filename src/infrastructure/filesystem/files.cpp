@@ -39,11 +39,15 @@ std::error_code last_error() {
 
 // Owner (OW = owner rights) and LocalSystem only; protected from inheriting the
 // parent's permissive entries.
+// Protected DACL for the owner, SYSTEM and the Administrators group. Administrators can
+// take ownership of any file anyway; granting them access keeps offline management
+// commands working on data a service account owns, which they could not otherwise
+// prepare. Nobody else, inherited entries included, gets in.
 class OwnerOnlySecurity {
 public:
     explicit OwnerOnlySecurity(bool directory) {
-        const wchar_t* sddl = directory ? L"D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)"
-                                        : L"D:P(A;;FA;;;OW)(A;;FA;;;SY)";
+        const wchar_t* sddl = directory ? L"D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
+                                        : L"D:P(A;;FA;;;OW)(A;;FA;;;SY)(A;;FA;;;BA)";
         if (::ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1,
                                                                    &descriptor_, nullptr)) {
             attributes_.nLength = sizeof attributes_;

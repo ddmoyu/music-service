@@ -192,7 +192,7 @@ TEST_CASE("existing secret directories are made private", "[filesystem][layout]"
         ::GetSecurityDescriptorControl(descriptor, &control, &revision);
         CHECK((control & SE_DACL_PROTECTED) != 0); // nothing inherited from the parent
         REQUIRE(dacl != nullptr);
-        CHECK(dacl->AceCount == 2); // owner and SYSTEM
+        CHECK(dacl->AceCount == 3); // owner, SYSTEM and Administrators
         ::LocalFree(descriptor);
 #else
         const auto perms = fs::status(path).permissions();

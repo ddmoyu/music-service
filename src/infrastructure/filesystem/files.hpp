@@ -11,7 +11,7 @@ namespace music_service::infrastructure::filesystem {
 
 enum class Privacy {
     normal,     // inherits the directory's permissions
-    owner_only, // POSIX 0600/0700; Windows ACL for the owner and SYSTEM only
+    owner_only, // POSIX 0600/0700; Windows protected ACL for the owner, SYSTEM and Administrators
 };
 
 // Creates the directory and missing parents. With owner_only, the parents this call
