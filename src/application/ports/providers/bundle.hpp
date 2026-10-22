@@ -1,7 +1,6 @@
 #pragma once
 
 #include "application/ports/providers/auth.hpp"
-#include "application/ports/providers/external_helper.hpp"
 #include "application/ports/providers/provider.hpp"
 #include "application/ports/transport/http_transport.hpp"
 #include "application/ports/transport/upstream_http.hpp"
@@ -102,8 +101,6 @@ struct ProviderSetup {
     std::shared_ptr<UpstreamHttp> upstream{};
     // providers.<source>.rate_limit_group; empty means the source itself.
     std::string rate_limit_group{};
-    // Runs the external_adapters bound to this source. Empty when helpers are off.
-    std::shared_ptr<ExternalHelper> helper{};
 };
 
 template <class Interface>

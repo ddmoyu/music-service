@@ -16,9 +16,9 @@ namespace music_service::application::ports {
 
 enum class TrafficClass { short_request, download, media, auth };
 
-// One concrete upstream operation asking for quota: global, principal, source and
-// origin connections, helper processes (T26) and the source's or rate_limit_group's
-// cooldown.
+// One concrete upstream operation asking for quota. S0 enforces the global,
+// principal, source and origin dimensions; rate_limit_group and helper_processes are
+// carried now and enforced once T24/T26 enable them.
 struct AdmissionRequest {
     std::string principal_id;
     domain::SourceId source;

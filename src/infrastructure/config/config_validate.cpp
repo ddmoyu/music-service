@@ -2,7 +2,6 @@
 
 #include "infrastructure/config/address.hpp"
 
-#include "application/ports/providers/external_helper.hpp"
 #include "domain/catalog/refs.hpp"
 
 #include <algorithm>
@@ -228,101 +227,6 @@ void check_providers(const cfg::ServiceConfig& c, const BuildCapabilities& build
     }
 }
 
-bool is_adapter_id(std::string_view id) {
-    return !id.empty() && id.size() <= 64 && id[0] >= 'a' && id[0] <= 'z' &&
-           std::all_of(id.begin(), id.end(), [](char ch) {
-               return (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-';
-           });
-}
-
-// Lowercase DNS name with at least two labels; no wildcards, IP literals are allowed
-// only as written.
-bool is_domain(std::string_view domain) {
-    if (domain.empty() || domain.size() > 253 || domain.front() == '.' || domain.back() == '.' ||
-        domain.find('.') == std::string_view::npos || domain.find("..") != std::string_view::npos) {
-        return false;
-    }
-    return std::all_of(domain.begin(), domain.end(), [](char ch) {
-        return (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '.';
-    });
-}
-
-bool is_extractor(std::string_view name) {
-    return !name.empty() && name.size() <= 64 && std::all_of(name.begin(), name.end(), [](char ch) {
-        return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' ||
-               ch == '-' || ch == ':' || ch == '.';
-    });
-}
-
-void check_adapters(const cfg::ServiceConfig& c, const BuildCapabilities& build, Problems& p) {
-    const auto& e = c.external_adapters;
-    // The tool's own connections are reserved as one admission request, so they must
-    // fit every dimension that request is counted against.
-    const auto connection_bound = std::min({c.upstream.per_source_short, c.upstream.per_origin,
-                                            c.upstream.per_principal, c.upstream.max_total_connections});
-    for (const auto& [id, a] : e.adapters) {
-        const auto field = "/external_adapters/adapters/" + id;
-        if (!is_adapter_id(id)) {
-            p.add(field, "adapter id must match [a-z][a-z0-9_-]{0,63}");
-        }
-        if (!domain::SourceId::parse(a.source)) {
-            p.add(field + "/source", "must be a source id");
-        } else if (build.providers.find(a.source) == build.providers.end()) {
-            p.add(field + "/source", "is not included in this build");
-        }
-        if (a.program.empty() || !a.program.is_absolute()) {
-            p.add(field + "/program", "must resolve to an absolute path");
-        }
-        if (a.args.size() > 64) {
-            p.add(field + "/args", "must have at most 64 entries");
-        }
-        for (const auto& arg : a.args) {
-            if (arg.size() > 4096 || arg.find('\0') != std::string::npos) {
-                p.add(field + "/args", "entries must be at most 4096 bytes without NUL");
-                break;
-            }
-        }
-        if (a.tool_version.size() > 128) {
-            p.add(field + "/tool_version", "must be at most 128 bytes");
-        }
-        if (a.operations.empty()) {
-            p.add(field + "/operations", "must list at least one operation");
-        }
-        for (const auto& operation : a.operations) {
-            if (!application::ports::is_known_helper_operation(operation)) {
-                p.add(field + "/operations", operation + " is not a helper protocol operation");
-            }
-        }
-        if (a.extractors.empty()) {
-            p.add(field + "/extractors", "must list at least one extractor");
-        }
-        for (const auto& extractor : a.extractors) {
-            if (!is_extractor(extractor)) {
-                p.add(field + "/extractors", "contains an invalid extractor name");
-            } else if (constexpr std::string_view generic{"generic"};
-                       std::equal(extractor.begin(), extractor.end(), generic.begin(), generic.end(),
-                                  [](char x, char y) { return (x | 0x20) == y; })) {
-                p.add(field + "/extractors", "generic extraction of arbitrary sites is never allowed");
-            }
-        }
-        if (a.domains.empty()) {
-            p.add(field + "/domains", "must list at least one domain");
-        }
-        for (const auto& domain_name : a.domains) {
-            if (!is_domain(domain_name)) {
-                p.add(field + "/domains", domain_name + " is not a lowercase host name");
-            }
-        }
-        if (a.max_connections > connection_bound) {
-            p.add(field + "/max_connections",
-                  "must not exceed upstream per_source_short, per_origin, per_principal and max_total_connections");
-        }
-        if (a.stop_grace > a.operation_timeout) {
-            p.add(field + "/stop_grace_ms", "must not exceed operation_timeout_ms");
-        }
-    }
-}
-
 void check_paths(const cfg::ServiceConfig& c, Problems& p) {
     if (c.data_dir.empty() || !c.data_dir.is_absolute()) {
         p.add("/data_dir", "must resolve to an absolute path");
@@ -360,7 +264,6 @@ domain::Result<void> validate_service_config(const cfg::ServiceConfig& config,
     check_capacity(config, problems);
     check_features(config, build, problems);
     check_providers(config, build, problems);
-    check_adapters(config, build, problems);
     check_paths(config, problems);
     if (problems.empty()) {
         return domain::ok();

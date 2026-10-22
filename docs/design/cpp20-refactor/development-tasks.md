@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-22。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T19 **已完成**，T20 **受阻**（仅容器内的在线下载闭环，见实施记录），T29 **已完成**，T30 **已完成**（侧文件拆为子任务 T30.s，未开始），T21 **已完成**，T22 **已完成**，T41 **已完成**（选用 5sing），T23 **已完成**，T28、T31、T32、T34 **待验收**（Windows 通过，CI 待 Actions 额度恢复后运行），T37 **待验收**（Windows 发行包本机通过；Windows 服务、Linux 包与 systemd 待管理员运行或 CI），T26 **待验收**（Windows 通过，Linux／macOS 待 CI），S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-22。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T19 **已完成**，T20 **受阻**（仅容器内的在线下载闭环，见实施记录），T29 **已完成**，T30 **已完成**（侧文件拆为子任务 T30.s，未开始），T21 **已完成**，T22 **已完成**，T41 **已完成**（选用 5sing），T23 **已完成**，T28、T31、T32、T34 **待验收**（Windows 通过，CI 待 Actions 额度恢复后运行），T37 **待验收**（Windows 发行包本机通过；Windows 服务、Linux 包与 systemd 待管理员运行或 CI），S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,7 +262,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-T20（S1 酷我端到端关口）除容器内的在线下载闭环外均已通过：须在能访问酷我音源接口的网络上运行 `packaging/docker/e2e.sh` 后转为已完成，S1 随之通过。T29 的实现只依赖 T17 的执行代码，已先行交付；T30（标签库 TagLib v2.3.2，按 MPL-1.1 静态链接）已交付标签与 FLAC／M4A 验证，侧文件留作子任务 T30.s。T21 交付公共集合用例与路由；T22（5sing）作为第二个原生平台接入，T41 以酷我与 5sing 验证扩展关口；T23 为两平台接入歌单、专辑、榜单、分类与推荐；T28 以两平台与 100 个模拟来源验证 S2 基础扩展关口；T31 补齐清理、复用证据与数据库备份恢复；T32 以故障组合与资源计量验证 S3 关口；T34 交付在线代理、受控直链与流桥接；T37 交付发行包、Windows 服务与 systemd 集成；T26 交付可选 helper 基础设施（协议、进程运行器与入场计量），尚无平台使用，YouTube adapter 归 T27。T33、T24 依赖受阻的 T20，暂不能开始。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+T20（S1 酷我端到端关口）除容器内的在线下载闭环外均已通过：须在能访问酷我音源接口的网络上运行 `packaging/docker/e2e.sh` 后转为已完成，S1 随之通过。T29 的实现只依赖 T17 的执行代码，已先行交付；T30（标签库 TagLib v2.3.2，按 MPL-1.1 静态链接）已交付标签与 FLAC／M4A 验证，侧文件留作子任务 T30.s。T21 交付公共集合用例与路由；T22（5sing）作为第二个原生平台接入，T41 以酷我与 5sing 验证扩展关口；T23 为两平台接入歌单、专辑、榜单、分类与推荐；T28 以两平台与 100 个模拟来源验证 S2 基础扩展关口；T31 补齐清理、复用证据与数据库备份恢复；T32 以故障组合与资源计量验证 S3 关口；T34 交付在线代理、受控直链与流桥接；T37 交付发行包、Windows 服务与 systemd 集成。T33、T24 依赖受阻的 T20，暂不能开始。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
@@ -447,17 +447,6 @@ T20（S1 酷我端到端关口）除容器内的在线下载闭环外均已通�
 | Windows 证据（2026-10-21） | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 205/205 通过（3 项在线用例按设计跳过）；GCC 16.2 在 -O2 严格警告下检查改动的源码与测试 0 条警告 |
 | Linux 证据（CI 运行 39525823045、39526810353） | ubuntu-24.04，GCC 13.3.0：205/205 通过，Windows 与容器任务同时通过。首次运行在测试替身 mock_providers.hpp 中有 4 条 -Wmissing-field-initializers（ResolvedAudio 新字段未初始化），由 23c2271 修复后复跑 0 条项目警告 |
 | 已知限制 | 只验证 MP3（酷我标准品质的实际容器）；FLAC／M4A／Ogg／WAV／ADTS 的结构验证、标签写入与解密归 T30 及具体平台；不做完整解码证明；整曲判定依赖平台声明时长；处理器由 T17 的 Runner 在 processing 阶段调用，结果写入任务记录后才参与已完成结果复用的证据复核 |
-
-### T26 可选外部 helper 基础设施：待验收（2026-10-22，Windows 通过，Linux／macOS 待 CI）
-
-| 项目 | 记录 |
-| --- | --- |
-| 前置 | T41 已完成 |
-| 交付 | ① 端口 `application/ports/providers/external_helper.hpp`：ExternalHelper.extract_audio（HelperCall＝adapter＋AdmissionRequest 基础字段；输入只有 link；输出 HelperAudioLocation：url、普通／秘密请求头、expires_at、extractor、media_id、container、codec、码率、大小、时长），结果为 HelperAudioLocation 或 Deferred；ProviderSetup／ProviderServices 增加 helper，未启用时为空。② 协议 v1（`providers/external/helper_protocol`）：stdout 每行一个 JSON 对象，hello（protocol、implementation、版本、tool、tool_version、operations）→ request（request_id、operation、budget、scope、input）→ result／error，取消为 cancel 消息加关闭 stdin；一个进程只处理一个请求。helper 错误码映射为 unsupported／not_found／credentials_required／rate_limited（retry_after_seconds 回馈入场账本冷却）／network；消息截断到 200 字节并去除 URL 查询与 Bearer。结果复核：https、主机在 domains 内（主机或其子域）、extractor 在允许列表且不为 generic、media_id 必填、请求头名合法且值无控制字符，Host／Range／Content-Length 等传输自管头拒绝，Cookie／Authorization 归入 secret_headers，过期时间须在未来、最长截到 24 小时；link 同样只接受 https 且在 domains 内，只作为协议数据传递，从不进入命令行。③ 进程原语 `child_process`：Windows 以挂起方式创建进程并在运行前放入 Job（KILL_ON_JOB_CLOSE，服务退出时 helper 一并结束），用 PROC_THREAD_ATTRIBUTE_HANDLE_LIST 只继承三根管道，CREATE_NO_WINDOW；POSIX 为 fork／execve，子进程独立进程组、关闭其他描述符、恢复信号，SIGPIPE 在服务内忽略，Linux 上服务成为 subreaper 以回收 helper 的孤儿进程（容器 PID 1 时也能判定退出）。按整棵进程树判断退出：Job 活动进程数为 0／进程组已无成员。环境变量只给最小集合（Windows：SystemRoot、windir、SystemDrive，TEMP／TMP／USERPROFILE 指向工作目录；POSIX：PATH、HOME、TMPDIR、LANG）与 MUSIC_HELPER_PROTOCOL，服务自身环境不传入。④ 运行器 `HelperRunner`：先校验 adapter、source 绑定、操作与 link，再以 origin `helper://<id>`、connections＝max_connections、helper_processes＝1 一次入场（不阻塞，无额度返回 Deferred，没有排队）；每次调用新建 `data_dir/cache/helpers/<request_id>` 工作目录（启动时清空残留），stdout 总量受 upstream.max_response_bytes（另加 64 KiB 握手余量）限制，stderr 持续读尽只保留末尾 max_stderr_bytes 并在失败时去敏记入日志。握手必须在 startup_timeout 内到达，协议版本与 tool_version 须与配置完全一致；回复受 operation_timeout 与调用 deadline 中较早者约束。无论成功、取消、超时、崩溃、输出超限或协议错误，都在整棵进程树确认退出后才释放租约：取消／超时时发送 cancel、关闭 stdin、POSIX 再发 SIGTERM，等待 stop_grace 后强制结束并反复确认。⑤ 入场账本增加 helper 进程维度（external_adapters.max_processes，未启用为 0 时请求 helper 即 CAPABILITY_UNSUPPORTED），与连接维度同时预留、同时归还。⑥ 配置：`external_adapters.adapters.<id>` 及校验（id、source 在构建内、程序为绝对路径、参数个数／长度、operations 只限已知操作、extractors 非空且不含 generic、domains 为小写主机名、max_connections 不超过 upstream 各相关上限、stop_grace 不超过 operation_timeout）；构建选项 MUSIC_SERVICE_EXTERNAL_ADAPTERS（缺省开）决定 BuildCapabilities.external_adapters。核心程序不依赖 Python、Node 或 FFmpeg，只有运维安装的 helper 程序需要 |
-| 验证 | `external_helper_test.cpp`（`[helper]`，真实子进程 `music_service_fake_helper`）：正常结果的类型化字段、Cookie 进入 secret_headers、进程退出且额度与工作目录清空；服务环境变量不泄漏给 helper；未知 adapter、他源调用、域外／仿冒主机与 http 链接不启动进程；域外 URL 与 generic extractor 的结果被拒；工具版本、协议版本不符与程序不存在为 FEATURE_UNAVAILABLE；非 JSON、stdout 超限（不可重试）、握手前退出与请求后崩溃（可重试）均回收进程；stderr 写满 1 MiB 不阻塞回复；helper 返回 rate_limited 后来源进入冷却，下一次调用 Deferred 且不启动进程。A45 helper 部分：忽略 cancel、stdin 关闭与 SIGTERM 的 helper 在超时（300 ms）后的宽限期内仍存活，此时账本中 helper 进程为 1、连接为声明上界 2，第二次调用为 Deferred（helper）且不启动；调用在超时＋宽限之后才返回，返回时进程已退出、额度为 0。会再启动孙进程的 helper 超时后两个进程都被结束；配合取消的 helper 在取消后立即退出，不等超时；启动超时为 UPSTREAM_TIMEOUT，调用 deadline 先到为 DEADLINE_EXCEEDED。`helper_protocol_test.cpp`：域名匹配边界、link 规则、hello 解析、请求单行编码、回复匹配与错误映射／去敏、结果复核（越界 URL、http、generic、未知 extractor、缺 media_id、Host／Range 头、头注入、非法头名、负数与字符串数值、非法 container、过期与超长有效期）、诊断文本截断不切断 UTF-8。`admission_ledger_test.cpp`：helper 进程与连接同时预留／归还，满额时 Deferred（helper）且不占连接，超出上限为 VALIDATION_FAILED。`config_test.cpp`：adapter 配置加载与全部校验项 |
-| Windows 证据（2026-10-22） | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 336 项全部通过（5 项在线用例按设计跳过）；`[helper]` 集成用例连续 5 次通过 |
-| Linux／macOS 证据 | 待 GitHub Actions 额度恢复后运行 CI（POSIX 进程组、subreaper 与 SIGTERM 路径只有 CI 能验证） |
-| 已知限制 | 尚无平台使用 helper，没有真实 yt-dlp wrapper，T27 负责；只实现 extract_audio，ExternalTransfer（外部工具直接传输）未实现；进程隔离不是安全沙箱，不限制 helper 的内存、CPU 与子进程数量，helper 自身是否遵守 max_connections 由 adapter 的契约样本验证，服务只按声明上界计量；POSIX 上调用 setsid 脱离进程组的后代无法追踪；Windows 没有可发给无控制台进程的终止信号，只靠 cancel 消息与关闭 stdin 请求退出；无法确认退出时调用线程会持续重试强制结束而不返回；helper 的环境变量不可配置；/api/v1/info 与管理状态尚未报告 helper 情况 |
 
 ### T37 原生包与系统服务：待验收（2026-10-22，Windows 发行包本机通过；服务与 Linux 待验证）
 

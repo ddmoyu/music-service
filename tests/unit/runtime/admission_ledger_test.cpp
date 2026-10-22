@@ -237,37 +237,3 @@ TEST_CASE("invalid and expired requests are errors, not deferrals", "[runtime][a
     auto empty = f.request("kuwo", "");
     CHECK(ledger.try_acquire(empty).error().code == domain::ErrorCode::validation_failed);
 }
-
-TEST_CASE("a helper reserves its process and declared connections together", "[runtime][admission]") {
-    Fixture f;
-    auto limits = f.limits();
-    limits.helper_processes = 1;
-    AdmissionLedger ledger{limits, f.clock};
-
-    auto helper = f.request("youtube", "helper://ytdlp");
-    helper.helper_processes = 1;
-    helper.connections = 2;
-    auto lease = granted(ledger.try_acquire(helper));
-    CHECK(ledger.usage().helpers == 1);
-    CHECK(ledger.usage().total == 2);
-    CHECK(ledger.usage().sources.at("youtube/short") == 2);
-
-    // No second helper process; the connections it would need are not taken either.
-    auto second = f.request("bilibili", "helper://other");
-    second.helper_processes = 1;
-    CHECK(deferred(ledger.try_acquire(second)).blocked_dimension == "helper");
-    CHECK(ledger.usage().total == 2);
-    // The source's short-request quota is spent by the helper's connections.
-    CHECK(deferred(ledger.try_acquire(f.request("youtube", "https://www.youtube.com"))).blocked_dimension ==
-          "source");
-
-    lease.release();
-    CHECK(ledger.usage().helpers == 0);
-    CHECK(ledger.usage().total == 0);
-    granted(ledger.try_acquire(second));
-
-    // More processes than the limit can never be granted.
-    auto greedy = f.request("youtube", "helper://ytdlp");
-    greedy.helper_processes = 2;
-    CHECK(ledger.try_acquire(greedy).error().code == domain::ErrorCode::validation_failed);
-}

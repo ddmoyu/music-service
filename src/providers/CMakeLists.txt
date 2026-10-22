@@ -38,10 +38,3 @@ target_link_libraries(music_service_providers
         music_service::project_warnings
         ${provider_targets}
 )
-
-# The helper runner is built in every configuration; external_adapters.enabled turns
-# it on at run time. Turning the option off removes the capability from the build.
-option(MUSIC_SERVICE_EXTERNAL_ADAPTERS "Build support for external helper programs (external_adapters)" ON)
-if(MUSIC_SERVICE_EXTERNAL_ADAPTERS)
-    add_subdirectory(external)
-endif()

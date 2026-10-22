@@ -17,9 +17,6 @@ struct AdmissionLimits {
     std::uint32_t total_connections{16}; // upstream.max_total_connections
     std::uint32_t per_principal{8};      // upstream.per_principal
     std::uint32_t per_origin{4};         // upstream.per_origin
-    // external_adapters.max_processes when helpers are enabled; 0 refuses every
-    // request that asks for a helper process.
-    std::uint32_t helper_processes{0};
     // Per source and traffic class: short/auth from upstream.per_source_short,
     // download from downloads.per_source, media from media_limits.upstream.
     std::map<application::ports::TrafficClass, std::uint32_t> per_source{
@@ -36,10 +33,8 @@ struct AdmissionLimits {
 
 // The process-wide upstream quota ledger (runtime-and-tasks.md, 上游入场与租约).
 // try_acquire reserves every dimension at once or none: global connections,
-// principal, source per traffic class, origin, helper processes, and any cooldown of
-// the source or its rate-limit group. A helper call reserves its process together with
-// the declared upper bound of the tool's own connections, and both come back only when
-// the lease is released after the process has really exited. It never blocks; without capacity it returns Deferred. A request
+// principal, source per traffic class, origin, and any cooldown of the source or its
+// rate-limit group. It never blocks; without capacity it returns Deferred. A request
 // larger than any single limit can never be granted and is VALIDATION_FAILED instead.
 // Leases keep the ledger's state alive, so a lease may be released after the ledger
 // object is gone. Thread-safe.
@@ -56,7 +51,6 @@ public:
 
     struct Usage {
         std::uint32_t total{0};
-        std::uint32_t helpers{0};
         std::map<std::string, std::uint32_t> principals;
         std::map<std::string, std::uint32_t> sources; // "source/class"
         std::map<std::string, std::uint32_t> origins;

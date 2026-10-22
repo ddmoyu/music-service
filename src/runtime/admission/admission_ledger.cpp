@@ -65,9 +65,6 @@ struct AdmissionLedger::State {
         if (r.connections > limits.per_origin) {
             return "origin";
         }
-        if (r.helper_processes > limits.helper_processes) {
-            return "helper";
-        }
         return std::nullopt;
     }
 
@@ -99,25 +96,20 @@ struct AdmissionLedger::State {
         if (!fits(count(usage.origins, r.origin), limits.per_origin)) {
             return ports::Deferred{"origin", later};
         }
-        if (std::uint64_t{usage.helpers} + r.helper_processes > limits.helper_processes) {
-            return ports::Deferred{"helper", later};
-        }
         return std::nullopt;
     }
 
     void add(const std::string& principal, const std::string& source, const std::string& origin,
-             std::uint32_t n, std::uint32_t helpers) {
+             std::uint32_t n) {
         usage.total += n;
-        usage.helpers += helpers;
         usage.principals[principal] += n;
         usage.sources[source] += n;
         usage.origins[origin] += n;
     }
 
     void remove(const std::string& principal, const std::string& source, const std::string& origin,
-                std::uint32_t n, std::uint32_t helpers) {
+                std::uint32_t n) {
         usage.total -= n;
-        usage.helpers -= helpers;
         const auto drop = [n](std::map<std::string, std::uint32_t>& m, const std::string& k) {
             if (auto it = m.find(k); it != m.end()) {
                 it->second -= n;
@@ -143,13 +135,13 @@ AdmissionLedger::try_acquire(const ports::AdmissionRequest& request) {
     if (request.connections == 0 || request.principal_id.empty() || request.origin.empty()) {
         return domain::Error::validation("admission", "principal, origin and connections are required");
     }
-    if (request.helper_processes > 0 && state_->limits.helper_processes == 0) {
+    if (const auto dimension = state_->unsatisfiable(request)) {
+        return domain::Error::validation("admission", "connections exceed the " + std::string{*dimension} +
+                                                          " limit and can never be granted");
+    }
+    if (request.helper_processes > 0) {
         return domain::Error{domain::ErrorCode::capability_unsupported,
                              "external helper processes are not enabled", false, {}};
-    }
-    if (const auto dimension = state_->unsatisfiable(request)) {
-        return domain::Error::validation("admission", "the request exceeds the " + std::string{*dimension} +
-                                                          " limit and can never be granted");
     }
     const auto now = clock_->steady_now();
     if (request.deadline <= now) {
@@ -163,15 +155,14 @@ AdmissionLedger::try_acquire(const ports::AdmissionRequest& request) {
     }
     const auto id = ++state_->next_id;
     const auto source = source_key(request);
-    state_->add(request.principal_id, source, request.origin, request.connections, request.helper_processes);
+    state_->add(request.principal_id, source, request.origin, request.connections);
 
     // The releaser owns a reference to the state: returning quota stays safe even if
     // the ledger is destroyed while operations are still finishing.
     auto releaser = [state = state_, principal = request.principal_id, source,
-                     origin = request.origin, n = request.connections,
-                     helpers = request.helper_processes](std::uint64_t) {
+                     origin = request.origin, n = request.connections](std::uint64_t) {
         const std::lock_guard release_lock{state->mutex};
-        state->remove(principal, source, origin, n, helpers);
+        state->remove(principal, source, origin, n);
     };
     return ports::AdmissionOutcome{ports::UpstreamLease{id, request, std::move(releaser)}};
 }

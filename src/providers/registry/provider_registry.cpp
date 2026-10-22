@@ -424,7 +424,7 @@ ProviderRegistry::build(std::vector<ports::ProviderBundle> bundles,
         auto entry = std::unique_ptr<Entry>(
             new Entry{std::move(view),
                       ports::ProviderSetup{bundle.source, settings.options_json, services.upstream,
-                                           settings.rate_limit_group.value_or(""), services.helper},
+                                           settings.rate_limit_group.value_or("")},
                       std::move(bundle.plaintext_endpoints), {}, {}});
         for (auto& binding : bundle.bindings) {
             auto key = binding.key();

@@ -25,9 +25,6 @@
 #include "infrastructure/filesystem/paths.hpp"
 #include "infrastructure/secrets/file_secret_store.hpp"
 #include "infrastructure/transport/httplib_transport.hpp"
-#ifdef MUSIC_SERVICE_HAS_EXTERNAL_ADAPTERS
-#include "providers/external/helper_runner.hpp"
-#endif
 #include "providers/registry/builtin_bundles.hpp"
 #include "providers/registry/provider_registry.hpp"
 #include "runtime/admission/admission_ledger.hpp"
@@ -37,7 +34,6 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <filesystem>
 #include <iostream>
 #include <map>
 #include <mutex>
@@ -75,7 +71,6 @@ runtime::AdmissionLimits admission_limits(const cfg::ServiceConfig& config) {
         {application::ports::TrafficClass::download, config.downloads.per_source},
         {application::ports::TrafficClass::media, config.media_limits.upstream},
     };
-    limits.helper_processes = config.external_adapters.enabled ? config.external_adapters.max_processes : 0;
     return limits;
 }
 
@@ -108,7 +103,6 @@ struct ProcessHost::State {
     std::shared_ptr<runtime::AdmissionLedger> admission;
     std::shared_ptr<application::ports::HttpTransport> transport;
     std::shared_ptr<application::transport::UpstreamClient> upstream;
-    std::shared_ptr<application::ports::ExternalHelper> helper; // external_adapters.enabled
     std::shared_ptr<runtime::BoundedExecutor> catalog_executor;
     std::shared_ptr<application::catalog::CatalogService> catalog;
     std::shared_ptr<application::catalog::AssetService> assets;
@@ -269,8 +263,7 @@ struct ProcessHost::State {
             assets.reset();
             catalog.reset();
             catalog_executor.reset();
-            registry.reset(); // capability objects hold the upstream client and the helper runner
-            helper.reset();
+            registry.reset(); // capability objects hold the upstream client
             upstream.reset();
             transport.reset();
             admission.reset();
@@ -445,24 +438,9 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
     }
     state->upstream = std::make_shared<application::transport::UpstreamClient>(state->admission, state->transport, clock);
 
-#ifdef MUSIC_SERVICE_HAS_EXTERNAL_ADAPTERS
-    if (config.external_adapters.enabled) {
-        // Working directories of helpers the last process left behind go first.
-        const auto helper_work = inst.layout.cache / "helpers";
-        std::error_code ec;
-        std::filesystem::remove_all(helper_work, ec);
-        state->helper = std::make_shared<providers::external::HelperRunner>(
-            providers::external::HelperRunnerOptions{config.external_adapters.adapters, helper_work,
-                                                     config.upstream.max_response_bytes},
-            state->admission, clock, state->log.with({{"component", "helper"}}));
-        state->log.info("startup.external_adapters",
-                        {{"adapters", static_cast<std::uint64_t>(config.external_adapters.adapters.size())},
-                         {"max_processes", config.external_adapters.max_processes}});
-    }
-#endif
     auto registry = providers::ProviderRegistry::build(
         options.bundles ? std::move(*options.bundles) : providers::builtin_bundles(), config.providers,
-        providers::ProviderServices{state->upstream, state->helper});
+        providers::ProviderServices{state->upstream});
     if (!registry) {
         return fail(std::move(registry).error(), "providers");
     }

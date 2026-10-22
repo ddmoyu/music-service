@@ -106,30 +106,9 @@ struct ProviderConfig {
     std::optional<std::string> rate_limit_group;
 };
 
-// One installed helper program (provider-extensibility.md, 外部执行契约). Everything that
-// reaches the command line is fixed here by the administrator; requests only send
-// data over the versioned protocol.
-struct ExternalAdapterConfig {
-    std::string source;                     // the only source that may call it
-    std::filesystem::path program;          // absolute after loading; no PATH search
-    std::vector<std::string> args;          // fixed arguments, never from requests
-    std::string tool_version;               // the helper's hello must report exactly this
-    std::vector<std::string> operations;    // allowed protocol operations
-    std::vector<std::string> extractors;    // allowed extractor names; never "generic"
-    std::vector<std::string> domains;       // allowed hosts and their subdomains
-    // Upper bound of upstream connections the tool opens itself; reserved in full for
-    // every call together with one helper process.
-    std::uint32_t max_connections{1};
-    milliseconds startup_timeout{10000};
-    milliseconds operation_timeout{60000};
-    milliseconds stop_grace{3000};
-    std::uint64_t max_stderr_bytes{8 * kib};
-};
-
 struct ExternalAdapters {
     bool enabled{false};
     std::uint32_t max_processes{2};
-    std::map<std::string, ExternalAdapterConfig> adapters;
 };
 
 struct Downloads {

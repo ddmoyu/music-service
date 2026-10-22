@@ -7,7 +7,6 @@
 
 #include <nlohmann/json.hpp>
 
-#include <algorithm>
 #include <cstdlib>
 #include <fstream>
 #include <functional>
@@ -204,68 +203,6 @@ void read_providers(Reader& r, const json& node, const std::string& path,
     }
 }
 
-void read_adapters(Reader& r, const json& node, const std::string& path, const std::filesystem::path& base,
-                   std::map<std::string, cfg::ExternalAdapterConfig>& adapters) {
-    if (!node.is_object()) {
-        r.fail(path, "must be an object keyed by adapter id");
-        return;
-    }
-    for (const auto& [id, value] : node.items()) {
-        const auto child = path + "/" + id;
-        auto& a = adapters[id];
-        bool has_source = false;
-        bool has_program = false;
-        bool has_version = false;
-        r.object(value, child,
-                 {
-                     {"source",
-                      [&](const json& v, const std::string& p) {
-                          r.string(v, p, a.source);
-                          has_source = true;
-                      }},
-                     {"program",
-                      [&](const json& v, const std::string& p) {
-                          r.path(v, p, base, a.program);
-                          has_program = true;
-                      }},
-                     {"args",
-                      [&](const json& v, const std::string& p) {
-                          // Arguments may be empty strings; only the type is checked here.
-                          if (!v.is_array() ||
-                              !std::all_of(v.begin(), v.end(), [](const json& x) { return x.is_string(); })) {
-                              r.fail(p, "must be an array of strings");
-                          } else {
-                              a.args = v.get<std::vector<std::string>>();
-                          }
-                      }},
-                     {"tool_version",
-                      [&](const json& v, const std::string& p) {
-                          r.string(v, p, a.tool_version);
-                          has_version = true;
-                      }},
-                     {"operations", [&](const json& v, const std::string& p) { r.string_list(v, p, a.operations); }},
-                     {"extractors", [&](const json& v, const std::string& p) { r.string_list(v, p, a.extractors); }},
-                     {"domains", [&](const json& v, const std::string& p) { r.string_list(v, p, a.domains); }},
-                     {"max_connections", [&](const json& v, const std::string& p) { r.number(v, p, a.max_connections, 1, 64); }},
-                     {"startup_timeout_ms", [&](const json& v, const std::string& p) { r.duration(v, p, a.startup_timeout, 100, 300000); }},
-                     {"operation_timeout_ms", [&](const json& v, const std::string& p) { r.duration(v, p, a.operation_timeout, 100, 3600000); }},
-                     {"stop_grace_ms", [&](const json& v, const std::string& p) { r.duration(v, p, a.stop_grace, 0, 60000); }},
-                     {"max_stderr_bytes", [&](const json& v, const std::string& p) { r.number(v, p, a.max_stderr_bytes, 0, 1 * cfg::mib); }},
-                 });
-        if (value.is_object()) {
-            if (!has_source) {
-                r.fail(child + "/source", "is required");
-            }
-            if (!has_program) {
-                r.fail(child + "/program", "is required");
-            }
-            if (!has_version) {
-                r.fail(child + "/tool_version", "is required");
-            }
-        }
-    }
-}
-
 void read_destinations(Reader& r, const json& node, const std::string& path,
                        const std::filesystem::path& base,
                        std::vector<cfg::DestinationConfig>& destinations) {
@@ -437,7 +374,6 @@ void read_document(Reader& r, const json& doc, const std::filesystem::path& base
                                {
                                    {"enabled", [&](const json& x, const std::string& q) { r.boolean(x, q, e.enabled); }},
                                    {"max_processes", [&](const json& x, const std::string& q) { r.number(x, q, e.max_processes, 1, 64); }},
-                                   {"adapters", [&](const json& x, const std::string& q) { read_adapters(r, x, q, base, e.adapters); }},
                                });
                   }},
                  {"downloads",
