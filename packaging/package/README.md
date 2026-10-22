@@ -40,10 +40,13 @@ From an elevated PowerShell in the unpacked directory:
 .\share\music-service\service\install-service.ps1 -DownloadDir D:\Music
 ```
 
-The service runs as the virtual account `NT SERVICE\music-service`, keeps its
-configuration and data under `%ProgramData%\music-service`, logs to
+The program is copied to `%ProgramFiles%\music-service` (`-InstallDir` to change it;
+service accounts cannot read a package left in a user profile). The service runs as the
+virtual account `NT SERVICE\music-service`, keeps its configuration and data under
+`%ProgramData%\music-service`, logs to
 `data\logs\music-service.log` and reports startup errors to the Application event log.
-`uninstall-service.ps1` removes it (add `-RemoveData` to delete configuration and data).
+`uninstall-service.ps1` removes the service and the program (add `-RemoveData` to delete
+configuration and data; downloads are never deleted).
 
 ## As a systemd service
 

@@ -1,7 +1,8 @@
 # Installs an unpacked release package as a real Windows service and checks it, then removes
 # it. Needs an elevated PowerShell (CI runners are). Uses throwaway directories with Chinese
 # names and a service name of its own, so an existing installation is not touched.
-#   - install-service.ps1 registers it as NT SERVICE\<name>, starts it, healthcheck passes;
+#   - install-service.ps1 copies the program to an install directory with a Chinese name,
+#     registers it as NT SERVICE\<name>, starts it, healthcheck passes;
 #   - the bootstrap token works against the running service; the data belongs to the
 #     service account and secrets/ is not readable through inherited rights;
 #   - the log file under data_dir receives the startup and shutdown records;
@@ -28,12 +29,14 @@ $name = 'music-service-smoke'
 $work = Join-Path $env:ProgramData ("music-service-服务测试-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 $downloads = Join-Path $work '下载'
 $configDir = Join-Path $work '配置'
+$installDir = Join-Path $work '程序'
 New-Item -ItemType Directory -Force $downloads | Out-Null
-$exe = Join-Path $root 'bin\music-service.exe'
+$exe = Join-Path $installDir 'bin\music-service.exe'
 $scripts = Join-Path $root 'share\music-service\service'
 try {
-    & (Join-Path $scripts 'install-service.ps1') -Name $name -InstallDir $root -ConfigDir $configDir `
-        -DataDir (Join-Path $configDir 'data') -DownloadDir $downloads -Port $Port
+    & (Join-Path $scripts 'install-service.ps1') -Name $name -PackageDir $root -InstallDir $installDir `
+        -ConfigDir $configDir -DataDir (Join-Path $configDir 'data') -DownloadDir $downloads -Port $Port
+    Assert (Test-Path $exe) 'the program was not copied to the install directory'
     $service = Get-Service -Name $name
     Assert ($service.Status -eq 'Running') 'not running after install'
     $account = (Get-CimInstance Win32_Service -Filter "Name='$name'").StartName
@@ -65,7 +68,7 @@ try {
 } finally {
     # Cleanup must not hide why the test failed.
     try {
-        & (Join-Path $scripts 'uninstall-service.ps1') -Name $name -ConfigDir $configDir -RemoveData
+        & (Join-Path $scripts 'uninstall-service.ps1') -Name $name -InstallDir $installDir -ConfigDir $configDir -RemoveData
     } catch {
         Write-Warning "cleanup: $_"
     }

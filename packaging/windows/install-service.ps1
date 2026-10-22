@@ -2,6 +2,9 @@
 # Run elevated (PowerShell 7 or Windows PowerShell 5.1):
 #   .\share\music-service\service\install-service.ps1 -DownloadDir D:\Music
 # What it does:
+#   - copies the package to <InstallDir> (default %ProgramFiles%\music-service) and lets
+#     the service account read and run it there: a package unpacked in a user profile is
+#     not readable by service accounts;
 #   - writes <ConfigDir>\config.json (kept if it exists) with data_dir <DataDir> and the
 #     download directory as destination dst_default for prn_local;
 #   - runs "init" once (skipped when the database exists) and moves the one-time bootstrap
@@ -11,11 +14,12 @@
 #   - makes that account the owner of <DataDir> (secrets/ stays owner-only) and gives it
 #     read access to the configuration and modify access to the download directory;
 #   - registers the event log source for startup errors and starts the service.
-# The program and the package stay where they are; data never lives in the package.
+# Data never lives in the installation directory.
 param(
     [Parameter(Mandatory = $true)][string]$DownloadDir,
     [string]$Name = 'music-service',
-    [string]$InstallDir = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path,
+    [string]$PackageDir = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path,
+    [string]$InstallDir = (Join-Path $env:ProgramFiles 'music-service'),
     [string]$ConfigDir = (Join-Path $env:ProgramData 'music-service'),
     [string]$DataDir = (Join-Path (Join-Path $env:ProgramData 'music-service') 'data'),
     [int]$Port = 17632
@@ -40,11 +44,18 @@ $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIde
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'run this script from an elevated PowerShell'
 }
-$exe = Join-Path $InstallDir 'bin\music-service.exe'
-if (-not (Test-Path $exe)) { throw "no program at $exe" }
+if (-not (Test-Path (Join-Path $PackageDir 'bin\music-service.exe'))) { throw "no program in $PackageDir" }
 if (-not (Test-Path $DownloadDir -PathType Container)) { throw "download directory $DownloadDir does not exist" }
 if (Get-Service -Name $Name -ErrorAction SilentlyContinue) { throw "a service named $Name already exists" }
 $account = "NT SERVICE\$Name"
+
+$source = (Resolve-Path $PackageDir).Path.TrimEnd('\')
+New-Item -ItemType Directory -Force $InstallDir | Out-Null
+$InstallDir = (Resolve-Path $InstallDir).Path.TrimEnd('\')
+if ($source -ne $InstallDir) {
+    Copy-Item -Path (Join-Path $source '*') -Destination $InstallDir -Recurse -Force
+}
+$exe = Join-Path $InstallDir 'bin\music-service.exe'
 
 New-Item -ItemType Directory -Force $ConfigDir | Out-Null
 $config = Join-Path $ConfigDir 'config.json'
@@ -75,7 +86,7 @@ if (-not (Test-Path (Join-Path $DataDir 'service.sqlite3'))) {
 }
 
 $binary = "`"$exe`" --config `"$config`" service"
-New-Service -Name $Name -BinaryPathName $binary -DisplayName 'music-service' -StartupType Automatic `
+New-Service -Name $Name -BinaryPathName $binary -DisplayName $Name -StartupType Automatic `
     -Description 'Music search, download and media backend' | Out-Null
 sc.exe config $Name obj= $account | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "cannot run $Name as $account" }
@@ -83,6 +94,8 @@ sc.exe failure $Name reset= 86400 actions= restart/5000/restart/30000//0 | Out-N
 
 # The service account owns its data; secrets/ grants its owner only, so ownership is what
 # gives the account access there. The program re-applies owner-only rights on start.
+# The account exists once the service does: grant it the program, then its data.
+icacls $InstallDir /grant "${account}:(OI)(CI)RX" /Q | Out-Null
 icacls $DataDir /grant "${account}:(OI)(CI)F" /Q | Out-Null
 Set-TreeOwner $DataDir $account
 icacls $ConfigDir /grant "${account}:(OI)(CI)RX" /Q | Out-Null
@@ -110,7 +123,8 @@ try {
     Write-Host '== event log'
     Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = $Name } -MaxEvents 5 -ErrorAction SilentlyContinue |
         Format-List TimeCreated, Message | Out-Host
-    Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Service Control Manager' } -MaxEvents 3 -ErrorAction SilentlyContinue |
+    Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Service Control Manager' } -MaxEvents 50 -ErrorAction SilentlyContinue |
+        Where-Object { $_.Message -match [regex]::Escape($Name) } | Select-Object -First 3 |
         Format-List TimeCreated, Message | Out-Host
     throw
 }

@@ -1,8 +1,9 @@
-# Removes the music-service Windows service. Data, configuration and downloads are kept
-# unless -RemoveData is given (which deletes <ConfigDir>, including data_dir when it lives
-# there; downloads are never deleted). Run elevated.
+# Removes the music-service Windows service and its program directory. Data, configuration
+# and downloads are kept unless -RemoveData is given (which deletes <ConfigDir>, including
+# data_dir when it lives there; downloads are never deleted). Run elevated.
 param(
     [string]$Name = 'music-service',
+    [string]$InstallDir = (Join-Path $env:ProgramFiles 'music-service'),
     [string]$ConfigDir = (Join-Path $env:ProgramData 'music-service'),
     [switch]$RemoveData
 )
@@ -20,6 +21,11 @@ if ($service) {
     }
     sc.exe delete $Name | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "cannot delete the service $Name" }
+}
+# Only a directory holding the program is removed, never an arbitrary path.
+if ((Test-Path (Join-Path $InstallDir 'bin\music-service.exe')) -and
+    (Test-Path (Join-Path $InstallDir 'share\music-service'))) {
+    Remove-Item -Recurse -Force $InstallDir
 }
 $source = "HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Application\$Name"
 if (Test-Path $source) { Remove-Item -Path $source -Recurse -Force }
