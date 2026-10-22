@@ -2,9 +2,10 @@
 
 每个平台独立成包，包含能力描述、协议构造、解析、配置与契约样本。新增平台通过构建注册项接入，不修改公共 source 枚举、业务路由或任务状态机。
 
-- registry：ProviderRegistry 与生成的内置清单。CMake 缓存变量 `MUSIC_SERVICE_PROVIDERS`（默认 `kuwo`）选择编入的平台；每项需要 `<source>/CMakeLists.txt` 定义 `music_service_provider_<source>`，并在 `providers/<source>/bundle.hpp` 提供 `make_bundle()`。清单由 `registry/builtin_bundles.cpp.in` 生成，直接调用这些函数，不依赖静态构造器注册。
+- registry：ProviderRegistry 与生成的内置清单。CMake 缓存变量 `MUSIC_SERVICE_PROVIDERS`（默认 `kuwo;fivesing`）选择编入的平台；每项需要 `<source>/CMakeLists.txt` 定义 `music_service_provider_<source>`，并在 `providers/<source>/bundle.hpp` 提供 `make_bundle()`。清单由 `registry/builtin_bundles.cpp.in` 生成，直接调用这些函数，不依赖静态构造器注册。
 - common：平台之间确实共享的编码／协议工具，不放跨平台业务策略。
 - kuwo：第一个平台，匿名单曲搜索、详情、链接解析与标准品质音源（T12），见 [kuwo/README.md](kuwo/README.md)。
+- fivesing：第二个平台，匿名单曲搜索、详情、链接、歌词与 standard／high 音源，作品类型＋编号复合身份、登记的明文 API 端点、同一文件的主备地址（T22），见 [fivesing/README.md](fivesing/README.md)。
 - 其他平台和外部 helper：在实际接入时创建，不预建空平台包。
 
 平台需要授权能力时，在自身 auth 目录实现可选 ICredentialVerifier、ICredentialRefresher、IApplicationTokenProvider，并通过 bundle 的 auth_profiles 绑定。平台协议只返回校验结果或秘密候选；账号选择、刷新合并与条件提交属于 application/accounts。所有上游请求共用入场端口，不建立平台私有线程池或 semaphore。

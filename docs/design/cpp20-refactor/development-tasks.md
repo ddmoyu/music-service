@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-21。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T19 **已完成**，T20 **受阻**（仅容器内的在线下载闭环，见实施记录），T29 **已完成**，T30 **已完成**（侧文件拆为子任务 T30.s，未开始），T21 **已完成**，S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-22。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T19 **已完成**，T20 **受阻**（仅容器内的在线下载闭环，见实施记录），T29 **已完成**，T30 **已完成**（侧文件拆为子任务 T30.s，未开始），T21 **已完成**，T22 **待验收**（Linux／macOS／容器 CI 待运行），S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -262,7 +262,7 @@ X 任务的路线在其协议准备子任务中确定，并把 T26／T30 等条�
 3. 变更影响的平台组合有构建与运行证据；平台在线验证单独记录时间、账号条件与结果，秘密不得进入报告。
 4. 记录任务 ID、实现提交、直接前置状态、验证命令、报告位置、已知限制和后续子任务；阶段关口只聚合这些证据，不替代日常功能验证。
 
-T20（S1 酷我端到端关口）除容器内的在线下载闭环外均已通过：须在能访问酷我音源接口的网络上运行 `packaging/docker/e2e.sh` 后转为已完成，S1 随之通过。T29 的实现只依赖 T17 的执行代码，已先行交付；T30（标签库 TagLib v2.3.2，按 MPL-1.1 静态链接）已交付标签与 FLAC／M4A 验证，侧文件留作子任务 T30.s。T21 交付公共集合用例与路由后，下一项为 T22（5sing）或其他 T41 候选平台，以及 S3 的 T31。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
+T20（S1 酷我端到端关口）除容器内的在线下载闭环外均已通过：须在能访问酷我音源接口的网络上运行 `packaging/docker/e2e.sh` 后转为已完成，S1 随之通过。T29 的实现只依赖 T17 的执行代码，已先行交付；T30（标签库 TagLib v2.3.2，按 MPL-1.1 静态链接）已交付标签与 FLAC／M4A 验证，侧文件留作子任务 T30.s。T21 交付公共集合用例与路由；T22（5sing）作为第二个原生平台接入，通过后可进行 T41 关口，S3 的 T31 可并行开始。当前没有设置工期或人员分配，避免把尚未完成的平台协议验证估算为确定日期。
 
 ## 实施记录
 
@@ -447,6 +447,18 @@ T20（S1 酷我端到端关口）除容器内的在线下载闭环外均已通�
 | Windows 证据（2026-10-21） | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 205/205 通过（3 项在线用例按设计跳过）；GCC 16.2 在 -O2 严格警告下检查改动的源码与测试 0 条警告 |
 | Linux 证据（CI 运行 39525823045、39526810353） | ubuntu-24.04，GCC 13.3.0：205/205 通过，Windows 与容器任务同时通过。首次运行在测试替身 mock_providers.hpp 中有 4 条 -Wmissing-field-initializers（ResolvedAudio 新字段未初始化），由 23c2271 修复后复跑 0 条项目警告 |
 | 已知限制 | 只验证 MP3（酷我标准品质的实际容器）；FLAC／M4A／Ogg／WAV／ADTS 的结构验证、标签写入与解密归 T30 及具体平台；不做完整解码证明；整曲判定依赖平台声明时长；处理器由 T17 的 Runner 在 processing 阶段调用，结果写入任务记录后才参与已完成结果复用的证据复核 |
+
+### T22 5sing 原生平台接入：待验收（2026-10-22，Windows 在线闭环通过，Linux／macOS／容器 CI 待运行）
+
+| 项目 | 记录 |
+| --- | --- |
+| 交付 | 平台包 `providers/fivesing`（fivesing-native 0.1.0，匿名）：search_tracks、track_detail、parse_links、lyrics、resolve_audio，品质提示 standard、high。作品身份为“类型＋编号”复合 id `<yc|fc|bz>-<编号>`，类型写入 version（fc＝cover、bz＝instrumental、yc 只标“原创”）；上传演唱者是 artist，原唱者不写入。两个 API 主机只有 HTTP（HTTPS 证书不匹配），bundle 精确登记 4 个明文端点（主机、80 端口、路径前缀、operation），请求无秘密；音频只接受 HTTPS `*.kugou.com`。取流：standard＝lq 128 kbit/s（缺 lq 用 hq 192），high＝sq 320 kbit/s，无 lossless；primary 先做 HEAD，backup 只在文件名等于该档 `<md5>.<ext>` 时作为同一文件使用；HEAD 长度等于声明大小时为 full，否则 unknown；时长始终未知。搜索每次调用一个上游页（10 条），游标 `页码[:偏移]`。构建默认 `MUSIC_SERVICE_PROVIDERS` 改为 `kuwo;fivesing`，5sing 的测试只在选入时编译；`packaging/e2e/kuwo_e2e.py` 增加 `--source fivesing`，`packaging/docker/e2e.sh` 透传参数，CI 各平台与容器各加一个允许失败的 5sing 在线步骤 |
+| 协议准备（.1） | 2026-10-22 自中国大陆网络匿名实测：`search.5sing.kugou.com/home/json`（固定 10 条／页，`list` 为 null 表示空）、`song/newget`（不存在为 code 200062）、`song/getSongUrl`（不存在、类型不符或未知类型均为 code 28）；以 Range 读取帧头确认 sq／hq／lq 为 320／192／128 kbit/s MP3；CDN 主备返回相同长度与 Last-Modified、无 ETag，地址带时间与签名段、无明确过期时间。`song/newget` 与 `getSongUrl` 对 hq／lq 的大小字段互相颠倒，只采用 getSongUrl 并以 HEAD 长度核对。脱敏样本见 `tests/fixtures/providers/fivesing` |
+| 离线契约（.3） | `fivesing_test.cpp`：复合 id 与非法形式；搜索映射（去高亮、类型到 version、无时长、未知类型条目略过、空结果）；详情与歌词只接受同一编号与类型、未计时文本不当 LRC；三档主备地址；链接；明文端点登记与传输规则（换 operation、换路径、带 Cookie、明文音频均被拒）；注册表接受 bundle；搜索游标页内续读、换页、页码不符、非法游标不发请求、429／502／入场受限；取流 standard／high、primary 无应答改 backup、primary 长度不符改 backup、backup 指向其他文件时不尝试、全部失败报错、入场受限不试 backup、非 HTTPS 或非 kugou.com 地址拒绝、按作品已有档位选择品质、长度未知为 unknown、不存在的作品。`fivesing_gate_test.cpp`（`[gate]`）：真实进程同时载入酷我与 5sing，providers 列表、两源合并搜索各自 ok、5sing 歌词 200 而酷我 422 CAPABILITY_UNSUPPORTED、无类型的 id 为 400、无 sq 的作品请求 high 为 422、公共下载执行器生成带标签的“琴酒蜀黍 - 千年食谱颂.mp3”，primary 503 时同一文件从 backup 下载 |
+| 在线验证（.4／.5） | Windows（2026-10-22，中国大陆网络）：`[online-fivesing]` 搜索“千年”10／16777 条，10 首均解析为 full，7 首可取 high（320 kbit/s）；`kuwo_e2e.py --source fivesing` 全程通过（3.0 s）：搜索 → 详情 → 解析（standard、full、128000 bit/s）→ 持久任务 → SSE 版本前进到 completed → 文件“琴酒蜀黍 - 千年食谱颂.mp3”5,325,906 字节 → 票据 Range 与完整读取与发布文件一致 → 客户端保存中途失败任务仍 completed → 取消 202／canceled → 重启后任务、文件、幂等重放与复用均正确；同一脚本的酷我闭环仍通过（3.6 s） |
+| Windows 证据（2026-10-22） | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 290 项全部通过（4 项在线或按设计跳过）；GCC 16.2 -O2 严格警告检查平台包源码与单元测试 0 条项目警告 |
+| Linux／macOS／容器证据 | 待 CI 运行；通过后补记运行号并改为已完成 |
+| 已知限制 | 歌单、歌手、登录与付费内容未实现；搜索每次只取一个上游页，limit 大于 10 时也最多返回 10 条；音频地址无过期时间，过期后由公共执行器重新解析；hq 只在缺 lq 时作为 standard 使用，不单独提供 192 kbit/s 档；链接只识别桌面页面形式；T41 关口（注册、能力差异、账号隔离与下载复用的组合验收）另行记录 |
 
 ### T21 多源、集合、发现与歌词用例：已完成（2026-10-22，提交 b27d061）
 

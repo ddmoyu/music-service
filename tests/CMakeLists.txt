@@ -52,6 +52,10 @@ add_executable(music_service_unit_tests
     unit/runtime/admission_ledger_test.cpp
     unit/runtime/executor_test.cpp
 )
+# Platform packages left out of the build have no tests to run.
+if("fivesing" IN_LIST MUSIC_SERVICE_PROVIDERS)
+    target_sources(music_service_unit_tests PRIVATE unit/providers/fivesing_test.cpp)
+endif()
 target_link_libraries(music_service_unit_tests PRIVATE
     music_service::application
     music_service::audio_processing
@@ -96,6 +100,9 @@ add_executable(music_service_integration_tests
     integration/storage_test.cpp
     integration/transport_test.cpp
 )
+if("fivesing" IN_LIST MUSIC_SERVICE_PROVIDERS)
+    target_sources(music_service_integration_tests PRIVATE integration/fivesing_gate_test.cpp)
+endif()
 target_link_libraries(music_service_integration_tests PRIVATE
     music_service::application
     music_service::audio_processing

@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # The online Kuwo loop (packaging/e2e/kuwo_e2e.py) against the container image: the
 # three listeners published on host loopback, docker restart (SIGTERM, same volumes)
-# as the restart step. Needs network access to Kuwo from the host running Docker.
-# Usage: packaging/docker/e2e.sh IMAGE
+# as the restart step. Needs network access to the platform from the host running Docker.
+# Usage: packaging/docker/e2e.sh IMAGE [--source fivesing]
 set -euo pipefail
 
 image="$1"
+shift
 here="$(cd "$(dirname "$0")" && pwd -P)"
 suffix="$$"
 data="ms-e2e-data-$suffix"
@@ -30,4 +31,4 @@ for _ in $(seq 1 60); do
 done
 
 python3 -I "$here/../e2e/kuwo_e2e.py" --api http://127.0.0.1:17632 --token "$token" \
-  --restart-command "docker restart --time 30 $name"
+  --restart-command "docker restart --time 30 $name" "$@"

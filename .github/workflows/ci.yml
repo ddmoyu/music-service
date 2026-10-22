@@ -37,6 +37,10 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: python -I packaging/e2e/kuwo_e2e.py --binary out/build/windows-msvc-debug/src/server/music-service.exe
+      - name: 5sing online loop
+        continue-on-error: true
+        shell: pwsh
+        run: python -I packaging/e2e/kuwo_e2e.py --binary out/build/windows-msvc-debug/src/server/music-service.exe --source fivesing
 
   linux-gcc:
     runs-on: ubuntu-24.04
@@ -61,6 +65,9 @@ jobs:
       - name: Kuwo online loop
         continue-on-error: true
         run: python3 -I packaging/e2e/kuwo_e2e.py --binary out/build/linux-gcc-debug/src/server/music-service
+      - name: 5sing online loop
+        continue-on-error: true
+        run: python3 -I packaging/e2e/kuwo_e2e.py --binary out/build/linux-gcc-debug/src/server/music-service --source fivesing
 
   macos-clang:
     runs-on: macos-15
@@ -88,6 +95,9 @@ jobs:
       - name: Kuwo online loop
         continue-on-error: true
         run: python3 -I packaging/e2e/kuwo_e2e.py --binary out/build/macos-clang-debug/src/server/music-service
+      - name: 5sing online loop
+        continue-on-error: true
+        run: python3 -I packaging/e2e/kuwo_e2e.py --binary out/build/macos-clang-debug/src/server/music-service --source fivesing
 
   docker:
     runs-on: ubuntu-24.04
@@ -100,3 +110,6 @@ jobs:
       - name: Kuwo online loop in the container
         continue-on-error: true
         run: packaging/docker/e2e.sh music-service:ci
+      - name: 5sing online loop in the container
+        continue-on-error: true
+        run: packaging/docker/e2e.sh music-service:ci --source fivesing

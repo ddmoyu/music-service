@@ -7,8 +7,8 @@ Windows、Linux、macOS 和 Docker 共用同一程序 `music-service` 与同一 
 | `windows/` | `smoke.ps1` | version、check-config、init、serve 就绪、healthcheck、带 token 的 info、无 token 401、运行中管理命令被拒；强制结束后实例锁释放，重启后 token 仍有效 |
 | `linux/` | `smoke.sh` | 同上，另以 SIGTERM 停止：退出码 0，停机顺序为监听 → 数据库 → 实例锁，之后管理命令可执行；输出 glibc 与动态库依赖 |
 | macOS（复用 `linux/`） | `smoke.sh` 的 Darwin 分支 | 同一套启动、认证、SIGTERM 与锁释放检查；用 `sw_vers`、`otool -L` 输出系统与依赖。CI 使用 macos-15 Apple Silicon、Homebrew LLVM 20／libc++；首轮 CI 成功前不声明已验证支持，尚无独立 macOS 发行包 |
-| `docker/` | `Dockerfile`、`config.json`、`smoke.sh`、`e2e.sh` | 多阶段构建；运行镜像只含程序、Ubuntu 24.04 基础库与 CA 证书，非 root（uid 10001）；数据卷上 init、健康检查、发布端口访问、`docker stop` 正常收尾，删除容器后用同一卷重建仍可用；`e2e.sh` 发布三个端口后运行在线酷我闭环，以 `docker restart` 作为重启步骤 |
-| `e2e/` | `kuwo_e2e.py` | 在线酷我闭环（仅标准库）：搜索 → 详情 → 解析 → 持久任务（创建连接关闭）→ SSE／HTTP → 文件元数据 → 票据 Range 与完整读取并与发布文件比对 → 客户端保存中途失败而任务仍 completed → 取消与传输竞争（canceled 或 completed 其一）→ 重启后新实例仍提供任务与文件、幂等重放与完成结果复用。`--binary` 自行 init／serve／重启，`--api`＋`--token`＋`--restart-command` 驱动已运行的服务。需要能访问酷我的网络；CI 中该步骤允许失败，海外运行器可能受地区限制 |
+| `docker/` | `Dockerfile`、`config.json`、`smoke.sh`、`e2e.sh` | 多阶段构建；运行镜像只含程序、Ubuntu 24.04 基础库与 CA 证书，非 root（uid 10001）；数据卷上 init、健康检查、发布端口访问、`docker stop` 正常收尾，删除容器后用同一卷重建仍可用；`e2e.sh IMAGE [--source fivesing]` 发布三个端口后运行在线闭环（默认酷我），以 `docker restart` 作为重启步骤 |
+| `e2e/` | `kuwo_e2e.py` | 在线酷我闭环（仅标准库）：搜索 → 详情 → 解析 → 持久任务（创建连接关闭）→ SSE／HTTP → 文件元数据 → 票据 Range 与完整读取并与发布文件比对 → 客户端保存中途失败而任务仍 completed → 取消与传输竞争（canceled 或 completed 其一）→ 重启后新实例仍提供任务与文件、幂等重放与完成结果复用。`--binary` 自行 init／serve／重启，`--api`＋`--token`＋`--restart-command` 驱动已运行的服务；`--source fivesing` 对 5sing 运行同一闭环。需要能访问对应平台的网络；CI 中这些步骤允许失败，海外运行器可能受地区限制 |
 
 ## 证书
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""The S1 Kuwo loop against the live service, without a frontend (T20).
+"""The S1 Kuwo loop (T20) against the live service, without a frontend; --source fivesing
+runs the same loop on 5sing (T22).
 
 search -> detail -> resolve -> durable task (the creating connection closed) -> SSE and
 HTTP -> file metadata -> media ticket with a range and a full read compared with the
@@ -34,7 +35,8 @@ import time
 import urllib.parse
 import uuid
 
-KEYWORD = "晴天"
+KEYWORDS = {"kuwo": "晴天", "fivesing": "千年"}
+TRACKS = {"kuwo": "78932517", "fivesing": "fc-16394286"}
 
 
 class Failure(Exception):
@@ -247,8 +249,10 @@ def get_url(url: str, headers=None, stop_after=None):
     return response.status, dict(response.getheaders()), data
 
 
-def run(service, track_id: str) -> dict:
-    report: dict = {"track": track_id}
+def run(service, source: str, track_id: str) -> dict:
+    report: dict = {"source": source, "track": track_id}
+    keyword = KEYWORDS[source]
+    track = {"source": source, "id": track_id}
     api = Http(service.api, service.token)
     info = api.json("GET", "/api/v1/info")[2]
     check(info["features"]["downloads"] and info["features"]["file_access"] and info["features"]["progress_sse"],
@@ -259,24 +263,24 @@ def run(service, track_id: str) -> dict:
     check(stream.wait(lambda e, d: e == "stream.ready", 10) is not None, "SSE starts with stream.ready")
 
     search = api.json("GET", "/api/v1/search/tracks?" + urllib.parse.urlencode(
-        {"q": KEYWORD, "sources": "kuwo", "limit": 10}))[2]
-    hits = [t for t in search["items"] if t["ref"]["source"] == "kuwo"]
-    check(len(hits) > 0, f"search '{KEYWORD}' returns {len(hits)} Kuwo tracks")
+        {"q": keyword, "sources": source, "limit": 10}))[2]
+    hits = [t for t in search["items"] if t["ref"]["source"] == source]
+    check(len(hits) > 0, f"search '{keyword}' returns {len(hits)} {source} tracks")
     # The song page is refused from some regions; the download names the file by source-id then.
-    status, _, data = api.call("GET", f"/api/v1/tracks/detail?source=kuwo&id={track_id}")
+    status, _, data = api.call("GET", f"/api/v1/tracks/detail?source={source}&id={track_id}")
     if status == 200:
         detail = json.loads(data)["data"]
         check(bool(detail["title"]), f"detail of {track_id}: {detail['title']}")
     else:
         report["detail_unavailable"] = json.loads(data)["error"]
         print(f"  --  detail of {track_id} unavailable here: HTTP {status} {report['detail_unavailable']['code']}")
-    asset = api.json("POST", "/api/v1/assets/resolve", {"track": {"source": "kuwo", "id": track_id}})[2]
+    asset = api.json("POST", "/api/v1/assets/resolve", {"track": track})[2]
     check(asset["actual_quality"] == "standard" and asset["completeness"] == "full",
           f"resolve: standard, full, {asset['container']} {asset['bitrate_bps']} bit/s")
     report["asset"] = {k: asset[k] for k in ("container", "bitrate_bps", "completeness", "actual_quality")}
 
     key = "e2e-" + uuid.uuid4().hex
-    status, _, created = api.json("POST", "/api/v1/downloads", {"track": {"source": "kuwo", "id": track_id}},
+    status, _, created = api.json("POST", "/api/v1/downloads", {"track": track},
                                   {"Idempotency-Key": key}, expect=(200, 202))
     task_id = created["task_id"]
     report["create_status"] = status
@@ -316,7 +320,7 @@ def run(service, track_id: str) -> dict:
 
     # A cancel racing a forced second download: canceled or completed, never both.
     status, _, forced = api.json("POST", "/api/v1/downloads",
-                                 {"track": {"source": "kuwo", "id": track_id}, "duplicate_policy": "force"},
+                                 {"track": track, "duplicate_policy": "force"},
                                  {"Idempotency-Key": "e2e-" + uuid.uuid4().hex}, expect=(202,))
     forced_id = forced["task_id"]
     stream.wait(lambda e, d: e == "task.updated" and d.get("task_id") == forced_id
@@ -340,11 +344,11 @@ def run(service, track_id: str) -> dict:
     check(status == 404, "tickets do not survive a restart")
     status, _, whole = get_url(ticket_for(api, file_id))
     check(status == 200 and hashlib.sha256(whole).hexdigest() == digest, "the file is served after the restart")
-    status, headers, replay = api.json("POST", "/api/v1/downloads", {"track": {"source": "kuwo", "id": track_id}},
+    status, headers, replay = api.json("POST", "/api/v1/downloads", {"track": track},
                                        {"Idempotency-Key": key}, expect=(200, 202))
     check(replay["task_id"] == task_id and headers.get("Idempotency-Replayed") == "true",
           "the first key replays the first answer")
-    status, _, reused = api.json("POST", "/api/v1/downloads", {"track": {"source": "kuwo", "id": track_id}},
+    status, _, reused = api.json("POST", "/api/v1/downloads", {"track": track},
                                  {"Idempotency-Key": "e2e-" + uuid.uuid4().hex}, expect=(200, 202))
     check(status == 200 and reused["reused"], "a new key reuses the completed file")
     return report
@@ -361,7 +365,8 @@ def main() -> int:
     parser.add_argument("--token")
     parser.add_argument("--restart-command")
     parser.add_argument("--downloads-dir")
-    parser.add_argument("--track", default="78932517", help="a free Kuwo rid with a full standard file")
+    parser.add_argument("--source", choices=sorted(TRACKS), default="kuwo")
+    parser.add_argument("--track", help="a free track with a full standard file (default per source)")
     args = parser.parse_args()
     if args.binary:
         service = OwnService(args.binary, args.port)
@@ -371,7 +376,7 @@ def main() -> int:
         parser.error("give --binary, or --api, --token and --restart-command")
     started = time.time()
     try:
-        report = run(service, args.track)
+        report = run(service, args.source, args.track or TRACKS[args.source])
     except Failure as failure:
         print(f"FAILED: {failure}")
         return 1
@@ -379,7 +384,7 @@ def main() -> int:
         service.close()
     report["seconds"] = round(time.time() - started, 1)
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    print("kuwo e2e passed")
+    print(f"{args.source} e2e passed")
     return 0
 
 
