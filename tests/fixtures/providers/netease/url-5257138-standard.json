@@ -1,0 +1,55 @@
+{
+ "data": [
+  {
+   "id": 5257138,
+   "url": "http://m801.music.126.net/20261022164358/00000000000000000000000000000000/jdymusic/obj/wo3DlMOGwrbDjj7DisKw/9444694535/c8bb/65da/db54/9e257ff0610f84e4242cf0127dac6005.mp3?vuutv=REDACTED",
+   "br": 128001,
+   "size": 5105833,
+   "md5": "9e257ff0610f84e4242cf0127dac6005",
+   "code": 200,
+   "expi": 1200,
+   "type": "mp3",
+   "gain": 0.0,
+   "peak": 1.0,
+   "closedGain": 0.0,
+   "closedPeak": 0.0,
+   "fee": 8,
+   "uf": null,
+   "payed": 0,
+   "flag": 260,
+   "canExtend": false,
+   "freeTrialInfo": null,
+   "level": "standard",
+   "encodeType": "mp3",
+   "channelLayout": null,
+   "freeTrialPrivilege": {
+    "resConsumable": false,
+    "userConsumable": false,
+    "listenType": null,
+    "cannotListenReason": null,
+    "playReason": null,
+    "freeLimitTagType": null
+   },
+   "freeTimeTrialPrivilege": {
+    "resConsumable": false,
+    "userConsumable": false,
+    "type": 0,
+    "remainTime": 0
+   },
+   "urlSource": 0,
+   "rightSource": 0,
+   "podcastCtrp": null,
+   "effectTypes": null,
+   "time": 319039,
+   "message": null,
+   "levelConfuse": null,
+   "musicId": "6709987428",
+   "accompany": null,
+   "sr": 44100,
+   "auEff": null,
+   "immerseType": null,
+   "beatType": 0
+  }
+ ],
+ "code": 200
+}

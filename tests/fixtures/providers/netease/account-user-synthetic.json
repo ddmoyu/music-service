@@ -1,0 +1,5 @@
+{
+ "code": 200,
+ "account": {"id": 10000001, "userName": "0_test@163.com", "type": 1, "status": 0, "vipType": 11, "createTime": 1500000000000},
+ "profile": {"userId": 10000001, "nickname": "测试用户", "vipType": 11, "accountStatus": 0}
+}

@@ -1,6 +1,6 @@
 # 开发任务拆分与验收计划
 
-更新：2026-10-22。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T19 **已完成**，T20 **受阻**（仅容器内的在线下载闭环，见实施记录），T29 **已完成**，T30 **已完成**（侧文件拆为子任务 T30.s，未开始），T21 **已完成**，T22 **已完成**，T41 **已完成**（选用 5sing），T23 **已完成**，T28、T31、T32、T34 **待验收**（Windows 通过，CI 待 Actions 额度恢复后运行），T37 **待验收**（Windows 发行包本机通过；Windows 服务、Linux 包与 systemd 待管理员运行或 CI），T26 **已取消**（不引入外部工具，见[平台实现原则](#平台实现原则)），T27 改为原生解析，S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
+更新：2026-10-22。本文将当前设计拆成 41 项公共能力／阶段验收任务和 12 项后续平台任务。T01～T19 **已完成**，T20 **受阻**（仅容器内的在线下载闭环，见实施记录），T29 **已完成**，T30 **已完成**（侧文件拆为子任务 T30.s，未开始），T21 **已完成**，T22 **已完成**，T41 **已完成**（选用 5sing），T23 **已完成**，T28、T31、T32、T34 **待验收**（Windows 通过，CI 待 Actions 额度恢复后运行），T37 **待验收**（Windows 发行包本机通过；Windows 服务、Linux 包与 systemd 待管理员运行或 CI），T26 **已取消**（不引入外部工具，见[平台实现原则](#平台实现原则)），T27 改为原生解析，N07 网易云**进行中**（标准品质匿名闭环与 Cookie 凭据已交付，真实账号验证待用户提供 Cookie），S0 基础服务关口通过；其余全部**未开始**；状态与证据见文末[实施记录](#实施记录)。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。
 
@@ -450,6 +450,19 @@ T20（S1 酷我端到端关口）除容器内的在线下载闭环外均已通�
 | Windows 证据（2026-10-21） | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 205/205 通过（3 项在线用例按设计跳过）；GCC 16.2 在 -O2 严格警告下检查改动的源码与测试 0 条警告 |
 | Linux 证据（CI 运行 39525823045、39526810353） | ubuntu-24.04，GCC 13.3.0：205/205 通过，Windows 与容器任务同时通过。首次运行在测试替身 mock_providers.hpp 中有 4 条 -Wmissing-field-initializers（ResolvedAudio 新字段未初始化），由 23c2271 修复后复跑 0 条项目警告 |
 | 已知限制 | 只验证 MP3（酷我标准品质的实际容器）；FLAC／M4A／Ogg／WAV／ADTS 的结构验证、标签写入与解密归 T30 及具体平台；不做完整解码证明；整曲判定依赖平台声明时长；处理器由 T17 的 Runner 在 processing 阶段调用，结果写入任务记录后才参与已完成结果复用的证据复核 |
+
+### N07 网易云（第一阶段）：进行中（2026-10-22，标准品质匿名闭环与 Cookie 凭据通过；真实账号未验证）
+
+| 项目 | 记录 |
+| --- | --- |
+| 前置 | T21 已完成；下载基线 T20 受阻（仅容器在线闭环），本平台的下载闭环另行实测 |
+| 协议准备（.1，2026-10-22，中国大陆网络，匿名） | 网页端 weapi 可匿名使用：`cloudsearch/pc`（`cloudsearch/get/web` 对 weapi 返回 50000005，不用）、`v3/song/detail`、`song/enhance/player/url/v1`、`song/lyric`、`w/nuser/account/get`。明文 `/api/*` 同样可用，但统一采用网页端 weapi，只实现这一种包装（不实现 EAPI／Linux API）。fee=0／8 的歌曲匿名可得 128 kbit/s MP3；fee=1（会员）匿名为单曲 code -110；无版权与不存在的 id 为 404。CDN 返回 http 地址，同一地址 HTTPS 可用、带强 ETag（即 md5）与 Range，无需 Referer 或 Cookie。无效 Cookie 与不带 Cookie 的账号接口应答相同（account 为 null）。样本见 `tests/fixtures/providers/netease`（签名与查询串已脱敏；登录态账号、301、405 为按结构构造的样本） |
+| 交付 | 平台包 `providers/netease`（netease-native 0.1.0）：weapi 加密以 Mbed TLS 原生实现（AES-128-CBC 两层、base64、无填充 RSA），新增依赖只有已固定的 mbedcrypto；能力 search_tracks（游标为 offset）、track_detail、parse_links、lyrics（匿名），resolve_audio（standard，凭据可选），verify_credentials；授权方式 `web_cookie`（cookie 类，单个秘密字段 cookie，scopes 含 vip）。Cookie 只作为秘密请求头发往 music.163.com，`__csrf` 作为 csrf_token；没有 MUSIC_U 不发请求即 invalid。音源规则与错误映射见 `src/providers/netease/README.md`。默认构建清单加入 netease（`kuwo;fivesing;netease`）；`kuwo_e2e.py` 增加 `--source netease` |
+| 离线契约（.3） | `netease_test.cpp`（`[netease]`，14 项）：weapi 与独立 Python 实现的固定向量逐字节一致；各请求的方法、URL、csrf 与加密前 JSON；Cookie 解析与只走秘密头；搜索映射、空结果、损坏应答；顶层 code 301／405／-460／50000005；详情（歌手与专辑 id、不存在、id 不符）；音源证据（HTTPS 化、CDN 域名限制、-110、404、试听标记）；歌词、翻译、纯音乐占位；账号登录与否；链接六种形式与十种拒绝；能力对象的游标、参数校验不发请求、503、入场受限；匿名不带 Cookie、账号调用带 Cookie 与 csrf 且请求体不含 Cookie；会员曲目 CREDENTIALS_REQUIRED、无版权 NOT_FOUND、试听为 preview 且无品质；严格 high 不发请求即 QUALITY_UNAVAILABLE；校验器的 valid／invalid／错误；bundle 注册与 web_cookie 可校验 |
+| 在线验证（.4，2026-10-22，Windows，匿名） | `[online-netease]`（MUSIC_SERVICE_NETEASE_ONLINE=1）：搜索“周杰伦”10／277 条且第二页不重复；详情《屋顶》；歌词与纯音乐 unavailable；5257138 解析为 standard、full、HTTPS、128001 bit/s；210049 为 CREDENTIALS_REQUIRED；186016 为 NOT_FOUND；失效 Cookie 校验为 invalid |
+| 产品闭环（.5，2026-10-22，Windows，匿名） | `python -I packaging/e2e/kuwo_e2e.py --binary …music-service.exe --source netease` 3.8 秒全部通过：搜索“屋顶”、详情、resolve 为 standard／full／mp3／128001、202 创建与 SSE 到 completed、文件「周杰伦, 温岚, 吴宗宪 - 屋顶.mp3」5,106,944 字节（CDN 5,105,833 字节加 ID3v2.4 标签）、票据 Range、客户端中途断开、取消、强制结束后重启恢复、幂等重放与复用。经服务 API 创建 web_cookie 凭据并校验：失效会话与缺 MUSIC_U 均为 invalid；会员曲目匿名 resolve 为 422 CREDENTIALS_REQUIRED |
+| Windows 证据 | MSVC 19.51 /W4：0 条项目警告；`ctest --preset windows-msvc-debug` 331 项全部通过（6 项在线用例按设计跳过） |
+| 未验证与限制 | 真实登录账号（有效 MUSIC_U）的校验、会员曲目解析与试听判定只有离线样本，待用户提供 Cookie 后在线验证；high／lossless 未实现（需会员账号验证，按任务要求单独验收）；歌单、专辑、歌手、榜单与集合链接未实现；短链 163cn.tv 不支持；Linux／macOS 待 CI |
 
 ### T26 可选外部 helper 基础设施：已取消（2026-10-22）
 

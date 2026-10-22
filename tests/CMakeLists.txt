@@ -57,6 +57,9 @@ add_executable(music_service_unit_tests
 if("fivesing" IN_LIST MUSIC_SERVICE_PROVIDERS)
     target_sources(music_service_unit_tests PRIVATE unit/providers/fivesing_test.cpp)
 endif()
+if("netease" IN_LIST MUSIC_SERVICE_PROVIDERS)
+    target_sources(music_service_unit_tests PRIVATE unit/providers/netease_test.cpp)
+endif()
 target_link_libraries(music_service_unit_tests PRIVATE
     music_service::application
     music_service::audio_processing

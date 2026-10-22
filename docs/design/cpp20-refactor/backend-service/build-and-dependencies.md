@@ -60,7 +60,7 @@ CMake 工程位于仓库根目录（见[根目录说明](../../../../README.md#�
 
 ### 平台包
 
-各 `music_service_provider_<source>` 独立声明实际依赖，发行 preset 通过 MUSIC_SERVICE_PROVIDERS 列表选择平台；新平台增加注册项和 target，无需修改公共 source 枚举。由构建清单生成显式工厂引用，未选平台不获取或链接它的专属依赖。S1 最小组合仅含酷我及公共基础设施（`-DMUSIC_SERVICE_PROVIDERS=kuwo`）；开发默认为 `kuwo;fivesing`，未选入的平台不编译其测试。
+各 `music_service_provider_<source>` 独立声明实际依赖，发行 preset 通过 MUSIC_SERVICE_PROVIDERS 列表选择平台；新平台增加注册项和 target，无需修改公共 source 枚举。由构建清单生成显式工厂引用，未选平台不获取或链接它的专属依赖。S1 最小组合仅含酷我及公共基础设施（`-DMUSIC_SERVICE_PROVIDERS=kuwo`）；开发默认为 `kuwo;fivesing;netease`，未选入的平台不编译其测试。
 
 服务不调用任何外部程序或第三方下载工具（yt-dlp、FFmpeg、Python／Node 运行时等都不进入构建或发行包）；平台需要的编码、签名与解密以 C++ 实现或经 FetchContent 固定的源码库完成。设计见[多平台扩展](provider-extensibility.md#4-只用原生实现)。
 

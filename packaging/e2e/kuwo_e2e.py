@@ -35,8 +35,8 @@ import time
 import urllib.parse
 import uuid
 
-KEYWORDS = {"kuwo": "晴天", "fivesing": "千年"}
-TRACKS = {"kuwo": "78932517", "fivesing": "fc-16394286"}
+KEYWORDS = {"kuwo": "晴天", "fivesing": "千年", "netease": "屋顶"}
+TRACKS = {"kuwo": "78932517", "fivesing": "fc-16394286", "netease": "5257138"}
 
 
 class Failure(Exception):
