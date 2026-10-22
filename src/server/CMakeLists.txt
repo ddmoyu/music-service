@@ -3,6 +3,7 @@
 add_library(music_service_server_core STATIC
     commands.cpp
     instance.cpp
+    ncm_import.cpp
     process_host.cpp
 )
 add_library(music_service::server_core ALIAS music_service_server_core)

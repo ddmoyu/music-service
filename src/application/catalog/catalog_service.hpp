@@ -167,6 +167,12 @@ public:
     domain::Result<ListResult<domain::Album>> artist_albums(const ListRequest& request);
     domain::Result<ListResult<domain::Playlist>> category_playlists(const ListRequest& request);
     domain::Result<ListResult<domain::Playlist>> recommend_playlists(const ListRequest& request);
+    domain::Result<ListResult<domain::Playlist>> user_playlists(const ListRequest& request);
+    domain::Result<EntityResult<domain::Podcast>> podcast_detail(const std::string& owner_id,
+        const std::string& source, const std::string& id);
+    domain::Result<EntityResult<domain::Episode>> episode_detail(const std::string& owner_id,
+        const std::string& source, const std::string& id);
+    domain::Result<ListResult<domain::Episode>> podcast_episodes(const ListRequest& request);
 
     domain::Result<DirectoryResult<domain::Category>> categories(const std::string& owner_id,
                                                                  const std::string& source);

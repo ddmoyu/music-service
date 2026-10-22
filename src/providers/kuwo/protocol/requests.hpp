@@ -28,6 +28,8 @@ application::ports::HttpRequest track_page(std::string_view rid);
 // GET https://mobi.kuwo.cn/mobi.s with type=convert_url_with_sign and br=128kmp3: the
 // standard-quality audio address. client_id is the per-request user value.
 application::ports::HttpRequest standard_audio(std::string_view rid, std::string_view client_id);
+application::ports::HttpRequest audio(std::string_view rid, std::string_view client_id, std::string_view bitrate);
+application::ports::HttpRequest lyrics(std::string_view rid);
 
 // Collections (T23), confirmed over HTTPS on 2026-10-22. page is 0-based unless noted.
 // Every answer is requested as UTF-8; the legacy search route answers single-quoted

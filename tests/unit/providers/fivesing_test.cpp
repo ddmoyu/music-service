@@ -223,10 +223,10 @@ TEST_CASE("5sing song answers give details and lyrics of exactly that work", "[p
     const auto refused = parsing::parse_song_info(R"({"success":false,"code":5,"data":[]})", {"fc", "1"});
     CHECK(refused.error().code == ErrorCode::upstream_failed);
     CHECK(detail_reason(refused.error(), "fivesing_code") == "5");
-    // Untimed text is not LRC.
+    // 公共歌词模型允许无时间戳文本，不应丢弃作者提供的歌词。
     CHECK(unwrap(parsing::parse_song_info(
                      R"({"success":true,"data":{"ID":1,"SK":"fc","SN":"x","dynamicWords":"just words"}})", {"fc", "1"}))
-              .lyrics.unavailable);
+              .lyrics.lrc == "just words");
 }
 
 TEST_CASE("5sing audio answers list tiers with primary and backup addresses", "[providers][fivesing]") {

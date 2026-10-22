@@ -74,8 +74,8 @@ TEST_CASE("T22: 5sing next to Kuwo, from search to a published file", "[gate][fi
     REQUIRE(lyrics->status == 200);
     CHECK(body(lyrics)["data"]["lrc"].get<std::string>().find("[00:03.37]") != std::string::npos);
     const auto kuwo_lyrics = api.Get("/api/v1/lyrics?source=kuwo&id=78932517");
-    CHECK(kuwo_lyrics->status == 422);
-    CHECK(code_of(kuwo_lyrics) == "CAPABILITY_UNSUPPORTED");
+    CHECK(kuwo_lyrics->status == 200);
+    CHECK(body(kuwo_lyrics)["data"]["lrc"].get<std::string>().find("中文歌词") != std::string::npos);
     CHECK(api.Get("/api/v1/tracks/detail?source=fivesing&id=fc-999999999")->status == 404);
     CHECK(api.Get("/api/v1/tracks/detail?source=fivesing&id=16394286")->status == 400); // no type: no work
 
@@ -263,7 +263,7 @@ TEST_CASE("T41: two real platforms, two principals, one download path", "[gate][
     // Registration: both packages from the build list, filtered by what each declares.
     CHECK(listed_sources(a, "") == std::set<std::string>{"fivesing", "kuwo"});
     CHECK(listed_sources(a, "?capability=resolve_audio") == std::set<std::string>{"fivesing", "kuwo"});
-    CHECK(listed_sources(a, "?capability=lyrics") == std::set<std::string>{"fivesing"});
+    CHECK(listed_sources(a, "?capability=lyrics") == std::set<std::string>{"fivesing", "kuwo"});
     CHECK(listed_sources(a, "?capability=search_playlists") == std::set<std::string>{"fivesing", "kuwo"});
     CHECK(listed_sources(a, "?capability=search_albums") == std::set<std::string>{"kuwo"});
     CHECK(listed_sources(a, "?capability=search_artists").empty());
@@ -271,12 +271,12 @@ TEST_CASE("T41: two real platforms, two principals, one download path", "[gate][
     for (const auto& item : providers["data"]["items"]) {
         CHECK(item["implementation"]["execution_mode"] == "native");
         CHECK(item["auth_methods"].empty());
-        const auto expected = item["source"] == "kuwo" ? json::array({"standard"}) : json::array({"standard", "high"});
+        const auto expected = item["source"] == "kuwo" ? json::array({"standard", "high", "lossless"}) : json::array({"standard", "high"});
         CHECK(item["quality_hints"] == expected);
     }
 
     // Capability differences through the same routes, decided by the declarations.
-    CHECK(code_of(a.Get("/api/v1/lyrics?source=kuwo&id=78932517")) == "CAPABILITY_UNSUPPORTED");
+    CHECK(a.Get("/api/v1/lyrics?source=kuwo&id=78932517")->status == 200);
     CHECK(a.Get("/api/v1/lyrics?source=fivesing&id=" + work)->status == 200);
     const auto kuwo_high = a.Post("/api/v1/assets/resolve",
                                   R"({"track":{"source":"kuwo","id":"78932517"},"quality":"high"})", "application/json");

@@ -8,6 +8,26 @@
 using namespace music_service;
 using namespace music_service::test;
 
+TEST_CASE("published quality cannot exceed platform or byte evidence", "[output][stage-e]") {
+    application::ports::AudioFacts facts;
+    facts.container = "flac";
+    facts.bits_per_sample = 24;
+    facts.sample_rate_hz = 44100;
+    CHECK(unwrap(downloads::verified_quality(domain::Quality::hires, facts)) == domain::Quality::lossless);
+    facts.sample_rate_hz = 96000;
+    CHECK(unwrap(downloads::verified_quality(domain::Quality::hires, facts)) == domain::Quality::hires);
+    CHECK(unwrap(downloads::verified_quality(domain::Quality::lossless, facts)) == domain::Quality::lossless);
+    facts.bits_per_sample = 16;
+    CHECK(unwrap(downloads::verified_quality(domain::Quality::hires, facts)) == domain::Quality::lossless);
+    facts.container = "mp3"; facts.bitrate_bps = 128000;
+    CHECK(unwrap(downloads::verified_quality(domain::Quality::high, facts)) == domain::Quality::standard);
+    facts.bitrate_bps = 320000;
+    CHECK(unwrap(downloads::verified_quality(domain::Quality::high, facts)) == domain::Quality::high);
+    CHECK_FALSE(unwrap(downloads::verified_quality(std::nullopt, facts)));
+    facts.container = "unknown";
+    CHECK_FALSE(downloads::verified_quality(domain::Quality::hires, facts));
+}
+
 TEST_CASE("output names sanitize every component and bound UTF-8 paths", "[output]") {
     const auto sanitize = [](std::string_view s) { return infrastructure::filesystem::sanitize_file_name(s); };
     domain::Track item{track("src", "1"), "晴天", {{"歌手甲", {}}, {"歌手乙", {}}}, domain::AlbumSummary{"专辑", {}}, {}, {}};
@@ -64,4 +84,19 @@ TEST_CASE("translated lyrics preserve both time lines and absent lyrics stay emp
     CHECK(downloads::embedded_lyrics(l) == "[00:01.00]original\n\n[translation]\n[00:01.25]译文");
     l.unavailable = true;
     CHECK(downloads::embedded_lyrics(l).empty());
+}
+
+TEST_CASE("lyric variants preserve timestamps and fall back without inventing word timing", "[output][stage-d]") {
+    domain::TrackLyrics l;
+    l.lrc = "[00:01.00]原文";
+    l.translated_lrc = "[00:01.000]translation\n[00:09.50]unmatched";
+    l.romanized_lrc = "[00:01.20]romaji";
+    l.karaoke = {{1000, 1000, {{1000, 400, "原"}, {1400, 600, "文"}}}};
+    CHECK(downloads::embedded_lyrics(l, "verbatim") ==
+        "[00:01.000]<00:01.000>原<00:01.400>文<00:02.000>\n[00:01.000]translation\n\n\n[translation]\n[00:09.50]unmatched\n");
+    CHECK(downloads::embedded_lyrics(l, "romanized").starts_with("[00:01.20]romaji"));
+    l.karaoke.clear();
+    l.romanized_lrc.reset();
+    CHECK(downloads::embedded_lyrics(l, "verbatim") == downloads::embedded_lyrics(l));
+    CHECK(downloads::embedded_lyrics(l, "romanized") == downloads::embedded_lyrics(l));
 }

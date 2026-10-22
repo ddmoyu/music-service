@@ -100,6 +100,9 @@ public:
                                                 const ports::OperationContext&) override {
         record(request);
         const auto& url = request.url;
+        if (url.starts_with("https://newlyric.kuwo.cn/newlyric.lrc?")) {
+            return answer(200, "application/octet-stream", fixture("lyric-synthetic.bin"), url);
+        }
         if (url.rfind("https://www.kuwo.cn/search/searchMusicBykeyWord?", 0) == 0) {
             return answer(200, "application/json; charset=utf-8", fixture("search-qingtian-pn0-rn3.json"), url);
         }
@@ -409,7 +412,7 @@ TEST_CASE("S1 gate: Kuwo search to a published file over HTTP, SSE and media", "
     for (const auto& request : requests) {
         CHECK(request.url.rfind("https://", 0) == 0);
         const auto host = request.url.substr(8, request.url.find('/', 8) - 8);
-        CHECK((host == "www.kuwo.cn" || host == "mobi.kuwo.cn" || host == "kw-lv.kuwo.cn"));
+        CHECK((host == "www.kuwo.cn" || host == "mobi.kuwo.cn" || host == "kw-lv.kuwo.cn" || host == "newlyric.kuwo.cn"));
         CHECK(request.secret_headers.empty());
     }
     CHECK(upstream->audio_requests() == 1);

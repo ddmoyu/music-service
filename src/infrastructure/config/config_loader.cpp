@@ -384,6 +384,10 @@ void read_document(Reader& r, const json& doc, const std::filesystem::path& base
                                            {"folder_layout", [&](const json& y, const std::string& z) { r.string(y, z, o.folder_layout); }},
                                            {"embed_cover", [&](const json& y, const std::string& z) { r.boolean(y, z, o.embed_cover); }},
                                            {"embed_lyrics", [&](const json& y, const std::string& z) { r.boolean(y, z, o.embed_lyrics); }},
+                                           {"lyrics_variant", [&](const json& y, const std::string& z) { r.string(y, z, o.lyrics_variant); }},
+                                            {"export_lyrics", [&](const json& y, const std::string& z) { r.boolean(y, z, o.export_lyrics); }},
+                                            {"export_cover", [&](const json& y, const std::string& z) { r.boolean(y, z, o.export_cover); }},
+                                            {"sidecars_required", [&](const json& y, const std::string& z) { r.boolean(y, z, o.sidecars_required); }},
                                            {"cover_max_bytes", [&](const json& y, const std::string& z) { r.number(y, z, o.cover_max_bytes, 1, 32 * 1024 * 1024); }},
                                            {"metadata_timeout_seconds", [&](const json& y, const std::string& z) { r.number(y, z, o.metadata_timeout_seconds, 1, 60); }},
                                        });

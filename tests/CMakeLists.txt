@@ -30,6 +30,7 @@ catch_discover_tests(music_service_dependency_tests DISCOVERY_MODE PRE_TEST)
 # no network or databases (opt-in [online-*] cases aside).
 add_executable(music_service_unit_tests
     unit/audio_processing/tagging_test.cpp
+    unit/audio_processing/ncm_test.cpp
     unit/audio_processing/verifying_processor_test.cpp
     unit/downloads/resume_policy_test.cpp
     unit/downloads/output_test.cpp

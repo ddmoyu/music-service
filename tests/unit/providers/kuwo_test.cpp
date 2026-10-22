@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <tuple>
 
 using namespace music_service;
 using namespace music_service::test;
@@ -147,6 +148,52 @@ TEST_CASE("kuwo text decoding", "[providers][kuwo]") {
     CHECK(parsing::decode_text("&#26228;&#x5929;") == "晴天");
     CHECK(parsing::decode_text("a &unknown; b & c") == "a &unknown; b & c");
     CHECK(parsing::decode_text("&#xD800;") == "&#xD800;");
+}
+
+TEST_CASE("kuwo compressed GB18030 lyrics are bounded and reach the lyrics capability", "[kuwo][stage-e]") {
+    const auto blob = fixture("lyric-synthetic.bin");
+    const auto parsed = unwrap(parsing::parse_lyrics(blob));
+    CHECK(parsed.lrc == "[ti:测试]\n[00:01.000]中文歌词\n[00:02.500]另一行\n");
+    CHECK_FALSE(parsed.unavailable);
+    CHECK(parsed.karaoke.empty()); // 非标准字标记不伪装成已验证的字级时间。
+    CHECK(unwrap(parsing::parse_lyrics("tp=none\r\ncand_lrc_count=0\r\n\r\n")).unavailable);
+    for (const auto& bad : {std::string{"html"}, blob.substr(0, blob.size()-1), blob + "trailing",
+        fixture("lyric-invalid-encoding.bin"), fixture("lyric-oversized.bin"), std::string(512*1024+1, 'x')}) {
+        const auto result = parsing::parse_lyrics(bad);
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == ErrorCode::upstream_failed);
+    }
+    auto upstream = std::make_shared<FakeUpstream>();
+    upstream->respond(200, blob);
+    auto port = unwrap(providers::kuwo::make_lyrics(setup(upstream)));
+    CHECK(unwrap(port->lyrics(context(), test::track("kuwo", "123"))).lrc == parsed.lrc);
+    REQUIRE(upstream->calls.size() == 1);
+    CHECK(upstream->calls[0].request.url.starts_with("https://newlyric.kuwo.cn/newlyric.lrc?"));
+    CHECK(upstream->calls[0].request.secret_headers.empty());
+    CHECK(upstream->calls[0].request.max_response_bytes == 512*1024);
+    CHECK_FALSE(port->lyrics(context(), test::track("netease", "123")));
+    CHECK(upstream->calls.size() == 1);
+}
+
+TEST_CASE("kuwo high and lossless follow response evidence and refuse substituted identity", "[kuwo][stage-e]") {
+    auto upstream = std::make_shared<FakeUpstream>();
+    auto resolver = unwrap(providers::kuwo::make_resolver(setup(upstream)));
+    const domain::ResourceRequirement wanted{domain::Quality::lossless, domain::QualityPolicy::strict, false};
+    for (const auto& [format, rate, quality] : std::vector<std::tuple<std::string,int,domain::Quality>>{
+        {"mp3",128,domain::Quality::standard}, {"mp3",320,domain::Quality::high}, {"flac",2000,domain::Quality::lossless}}) {
+        upstream->respond(200, "{\"code\":200,\"data\":{\"rid\":123,\"type\":0,\"format\":\"" + format +
+            "\",\"bitrate\":" + std::to_string(rate) + ",\"duration\":200,\"url\":\"https://cdn.kuwo.cn/synthetic\"}}");
+        const auto audio = unwrap(resolver->resolve_audio(context(), test::track("kuwo","123"), wanted));
+        CHECK(audio.actual_quality == quality);
+        CHECK(upstream->calls.back().request.url.find("br=2000kflac") != std::string::npos);
+        CHECK(domain::evaluate_resource(wanted,{audio.actual_quality,audio.completeness}).has_value() == (quality == domain::Quality::lossless));
+        auto lower = wanted; lower.policy = domain::QualityPolicy::allow_lower;
+        CHECK(domain::evaluate_resource(lower,{audio.actual_quality,audio.completeness}));
+    }
+    upstream->respond(200, fixture("audio-228908-substitute.json"));
+    auto preview = unwrap(resolver->resolve_audio(context(), test::track("kuwo","228908"), wanted));
+    CHECK_FALSE(preview.actual_quality);
+    CHECK(preview.completeness == domain::Completeness::preview);
 }
 
 TEST_CASE("kuwo song pages give details for exactly that song", "[providers][kuwo]") {
@@ -307,9 +354,9 @@ TEST_CASE("kuwo resolves standard quality and reports substitutes as previews", 
     CHECK(audio.request_headers.size() == 1);
     CHECK(unwrap(domain::evaluate_resource({}, {audio.actual_quality, audio.completeness})).warnings.empty());
 
-    // Higher quality: strict fails before any request; allow_lower settles for standard.
+    // 酷我尚未声明 Hi-Res；strict 在发请求前拒绝。
     const auto before = upstream->calls.size();
-    CHECK(resolver->resolve_audio(context(), free_song, {domain::Quality::lossless, domain::QualityPolicy::strict, false})
+    CHECK(resolver->resolve_audio(context(), free_song, {domain::Quality::hires, domain::QualityPolicy::strict, false})
               .error()
               .code == ErrorCode::quality_unavailable);
     CHECK(upstream->calls.size() == before);

@@ -51,7 +51,9 @@ struct ProcessingRequest {
     std::filesystem::path input;
     AudioExpectation expected;
     domain::MetadataPolicy metadata_policy{domain::MetadataPolicy::best_effort};
-    std::optional<TrackMetadata> metadata; // none: nothing trusted to write
+    std::optional<TrackMetadata> metadata; // none: no supplied metadata; container processors may extract it
+    bool embed_cover{true};
+    bool embed_lyrics{true};
 };
 
 // Facts measured from the bytes. Unknown values stay empty, never estimated.
@@ -69,6 +71,7 @@ struct AudioFacts {
     // SHA-256 (lowercase hex) of the output bytes the checks were made on; publication
     // refuses a file whose bytes no longer match it.
     std::string sha256;
+    std::optional<std::int32_t> bits_per_sample{};
 };
 
 enum class StageOutcome { done, skipped, failed };
@@ -102,6 +105,7 @@ struct ProcessingReport {
     std::vector<StageReport> stages;
     // 各元数据项的取得／写入结果；不包含地址、凭据或正文。
     std::vector<std::pair<std::string, std::string>> metadata_fields{};
+    std::optional<TrackMetadata> source_metadata{}; // bounded metadata extracted from local containers
 };
 
 // Required decryption and validation, optional tags (feature-modules.md 10). A failed

@@ -159,18 +159,14 @@ domain::Error refusal(const json& document, std::initializer_list<std::int64_t> 
     return error;
 }
 
-// Timed LRC only: at least one line starting with [mm:ss. Plain text is not LRC.
-std::optional<std::string> timed_lrc(std::string_view text) {
+// 保留上游的定时歌词或纯文本；公共 TrackLyrics 明确允许无时间戳文本。
+std::optional<std::string> lyric_text(std::string_view text) {
     std::string out;
-    bool timed = false;
     while (!text.empty()) {
         const auto end = text.find('\n');
         auto line = text.substr(0, end);
         if (!line.empty() && line.back() == '\r') {
             line.remove_suffix(1);
-        }
-        if (line.size() >= 6 && line[0] == '[' && line[1] >= '0' && line[1] <= '9' && line[3] == ':') {
-            timed = true;
         }
         out.append(line);
         out.push_back('\n');
@@ -179,12 +175,10 @@ std::optional<std::string> timed_lrc(std::string_view text) {
         }
         text.remove_prefix(end + 1);
     }
-    if (!timed) {
-        return std::nullopt;
-    }
     while (!out.empty() && (out.back() == '\n' || out.back() == ' ')) {
         out.pop_back();
     }
+    if (out.find_first_not_of(" \t\r\n") == std::string::npos) return std::nullopt;
     return out;
 }
 
@@ -313,7 +307,7 @@ domain::Result<SongInfo> parse_song_info(std::string_view body, const WorkKey& k
     if (auto album = clean_text(as_string(*data, "albumName")); !album.empty()) {
         info.track.album = domain::AlbumSummary{std::move(album), std::nullopt};
     }
-    if (auto lrc = timed_lrc(as_string(*data, "dynamicWords"))) {
+    if (auto lrc = lyric_text(as_string(*data, "dynamicWords"))) {
         info.lyrics.lrc = std::move(lrc);
     } else {
         info.lyrics.unavailable = true;

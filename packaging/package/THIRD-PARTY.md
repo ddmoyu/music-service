@@ -10,6 +10,7 @@ in this directory. Versions are pinned in `cmake/dependencies/Versions.cmake` of
 | nlohmann/json | JSON | MIT | `nlohmann-json-LICENSE.txt` |
 | TagLib | audio tags | MPL-1.1 (used under MPL; source available from the TagLib project) | `taglib-COPYING.MPL.txt` |
 | utfcpp | UTF-8 (part of TagLib) | BSL-1.0 | `utfcpp-LICENSE.txt` |
+| zlib | lyric decompression | zlib | `zlib-LICENSE.txt` |
 | SQLite | database | Public domain | none needed |
 
 The Windows program also contains the Microsoft C/C++ runtime, linked statically under the

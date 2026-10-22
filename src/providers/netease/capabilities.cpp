@@ -50,10 +50,26 @@ domain::Result<std::string> song_id(const domain::TrackRef& track) {
     if (track.source.value() != protocol::source) {
         return Error::validation("track", "is not a netease track");
     }
+    if (auto program = parsing::program_audio(track.id.value())) return program->song_id;
     if (!parsing::is_valid_song_id(track.id.value())) {
         return Error::validation("track", "is not a netease song id");
     }
     return track.id.value();
+}
+
+domain::Result<domain::Episode> episode_for(const Client& client, const ports::ProviderContext& c,
+    const domain::TrackRef& track, std::string_view operation) {
+    const auto program = parsing::program_audio(track.id.value());
+    if (!program) return Error::validation("track", "invalid program audio reference");
+    auto request = protocol::episode(program->program_id, call_for(cookie_of(c)));
+    request.operation = operation;
+    auto body = client.body(std::move(request), c, cookie_of(c));
+    if (!body) return body.error();
+    auto episode = parsing::parse_episode(*body, program->program_id);
+    if (!episode) return episode.error();
+    if (!episode->audio_ref || *episode->audio_ref != track)
+        return Error{ErrorCode::not_found, "episode audio was removed or replaced; refresh episode details", false, {}};
+    return episode;
 }
 
 class Search final : public ports::ITrackSearch {
@@ -112,6 +128,15 @@ public:
         if (!id) {
             return std::move(id).error();
         }
+        if (parsing::program_audio(track.id.value())) {
+            auto episode = episode_for(client_, context, track, "track_detail");
+            if (!episode) return episode.error();
+            domain::Track result{track, episode->title};
+            result.album = domain::AlbumSummary{episode->podcast_title, episode->podcast};
+            result.artwork = episode->artwork;
+            result.duration_ms = episode->duration_ms;
+            return result;
+        }
         auto body = client_.body(protocol::song_detail(*id, call_for({})), context);
         if (!body) {
             return std::move(body).error();
@@ -153,6 +178,7 @@ public:
         if (!id) {
             return std::move(id).error();
         }
+        if (parsing::program_audio(track.id.value())) return domain::TrackLyrics{.unavailable = true};
         auto body = client_.body(protocol::lyric(*id, call_for({})), context);
         if (!body) {
             return std::move(body).error();
@@ -175,11 +201,18 @@ public:
         if (!id) {
             return std::move(id).error();
         }
-        // Hi-Res has no independently verified sample; never advertise it as lossless.
-        constexpr std::array offered{domain::Quality::standard, domain::Quality::high, domain::Quality::lossless};
-        auto chosen = domain::choose_quality(requirement, offered);
+        std::optional<domain::Episode> episode;
+        if (parsing::program_audio(track.id.value())) {
+            auto loaded = episode_for(client_, context, track, "resolve_audio");
+            if (!loaded) return loaded.error();
+            if (loaded->requires_purchase) return Error{ErrorCode::credentials_required,
+                "this episode requires a purchase", false, {{"netease_access", "episode_purchase_required"}}};
+            episode = std::move(*loaded);
+        }
+        constexpr std::array offered{domain::Quality::standard, domain::Quality::high, domain::Quality::lossless, domain::Quality::hires};
+        auto chosen = domain::choose_quality(requirement, std::span{offered}.first(episode ? 1U : offered.size()));
         if (!chosen) return chosen.error();
-        const auto level = *chosen == domain::Quality::lossless ? "lossless" :
+        const auto level = *chosen == domain::Quality::hires ? "hires" : *chosen == domain::Quality::lossless ? "lossless" :
                            *chosen == domain::Quality::high ? "exhigh" : "standard";
         const auto cookie = cookie_of(context);
         auto body = client_.body(protocol::song_url(*id, level, call_for(cookie)), context, cookie);
@@ -190,6 +223,9 @@ public:
         if (!evidence) {
             return std::move(evidence).error();
         }
+        // Program URLs omit level/time. Preserve the verified program duration for the
+        // byte-level completeness check; never grant a higher tier from missing evidence.
+        if (episode && !evidence->duration_ms) evidence->duration_ms = episode->duration_ms;
         switch (evidence->code) {
         case 200:
             break;
@@ -217,7 +253,7 @@ public:
         if (evidence->trial) {
             completeness = domain::Completeness::preview;
         } else {
-            const bool standard_mp3 = evidence->level == "standard" && evidence->container == "mp3" &&
+            const bool standard_mp3 = (evidence->level == "standard" || (episode && evidence->level.empty())) && evidence->container == "mp3" &&
                                       evidence->bitrate_bps && *evidence->bitrate_bps >= 96000 &&
                                       *evidence->bitrate_bps <= 160000;
             if (standard_mp3) {
@@ -228,6 +264,9 @@ public:
             } else if (evidence->level == "lossless" && evidence->container == "flac" &&
                        evidence->bitrate_bps && *evidence->bitrate_bps > 0) {
                 quality = domain::Quality::lossless;
+            } else if (evidence->level == "hires" && evidence->container == "flac" &&
+                       evidence->bitrate_bps && *evidence->bitrate_bps > 0) {
+                quality = domain::Quality::hires; // 发布前仍须检查文件的位深与采样率。
             }
             if (!quality && requirement.requested != domain::Quality::standard) {
                 return Error{ErrorCode::quality_unavailable, "netease returned an unverified quality tier", false, {}};

@@ -45,6 +45,10 @@ inline constexpr std::string_view chart_detail = "chart_detail";
 inline constexpr std::string_view chart_tracks = "chart_tracks";
 inline constexpr std::string_view recommend_playlists = "recommend_playlists";
 inline constexpr std::string_view verify_credentials = "verify_credentials";
+inline constexpr std::string_view user_playlists = "user_playlists";
+inline constexpr std::string_view podcast_detail = "podcast_detail";
+inline constexpr std::string_view podcast_episodes = "podcast_episodes";
+inline constexpr std::string_view episode_detail = "episode_detail";
 } // namespace capability
 
 // Maps a capability port interface to its key. Specialized next to each interface.
@@ -100,7 +104,7 @@ template <> struct capability_traits<ITrackDetail> {
     static constexpr std::string_view key = capability::track_detail;
 };
 
-// A recognized link or URI. kind is "track", "playlist", "album" or "artist".
+// A recognized link or URI: track, playlist, album, artist, podcast or episode.
 struct ParsedLink {
     std::string kind;
     domain::PlatformRef ref;
@@ -160,6 +164,18 @@ template <> struct capability_traits<ILyrics> {
 // The capability families below share three shapes. Each key has its own tag type so
 // that every key binds a distinct port; the tag names the item and the key.
 namespace catalog_tag {
+struct PodcastDetail {
+    using Item = domain::Podcast;
+    static constexpr std::string_view key = capability::podcast_detail;
+};
+struct EpisodeDetail {
+    using Item = domain::Episode;
+    static constexpr std::string_view key = capability::episode_detail;
+};
+struct PodcastEpisodes {
+    using Item = domain::Episode;
+    static constexpr std::string_view key = capability::podcast_episodes;
+};
 struct SearchPlaylists {
     using Item = domain::Playlist;
     static constexpr std::string_view key = capability::search_playlists;
@@ -286,5 +302,17 @@ using ArtistTracks = IEntityList<catalog_tag::ArtistTracks>;
 using ChartTracks = IEntityList<catalog_tag::ChartTracks>;
 using ArtistAlbums = IEntityList<catalog_tag::ArtistAlbums>;
 using CategoryPlaylists = IEntityList<catalog_tag::CategoryPlaylists>;
+using PodcastDetail = IEntityDetail<catalog_tag::PodcastDetail>;
+using EpisodeDetail = IEntityDetail<catalog_tag::EpisodeDetail>;
+using PodcastEpisodes = IEntityList<catalog_tag::PodcastEpisodes>;
+
+class IUserPlaylists {
+public:
+    virtual ~IUserPlaylists() = default;
+    virtual domain::Result<CatalogPage<domain::Playlist>> user_playlists(const ProviderContext&, const ListQuery&) = 0;
+};
+template <> struct capability_traits<IUserPlaylists> {
+    static constexpr std::string_view key = capability::user_playlists;
+};
 
 } // namespace music_service::application::ports

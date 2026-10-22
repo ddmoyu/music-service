@@ -69,7 +69,10 @@ AccountBinding 表达稳定的账号选择，不含 token、Cookie、secret_ref 
 | `ArtistSummary` | name，ref 可为 null；多个艺术家保留数组，不只拼成展示字符串 |
 | `AlbumSummary` | title、ref，可为空；保留与歌单不同的语义 |
 | `VersionInfo` | kind：studio／live／remix／cover／instrumental／unknown，label、evidence |
-| `Playlist` | ref、name、creator、description、artwork、track_count、play_count、updated_at |
+| `Playlist` | ref、name、creator、description、artwork、track_count、play_count、updated_at、可选 relationship（created／subscribed） |
+| `Podcast` | ref（电台 ID）、title、presenter、description、artwork、episode_count |
+| `Episode` | ref（节目 ID）、podcast（电台引用）、title、podcast_title、presenter、description、artwork、duration_ms、published_at、audio_ref、requires_purchase |
+| `TrackLyrics` | lrc、translated_lrc、romanized_lrc 独立文本；karaoke 为毫秒单位行／词；unavailable、warnings |
 | `Album` | ref、title、artists、release_date、track_count、artwork、可选 description |
 | `Category` | source、id、name、group、catalog_kind |
 | `Chart` | ref、name、description、update_hint、updated_at、track_count、catalog_kind |
@@ -213,3 +216,11 @@ T05 的实现约定：表使用 STRICT 模式；库内时间存为 UTC 毫秒整
 文件被移走时将 asset 标为 missing，读取返回 410，历史保留。文件与 DB 不一致、取消与发布竞争按上述流程协调。
 
 文件路径由资产的 destination_id 对应的持久根绑定与相对路径解析，不能使用当前“默认下载目录”替换根。根目录变更被启动校验拒绝；历史资产、工作区和发布意图沿用原位置，改用新目录时新建 destination_id。
+
+
+## 0.1.6 本地产物集合扩展
+
+- 开启 `export_lyrics` 或 `export_cover` 的下载意图使用 schema 4，包含两个导出标志、`sidecars_required` 与歌词选择，全部参与复用指纹；兼容 schema 1～3。未开启导出时维持旧编码和路径。SQLite 表结构未改变，回退旧程序前需使用匹配版本的备份。
+- 开启导出时，finalization_intents 的 workspace_file／reserved_path 指向整个目录，evidence.properties.bundle 保存 audio／lyrics／cover 的文件名、大小、SHA-256。各文件在工作区写入并刷新后，保存意图，再独占重命名目录；SQLite 事务只在全部成员匹配时发布一个 file_id。目录是唯一预留键，资产 relative_path 指向目录内音频。恢复逐项比对，丢失或改写不完成。
+- file_assets.properties.bundle 是同一资产的产物清单，不生成彼此独立的无主侧文件；成员共用 owner、destination ACL、生命周期与文件票据。读取／复用校验整个集合。历史 result 保留元数据及侧文件状态；原有单文件记录继续读写。
+- import-ncm 任务使用内部来源 local_ncm、输入内容摘要作引用，保存的意图不含本机输入绝对路径。CLI 对输入复核哈希、保留原文件；相同输入与产品选项可复用完整资产。中断的未发布本地任务标记 LOCAL_IMPORT_INTERRUPTED，不交给在线平台调度；持久发布意图仍走通用恢复。

@@ -126,7 +126,56 @@ ports::HttpRequest album(std::string_view id, const Call& call) {
 }
 
 ports::HttpRequest lyric(std::string_view id, const Call& call) {
-    return weapi("song/lyric", json{{"id", numeric(id)}, {"lv", -1}, {"kv", -1}, {"tv", -1}}, "lyrics", call);
+    auto request = weapi("song/lyric", json{{"id", numeric(id)}, {"lv", -1}, {"kv", -1}, {"tv", -1},
+        {"rv", -1}, {"yv", -1}}, "lyrics", call);
+    request.max_response_bytes = 2 * 1024 * 1024;
+    return request;
+}
+
+ports::HttpRequest user_playlists(std::string_view uid, std::uint32_t offset, std::uint32_t limit, const Call& call) {
+    auto r = weapi("user/playlist", {{"uid", numeric(uid)}, {"offset", offset}, {"limit", limit},
+        {"includeVideo", false}}, "user_playlists", call);
+    r.max_response_bytes = 2 * 1024 * 1024;
+    return r;
+}
+
+ports::HttpRequest artist_tracks(std::string_view id, const Call& call) {
+    auto r = weapi("artist/" + std::string{id}, json::object(), "artist_tracks", call);
+    r.max_response_bytes = 2 * 1024 * 1024;
+    return r;
+}
+
+ports::HttpRequest search_artists(std::string_view keyword, std::uint32_t offset, std::uint32_t limit, const Call& call) {
+    auto r = weapi("cloudsearch/pc", {{"s", keyword}, {"type", 100}, {"offset", offset}, {"limit", limit},
+        {"total", true}}, "search_artists", call);
+    r.max_response_bytes = 2 * 1024 * 1024;
+    return r;
+}
+
+ports::HttpRequest artist_albums(std::string_view id, std::uint32_t offset, std::uint32_t limit, const Call& call) {
+    auto r = weapi("artist/albums/" + std::string{id}, {{"offset", offset}, {"limit", limit}, {"total", true}},
+        "artist_albums", call);
+    r.max_response_bytes = 2 * 1024 * 1024;
+    return r;
+}
+
+ports::HttpRequest podcast(std::string_view id, const Call& call) {
+    auto r = weapi("djradio/v2/get", {{"id", numeric(id)}}, "podcast_detail", call);
+    r.max_response_bytes = 512 * 1024;
+    return r;
+}
+
+ports::HttpRequest episodes(std::string_view id, std::uint32_t offset, std::uint32_t limit, const Call& call) {
+    auto r = weapi("dj/program/byradio", {{"radioId", numeric(id)}, {"offset", offset}, {"limit", limit},
+        {"asc", true}}, "podcast_episodes", call);
+    r.max_response_bytes = 4 * 1024 * 1024;
+    return r;
+}
+
+ports::HttpRequest episode(std::string_view id, const Call& call) {
+    auto r = weapi("dj/program/detail", {{"id", numeric(id)}}, "episode_detail", call);
+    r.max_response_bytes = 512 * 1024;
+    return r;
 }
 
 ports::HttpRequest categories(const Call& call) {

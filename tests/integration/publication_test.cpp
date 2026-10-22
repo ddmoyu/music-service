@@ -6,6 +6,8 @@
 #include "service_harness.hpp"
 
 #include "downloads/finalizer.hpp"
+#include "downloads/sidecars.hpp"
+#include "application/media/file_access.hpp"
 #include "downloads/recovery.hpp"
 #include "infrastructure/clock.hpp"
 #include "infrastructure/filesystem/destination_files.hpp"
@@ -201,6 +203,107 @@ struct Publishing {
 };
 
 } // namespace
+
+namespace {
+downloads::FinalizeRequest bundle_request(Publishing& p, const ports::TaskRecord& task) {
+    auto report = p.processed(task, "audio bytes");
+    report.output = p.at(p.work_file(task));
+    downloads::FinalizeRequest request{task, p.work_file(task), "Song.mp3", report, "{}"};
+    ports::TrackMetadata metadata;
+    metadata.lyrics = "[00:00.00]test\n";
+    metadata.cover = ports::Picture{"image/png", read_bytes(fs::path{MUSIC_SERVICE_TEST_FIXTURES} / "audio/cover.png")};
+    domain::OutputOptions options;
+    options.export_lyrics = options.export_cover = options.sidecars_required = true;
+    REQUIRE(downloads::prepare_sidecars(request, *p.real_files, metadata, options,
+        {std::chrono::steady_clock::now() + std::chrono::seconds{10}, {}}));
+    return request;
+}
+}
+
+TEST_CASE("bundle publication survives every durable boundary and never exposes a partial asset", "[publication][sidecars]") {
+    for (int boundary = 0; boundary < 4; ++boundary) {
+        CAPTURE(boundary);
+        Publishing p{"bundle-boundary"};
+        const auto task = p.processing("1");
+        auto request = bundle_request(p, task);
+        if (boundary == 0) p.files->before_move = [] { throw std::runtime_error{"simulated exit after intent"}; };
+        if (boundary == 1) p.files->flush_fails = true;
+        if (boundary == 2) REQUIRE(p.database->write([](sqlite::Connection& db) {
+            return db.exec("CREATE TRIGGER reject_asset BEFORE INSERT ON file_assets BEGIN SELECT RAISE(ABORT, 'injected commit failure'); END");
+        }));
+        if (boundary == 0) REQUIRE_THROWS(p.finalizer->publish(request));
+        else {
+            auto done = p.finalizer->publish(request);
+            CHECK(static_cast<bool>(done) == (boundary == 3));
+        }
+        if (boundary != 3) {
+            CHECK(p.get(task.task_id).status == TaskStatus::finalizing);
+            CHECK_FALSE(p.get(task.task_id).result_json);
+        }
+        p.restart();
+        REQUIRE(p.database->write([](sqlite::Connection& db) { return db.exec("DROP TRIGGER IF EXISTS reject_asset"); }));
+        auto recovered = p.recover();
+        CHECK(recovered.count(RecoveryAction::completed) == (boundary == 3 ? 0 : 1));
+        CHECK(p.get(task.task_id).status == TaskStatus::completed);
+        CHECK(read_bytes(p.at("Song.files/Song.mp3")) == "audio bytes");
+        CHECK(read_bytes(p.at("Song.files/Song.lrc")) == "[00:00.00]test\n");
+        CHECK(read_bytes(p.at("Song.files/Song.png")) == read_bytes(fs::path{MUSIC_SERVICE_TEST_FIXTURES} / "audio/cover.png"));
+        CHECK(p.publications->pending()->empty());
+        CHECK(p.recover().tasks.empty());
+    }
+}
+
+TEST_CASE("bundles relocate together and missing or rewritten sidecars invalidate access", "[publication][sidecars]") {
+    Publishing p{"bundle-access"};
+    write_bytes(p.at("Song.files/keep.txt"), "keep");
+    const auto task = p.processing("1");
+    const auto done = test::unwrap(p.finalizer->publish(bundle_request(p, task)));
+    CHECK(done.asset.relative_path == "Song (2).files/Song.mp3");
+    CHECK(read_bytes(p.at("Song.files/keep.txt")) == "keep");
+    application::media::FileAccessService access{p.publications, p.real_files, [](const auto&, const auto&) { return true; }};
+    REQUIRE(access.open(p.owner, done.asset.id, "lyrics"));
+    REQUIRE(access.open(p.owner, done.asset.id, "cover"));
+    CHECK_FALSE(access.open("prn_other", done.asset.id, "cover"));
+    CHECK_FALSE(access.open(p.owner, done.asset.id, "../input"));
+    SECTION("same size corruption") { write_bytes(p.at("Song (2).files/Song.lrc"), "[00:00.00]FAIL\n"); }
+    SECTION("deleted sidecar") { fs::remove(p.at("Song (2).files/Song.png")); }
+    SECTION("deleted product directory") { fs::remove_all(p.at("Song (2).files")); }
+    const auto opened = access.open(p.owner, done.asset.id);
+    REQUIRE_FALSE(opened);
+    CHECK(opened.error().code == ErrorCode::file_missing);
+    CHECK(p.publications->get_asset(p.owner, done.asset.id)->status == ports::FileAssetStatus::missing);
+}
+
+TEST_CASE("recovery refuses a bundle whose sidecar changed after directory rename", "[publication][sidecars]") {
+    Publishing p{"bundle-bad-recovery"};
+    const auto task = p.processing("1");
+    p.files->flush_fails = true;
+    REQUIRE_FALSE(p.finalizer->publish(bundle_request(p, task)));
+    fs::remove(p.at("Song.files/Song.lrc"));
+    p.restart();
+    CHECK(p.recover(0).count(RecoveryAction::failed) == 1);
+    CHECK(p.get(task.task_id).status == TaskStatus::failed);
+    CHECK_FALSE(p.get(task.task_id).result_json);
+}
+
+TEST_CASE("required missing sidecars fail before publication while optional failures are reported", "[sidecars]") {
+    Publishing p{"bundle-required"};
+    const auto task = p.processing("1");
+    auto report = p.processed(task, "audio");
+    report.output = p.at(p.work_file(task));
+    downloads::FinalizeRequest request{task, p.work_file(task), "Song.mp3", report, "{}"};
+    domain::OutputOptions options;
+    options.export_lyrics = options.sidecars_required = true;
+    const ports::OperationContext ctx{std::chrono::steady_clock::now() + std::chrono::seconds{10}, {}};
+    REQUIRE_FALSE(downloads::prepare_sidecars(request, *p.real_files, {}, options, ctx));
+    CHECK(p.publications->pending()->empty());
+    CHECK_FALSE(fs::exists(p.at("Song.files")));
+    options.sidecars_required = false;
+    REQUIRE(downloads::prepare_sidecars(request, *p.real_files, {}, options, ctx));
+    const auto done = test::unwrap(p.finalizer->publish(request));
+    CHECK(nlohmann::json::parse(*done.task.result_json)["metadata_fields"]["lyrics_file"] == "unavailable");
+    CHECK(nlohmann::json::parse(*done.task.result_json)["warnings"][0] == "SIDECAR_LYRICS_UNAVAILABLE");
+}
 
 TEST_CASE("a verified file is published as an immutable asset", "[publication]") {
     Publishing p{"publish"};

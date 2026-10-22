@@ -1,4 +1,5 @@
 #include "application/tasks/download_service.hpp"
+#include "application/media/file_bundle.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -28,10 +29,9 @@ std::string fnv_hex(std::string_view data) {
     return out;
 }
 
-// Product settings that change what a download produces. Naming and metadata have no
-// configuration yet; their versions change when they do.
+// 产品语义也进入复用指纹：新增歌词能力及字节级品质复核后，不复用旧版本成品。
 constexpr std::string_view naming_version = "naming-v1";
-constexpr std::string_view metadata_version = "metadata-v1";
+constexpr std::string_view metadata_version = "metadata-v3";
 
 domain::Result<CreateResult> replay(ports::TaskRepository& tasks, const std::string& owner_id,
                                     const ports::StoredResponse& stored, const std::string& request_hash,
@@ -92,11 +92,11 @@ DownloadService::DownloadService(std::shared_ptr<ports::TaskRepository> tasks,
                                  std::function<bool(const DestinationRule&)> destination_available,
                                  std::function<bool(const std::string&, const std::string&, std::uint64_t)> file_intact,
                                  std::uint32_t max_batch_items, std::shared_ptr<ports::DownloadQueue> queue,
-                                 std::optional<domain::OutputOptions> output)
+                                 std::optional<domain::OutputOptions> output, std::shared_ptr<ports::PublishedFiles> bundle_files)
     : tasks_(std::move(tasks)), providers_(std::move(providers)), credentials_(std::move(credentials)),
       destinations_(std::move(destinations)), destination_available_(std::move(destination_available)),
       file_intact_(std::move(file_intact)), max_batch_items_(max_batch_items), queue_(std::move(queue)),
-      output_(std::move(output)) {}
+      output_(std::move(output)), bundle_files_(std::move(bundle_files)) {}
 
 void DownloadService::wake() const {
     if (queue_) {
@@ -176,8 +176,9 @@ domain::Result<domain::NormalizedDownloadIntent> DownloadService::prepare(const 
     if (output_) {
         draft.product.output = output_;
         draft.product.naming_config_version = "naming-v2:" + output_->name_format + ":" + output_->folder_layout;
-        draft.product.metadata_config_version = std::string{"metadata-v2:"} +
+        draft.product.metadata_config_version = std::string{"metadata-v3:"} +
             (output_->embed_cover ? "cover:" : "no-cover:") + (output_->embed_lyrics ? "lyrics" : "no-lyrics");
+        if (output_->lyrics_variant != "lrc") draft.product.metadata_config_version += ":" + output_->lyrics_variant;
     }
     return domain::NormalizedDownloadIntent::normalize(std::move(draft));
 }
@@ -188,6 +189,15 @@ std::optional<ports::ReuseCandidate> DownloadService::reusable(const domain::Nor
         return std::nullopt; // a lookup failure only means no reuse
     }
     for (const auto& result : results.value()) {
+        auto members = media::bundle_members(result.properties_json);
+        if (!members) continue;
+        bool intact = true;
+        for (const auto& member : *members) {
+            if (!bundle_files_) { intact = false; break; }
+            auto checked = bundle_files_->matches(result.destination_id, media::sibling_path(result.relative_path, member.name), member.file);
+            if (!checked || !*checked) { intact = false; break; }
+        }
+        if (!intact) continue;
         // The published file must still be there with its recorded size (A46); the
         // transaction re-checks the versions.
         if (result.file_available && file_intact_ &&

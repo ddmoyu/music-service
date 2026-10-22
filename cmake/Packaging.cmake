@@ -22,6 +22,7 @@ install(FILES
 install(FILES "${music_service_mbedtls_SOURCE_DIR}/LICENSE" DESTINATION ${_share}/licenses RENAME mbedtls-LICENSE.txt)
 install(FILES "${music_service_httplib_SOURCE_DIR}/LICENSE" DESTINATION ${_share}/licenses RENAME cpp-httplib-LICENSE.txt)
 install(FILES "${music_service_json_SOURCE_DIR}/LICENSE.MIT" DESTINATION ${_share}/licenses RENAME nlohmann-json-LICENSE.txt)
+install(FILES "${music_service_zlib_SOURCE_DIR}/LICENSE" DESTINATION ${_share}/licenses RENAME zlib-LICENSE.txt)
 install(FILES "${music_service_taglib_SOURCE_DIR}/COPYING.MPL" DESTINATION ${_share}/licenses RENAME taglib-COPYING.MPL.txt)
 install(FILES "${music_service_taglib_SOURCE_DIR}/3rdparty/utfcpp/LICENSE" DESTINATION ${_share}/licenses
         RENAME utfcpp-LICENSE.txt)

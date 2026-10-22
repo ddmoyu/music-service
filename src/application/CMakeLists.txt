@@ -10,6 +10,7 @@ add_library(music_service_application STATIC
     events/publishing_task_repository.cpp
     events/task_event_hub.cpp
     media/file_access.cpp
+    media/file_bundle.cpp
     media/media_access.cpp
     media/media_tickets.cpp
     tasks/download_service.cpp
@@ -23,4 +24,5 @@ target_link_libraries(music_service_application
         music_service::domain
     PRIVATE
         music_service::project_warnings
+        nlohmann_json::nlohmann_json
 )

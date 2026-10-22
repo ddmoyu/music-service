@@ -129,7 +129,7 @@ def run(service, cookie_file, report):
     check(api.call("DELETE", "/api/v1/credential-defaults/netease")[0] in (200, 204), "default removed")
     expect_error(resolve("210049", "high"), "CREDENTIALS_REQUIRED")
     report["default_removed"] = "anonymous request does not reuse authenticated audio"
-    report["hires"] = "not verified; not advertised"
+    report["hires"] = "request implemented; current account downgrades to lossless"
 
 
 def main():

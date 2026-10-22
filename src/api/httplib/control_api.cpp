@@ -352,7 +352,7 @@ json playlist_json(const domain::Playlist& p) {
                 {"artwork", optional_string(p.artwork)},
                 {"track_count", optional_uint(p.track_count)},
                 {"play_count", optional_uint(p.play_count)},
-                {"updated_at", optional_string(p.updated_at)}};
+                {"updated_at", optional_string(p.updated_at)}, {"relationship", optional_string(p.relationship)}};
 }
 
 json album_json(const domain::Album& a) {
@@ -390,9 +390,24 @@ json lyrics_json(const domain::TrackLyrics& l) {
     }
     return json{{"lrc", optional_string(l.lrc)},
                 {"translated_lrc", optional_string(l.translated_lrc)},
+                {"romanized_lrc", optional_string(l.romanized_lrc)},
                 {"karaoke", std::move(karaoke)},
                 {"unavailable", l.unavailable},
                 {"warnings", l.warnings}};
+}
+
+json podcast_json(const domain::Podcast& p) {
+    return {{"ref", ref_json(p.ref)}, {"title", p.title}, {"presenter", optional_string(p.presenter)},
+        {"description", optional_string(p.description)}, {"artwork", optional_string(p.artwork)},
+        {"episode_count", optional_uint(p.episode_count)}};
+}
+json episode_json(const domain::Episode& e) {
+    return {{"ref", ref_json(e.ref)}, {"podcast", ref_json(e.podcast)}, {"title", e.title},
+        {"podcast_title", e.podcast_title}, {"presenter", optional_string(e.presenter)},
+        {"description", optional_string(e.description)}, {"artwork", optional_string(e.artwork)},
+        {"duration_ms", e.duration_ms ? json(*e.duration_ms) : json(nullptr)},
+        {"published_at", optional_string(e.published_at)}, {"audio_ref", e.audio_ref ? ref_json(*e.audio_ref) : json(nullptr)},
+        {"requires_purchase", e.requires_purchase}};
 }
 
 json page_json(const application::catalog::SourcePage& p) {
@@ -1166,6 +1181,7 @@ struct ControlApi::Impl {
                  {"actual_track", field("actual_track")},
                  {"quality", field("actual_quality")},
                  {"metadata_status", field("metadata_status")},
+                 {"artifacts", field("bundle")},
                  {"etag", asset->etag},
                  {"status", "available"},
                  {"created_at", utc(asset->created_at)},
@@ -1336,11 +1352,19 @@ struct ControlApi::Impl {
               [this, detail](Call& call) { detail_route(call, detail(&cat::CatalogService::chart_detail), chart_json); });
         route("/api/v1/lyrics",
               [this, detail](Call& call) { detail_route(call, detail(&cat::CatalogService::lyrics), lyrics_json); });
+        route("/api/v1/podcasts/detail",
+              [this, detail](Call& call) { detail_route(call, detail(&cat::CatalogService::podcast_detail), podcast_json); });
+        route("/api/v1/episodes/detail",
+              [this, detail](Call& call) { detail_route(call, detail(&cat::CatalogService::episode_detail), episode_json); });
         const auto list = [c](auto method) {
             return [c, method](const cat::ListRequest& request) { return ((*c()).*method)(request); };
         };
         route("/api/v1/playlists/tracks",
               [this, list](Call& call) { list_route(call, "id", list(&cat::CatalogService::playlist_tracks), track_json); });
+        route("/api/v1/me/playlists",
+              [this, list](Call& call) { list_route(call, nullptr, list(&cat::CatalogService::user_playlists), playlist_json); });
+        route("/api/v1/podcasts/episodes",
+              [this, list](Call& call) { list_route(call, "id", list(&cat::CatalogService::podcast_episodes), episode_json); });
         route("/api/v1/albums/tracks",
               [this, list](Call& call) { list_route(call, "id", list(&cat::CatalogService::album_tracks), track_json); });
         route("/api/v1/artists/tracks",

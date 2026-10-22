@@ -296,11 +296,11 @@ TEST_CASE("kuwo declares the collection capabilities it implements", "[providers
     const auto view = unwrap(kuwo.registry->describe("kuwo"));
     for (const auto* key : {"search_playlists", "search_albums", "playlist_detail", "playlist_tracks", "album_detail",
                             "album_tracks", "chart_detail", "chart_tracks", "categories", "category_playlists",
-                            "charts", "recommend_playlists"}) {
+                            "charts", "recommend_playlists", "lyrics"}) {
         INFO(key);
         CHECK(view.supports(key));
     }
-    for (const auto* key : {"search_artists", "artist_tracks", "artist_albums", "lyrics"}) {
+    for (const auto* key : {"search_artists", "artist_tracks", "artist_albums"}) {
         INFO(key);
         CHECK_FALSE(view.supports(key));
     }

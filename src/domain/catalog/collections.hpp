@@ -25,6 +25,7 @@ struct Playlist {
     std::optional<std::uint64_t> track_count{};
     std::optional<std::uint64_t> play_count{};
     std::optional<std::string> updated_at{}; // as the platform reports it (ISO date or date-time)
+    std::optional<std::string> relationship{}; // 个人目录中的 created / subscribed；公共目录未知
 };
 
 struct Album {
@@ -42,6 +43,29 @@ struct Artist {
     ArtistRef ref;
     std::string name{};
     Artwork artwork{};
+};
+
+struct Podcast {
+    CollectionRef ref;
+    std::string title;
+    std::optional<std::string> presenter;
+    std::optional<std::string> description;
+    Artwork artwork;
+    std::optional<std::uint64_t> episode_count;
+};
+
+struct Episode {
+    CollectionRef ref; // 节目 ID，不是音频 ID
+    CollectionRef podcast;
+    std::string title;
+    std::string podcast_title;
+    std::optional<std::string> presenter; // 主播独立展示，不映射成歌曲演唱者
+    std::optional<std::string> description;
+    Artwork artwork;
+    std::optional<std::int64_t> duration_ms;
+    std::optional<std::string> published_at;
+    std::optional<TrackRef> audio_ref; // 服务端验证的稳定节目音频引用，可提交现有下载任务
+    bool requires_purchase{false}; // 上游明确未购买；false 不保证可播放
 };
 
 // What a category or chart lists. Where the entry comes from (live, built-in or derived
@@ -85,6 +109,7 @@ struct TrackLyrics {
     std::vector<KaraokeLine> karaoke{};          // word timing, milliseconds
     bool unavailable{false};                   // the platform has no lyrics for this track
     std::vector<std::string> warnings{};
+    std::optional<std::string> romanized_lrc{};
 };
 
 } // namespace music_service::domain

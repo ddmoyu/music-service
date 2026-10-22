@@ -11,6 +11,14 @@ namespace music_service::providers::netease {
 
 namespace ports = application::ports;
 
+domain::Result<std::shared_ptr<ports::ArtistSearch>> make_artist_search(const ports::ProviderSetup& setup);
+domain::Result<std::shared_ptr<ports::ArtistAlbums>> make_artist_albums(const ports::ProviderSetup& setup);
+domain::Result<std::shared_ptr<ports::IUserPlaylists>> make_user_playlists(const ports::ProviderSetup& setup);
+domain::Result<std::shared_ptr<ports::ArtistTracks>> make_artist_tracks(const ports::ProviderSetup& setup);
+domain::Result<std::shared_ptr<ports::PodcastDetail>> make_podcast_detail(const ports::ProviderSetup& setup);
+domain::Result<std::shared_ptr<ports::PodcastEpisodes>> make_podcast_episodes(const ports::ProviderSetup& setup);
+domain::Result<std::shared_ptr<ports::EpisodeDetail>> make_episode_detail(const ports::ProviderSetup& setup);
+
 // The one auth profile: the cookie of a signed-in music.163.com session (MUSIC_U).
 inline constexpr std::string_view cookie_profile = "web_cookie";
 
@@ -21,7 +29,8 @@ using SecretKeySource = std::function<std::string()>;
 // ProviderSetup::upstream, so admission, TLS and redirect rules are the shared ones; a
 // hop that cannot be admitted is SERVICE_BUSY (retryable, details {"admission",
 // dimension}). Search, details, links and lyrics are anonymous and never send a
-// cookie. Audio and verification send the bound user's cookie when there is one.
+// cookie for songs. Personal catalogs require an account; playlists and program
+// metadata/audio may use the bound user's cookie. CDN requests never carry it.
 
 domain::Result<std::shared_ptr<ports::ITrackSearch>> make_search(const ports::ProviderSetup& setup);
 domain::Result<std::shared_ptr<ports::ITrackDetail>> make_detail(const ports::ProviderSetup& setup);

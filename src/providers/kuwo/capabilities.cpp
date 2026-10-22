@@ -131,6 +131,21 @@ private:
     domain::SourceId source_;
 };
 
+class Lyrics final : public ports::ILyrics {
+public:
+    explicit Lyrics(const ports::ProviderSetup& setup) : client_(setup) {}
+    domain::Result<domain::TrackLyrics> lyrics(const ports::ProviderContext& context,
+        const domain::TrackRef& track) override {
+        auto rid = kuwo_rid(track);
+        if (!rid) return rid.error();
+        auto body = client_.body(protocol::lyrics(*rid), context);
+        if (!body) return body.error();
+        return parsing::parse_lyrics(*body);
+    }
+private:
+    Client client_;
+};
+
 class Resolver final : public ports::IAssetResolver {
 public:
     explicit Resolver(const ports::ProviderSetup& setup) : client_(setup) {}
@@ -142,13 +157,12 @@ public:
         if (!rid) {
             return std::move(rid).error();
         }
-        // Only standard quality is implemented: strict higher requests fail here,
-        // allow_lower falls back to it.
-        constexpr std::array offered{domain::Quality::standard};
-        if (auto chosen = domain::choose_quality(requirement, offered); !chosen) {
-            return std::move(chosen).error();
-        }
-        auto response = client_.fetch(protocol::standard_audio(*rid, client_id()), context);
+        constexpr std::array offered{domain::Quality::standard, domain::Quality::high, domain::Quality::lossless};
+        auto chosen = domain::choose_quality(requirement, offered);
+        if (!chosen) return chosen.error();
+        const auto br = *chosen == domain::Quality::lossless ? "2000kflac" :
+                        *chosen == domain::Quality::high ? "320kmp3" : "128kmp3";
+        auto response = client_.fetch(protocol::audio(*rid, client_id(), br), context);
         if (!response) {
             return std::move(response).error();
         }
@@ -169,7 +183,13 @@ public:
         } else {
             if (standard_mp3) {
                 quality = domain::Quality::standard;
+            } else if (evidence->format == "mp3" && evidence->bitrate_kbps == 320) {
+                quality = domain::Quality::high;
+            } else if (evidence->format == "flac" && evidence->bitrate_kbps && *evidence->bitrate_kbps > 0) {
+                quality = domain::Quality::lossless;
             }
+            if (!quality && requirement.requested != domain::Quality::standard)
+                return Error{ErrorCode::quality_unavailable, "kuwo returned an unverified quality tier", false, {}};
             // Same rid, regular type and a positive duration: the upstream declares the
             // whole song. Without a readable type it stays unknown. Audio verification
             // (T15) checks the bytes.
@@ -233,6 +253,11 @@ domain::Result<std::shared_ptr<ports::IAssetResolver>> make_resolver(const ports
         return ready.error();
     }
     return std::shared_ptr<ports::IAssetResolver>{std::make_shared<Resolver>(setup)};
+}
+
+domain::Result<std::shared_ptr<ports::ILyrics>> make_lyrics(const ports::ProviderSetup& setup) {
+    if (auto ready = require_upstream(setup); !ready) return ready.error();
+    return std::shared_ptr<ports::ILyrics>{std::make_shared<Lyrics>(setup)};
 }
 
 } // namespace music_service::providers::kuwo

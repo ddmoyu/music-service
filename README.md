@@ -4,9 +4,13 @@
 
 命名约定：项目与仓库名为 `music-service`；CMake 项目与库目标前缀为 `music_service`，C++ 命名空间为 `music_service`，服务可执行程序为 `music-service`，环境变量前缀为 `MUSIC_SERVICE_`，`/api/v1/info` 的 service 字段为 `music-service`。
 
-当前已接通酷我闭环，并接入 5sing 作为第二个平台（T22）：搜索、详情与解析，持久下载与重启恢复，SSE 与 HTTP 进度，已完成文件与媒体票据；媒体与事件监听默认启用。S1 关口（T20）的验收状态以[开发任务](docs/design/cpp20-refactor/development-tasks.md)中的最新实施记录为准。
+当前已接入酷我、5sing、网易云三个原生平台：搜索、详情与解析，持久下载与重启恢复，SSE 与 HTTP 进度，已完成文件与媒体票据；媒体与事件监听默认启用。S1 关口（T20）的验收状态以[开发任务](docs/design/cpp20-refactor/development-tasks.md)中的最新实施记录为准。
 
-网易云已支持 standard／high／lossless（取决于账号及歌曲权限）、公共歌单／专辑搜索、分类、公共推荐与榜单分页；网易云、酷我、5sing 的集合链接可经公共 API 进入曲目列表。[独立验收客户端](packaging/e2e/collections.md)支持选择或全部分批提交，每批最多 100 项；已受理任务持久执行，未提交页不会在客户端关闭后继续展开。Hi-Res 独立待验收，最新阶段验收与适用范围见[补齐计划](docs/design/cpp20-refactor/reference-gap-plan.md)。
+网易云已支持 standard／high／lossless（取决于账号及歌曲权限）、公共歌单／专辑搜索、分类、公共推荐与榜单分页；网易云、酷我、5sing 的集合链接可经公共 API 进入曲目列表。[独立验收客户端](packaging/e2e/collections.md)支持选择或全部分批提交，每批最多 100 项；已受理任务持久执行，未提交页不会在客户端关闭后继续展开。网易云已支持 Hi-Res 请求与严格降级判定，实际可用档位受歌曲与账号权限限制；酷我已支持 320 kbps MP3、FLAC 和歌词。最新验收与适用范围见[补齐计划](docs/design/cpp20-refactor/reference-gap-plan.md)。
+
+网易云扩展还包括：使用默认 Cookie 读取个人自建／收藏歌单、歌手搜索、歌手专辑分页、热门歌曲最多 50 首、YRC 逐字与独立罗马音歌词、播客节目分页及下载。歌词写入可选择 `lrc`／`verbatim`／`romanized`，缺失变体明确回退；节目主播独立展示。扫码登录不在当前范围。接口与边界见[网易云适配器](src/providers/netease/README.md)。
+
+0.1.6 补充原生 NCM 本地导入，以及下载时可选导出独立歌词和封面。使用 `music-service --config config.json import-ncm --input "歌曲.ncm" --principal prn_local --destination dst_default`（服务停止时）；侧文件由 `downloads.output.export_lyrics`／`export_cover` 开启，默认关闭。完整用法、文件访问与恢复规则见[配置说明](config/README.md#ncm-本地导入与侧文件)。
 
 ## 目录结构
 

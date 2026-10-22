@@ -49,8 +49,30 @@ TEST_CASE("output settings survive storage and isolate reuse from legacy product
     SECTION("folders") { draft.product.output->folder_layout = "artist_album"; }
     SECTION("cover") { draft.product.output->embed_cover = false; }
     SECTION("lyrics") { draft.product.output->embed_lyrics = false; }
+    SECTION("sidecars") {
+        draft.product.output->export_lyrics = true;
+        draft.product.output->export_cover = true;
+        draft.product.output->sidecars_required = true;
+        draft.product.output->lyrics_variant = "romanized";
+        auto selected = unwrap(NormalizedDownloadIntent::normalize(draft));
+        const auto stored = storage::encode_intent(selected);
+        auto restored = unwrap(storage::decode_intent(stored));
+        CHECK(restored.product().output == draft.product.output);
+        CHECK(fingerprint(restored) == fingerprint(selected));
+        auto optional = draft;
+        optional.product.output->sidecars_required = false;
+        CHECK_FALSE(fp(optional) == fp(draft));
+    }
     SECTION("size") { draft.product.output->cover_max_bytes = 1024; }
     SECTION("budget") { draft.product.output->metadata_timeout_seconds = 2; }
+    SECTION("lyrics variant") {
+        draft.product.output->lyrics_variant = "verbatim";
+        auto selected = unwrap(NormalizedDownloadIntent::normalize(draft));
+        const auto stored = storage::encode_intent(selected);
+        auto restored = unwrap(storage::decode_intent(stored));
+        CHECK(restored.product().output->lyrics_variant == "verbatim");
+        CHECK(fingerprint(restored) == fingerprint(selected));
+    }
     CHECK_FALSE(fp(draft) == base);
     CHECK(decoded.product().output == OutputOptions{});
 }

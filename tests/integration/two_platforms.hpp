@@ -120,6 +120,9 @@ public:
                                                 const ports::OperationContext&) override {
         record(request);
         const auto& url = request.url;
+        if (url.starts_with("https://newlyric.kuwo.cn/newlyric.lrc?")) {
+            return answer(200, fixture("kuwo", "lyric-synthetic.bin"), url);
+        }
         if (url.rfind("http://search.5sing.kugou.com/home/json?", 0) == 0) {
             return answer(200, fixture("fivesing", "search-qiannianjiu-p1.json"), url);
         }

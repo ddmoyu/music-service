@@ -70,7 +70,8 @@ TEST_CASE("output settings have bounded validated defaults", "[config][output]")
     for (const auto* bad : {R"({"name_format":"../title"})", R"({"folder_layout":"other"})",
                            R"({"cover_max_bytes":0})", R"({"cover_max_bytes":33554433})",
                            R"({"metadata_timeout_seconds":0})", R"({"metadata_timeout_seconds":61})",
-                           R"({"embed_cover":"true"})", R"({"embed_lyrics":1})"}) {
+                           R"({"embed_cover":"true"})", R"({"embed_lyrics":1})", R"({"export_lyrics":"true"})",
+                           R"({"export_cover":1})", R"({"sidecars_required":true})"}) {
         INFO(bad);
         CHECK_FALSE(load(std::string{"{\"downloads\":{\"output\":"} + bad + "}}"));
     }

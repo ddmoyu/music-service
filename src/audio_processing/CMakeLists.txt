@@ -8,6 +8,7 @@ add_library(music_service_audio_processing STATIC
     format/mp4.cpp
     tags/tag_writer.cpp
     verifying_processor.cpp
+    ncm.cpp
 )
 add_library(music_service::audio_processing ALIAS music_service_audio_processing)
 target_link_libraries(music_service_audio_processing
@@ -17,4 +18,5 @@ target_link_libraries(music_service_audio_processing
         music_service::project_warnings
         music_service::third_party_taglib
         mbedcrypto
+        nlohmann_json::nlohmann_json
 )

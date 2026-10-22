@@ -17,6 +17,9 @@ Error unavailable(std::string message) {
 } // namespace
 
 std::string content_type_of(std::string_view container) {
+    if (container == "lrc") return "text/plain; charset=utf-8";
+    if (container == "jpg") return "image/jpeg";
+    if (container == "png") return "image/png";
     if (container == "mp3") {
         return "audio/mpeg";
     }

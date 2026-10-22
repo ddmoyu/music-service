@@ -53,12 +53,26 @@ std::string account_of(const ports::ProviderContext& context) {
 }
 
 class ScriptedSource final : public ports::ITrackSearch,
+                             public ports::IUserPlaylists,
                              public ports::ITrackDetail,
                              public ports::IAssetResolver,
                              public ports::ILinkParser {
 public:
     ScriptedSource(domain::SourceId source, std::shared_ptr<Script> script)
         : source_(std::move(source)), script_(std::move(script)) {}
+
+    domain::Result<ports::CatalogPage<domain::Playlist>> user_playlists(const ports::ProviderContext& c,
+        const ports::ListQuery& q) override {
+        ++script_->searches;
+        if (auto e = behave(c)) return *e;
+        ports::CatalogPage<domain::Playlist> p;
+        domain::Playlist playlist{test::track(source_.value(), "1"), account_of(c)};
+        playlist.relationship = "created";
+        p.page.items.push_back(std::move(playlist));
+        p.page.page = {q.limit,1,std::nullopt,!q.cursor};
+        if (!q.cursor) p.next_cursor = "1";
+        return p;
+    }
 
     domain::Result<ports::TrackSearchPage> search_tracks(const ports::ProviderContext& context,
                                                          const ports::TrackSearchQuery& query) override {
@@ -149,6 +163,8 @@ ports::ProviderBundle scripted(std::string_view name, std::shared_ptr<Script> sc
     bundle.auth_profiles = {{.auth_profile = "web_cookie", .kind = ports::CredentialKind::cookie}};
     const std::vector<std::string> profiles{"web_cookie"};
     bundle.capabilities = {
+        {.key = "user_playlists", .credentials = ports::CredentialRequirement::required, .auth_profiles = profiles,
+         .pagination = ports::Pagination::cursor},
         {.key = "search_tracks", .credentials = ports::CredentialRequirement::optional, .auth_profiles = profiles,
          .pagination = ports::Pagination::cursor},
         {.key = "track_detail", .credentials = ports::CredentialRequirement::optional, .auth_profiles = profiles},
@@ -162,6 +178,10 @@ ports::ProviderBundle scripted(std::string_view name, std::shared_ptr<Script> sc
         return *shared;
     };
     bundle.bindings = {
+        ports::CapabilityBinding::bind<ports::IUserPlaylists>(
+            [object](const ports::ProviderSetup&) -> domain::Result<std::shared_ptr<ports::IUserPlaylists>> {
+                return std::shared_ptr<ports::IUserPlaylists>{object()};
+            }),
         ports::CapabilityBinding::bind<ports::ITrackSearch>(
             [object](const ports::ProviderSetup&) -> domain::Result<std::shared_ptr<ports::ITrackSearch>> {
                 return std::shared_ptr<ports::ITrackSearch>{object()};
@@ -495,6 +515,38 @@ TEST_CASE("results are cached per identity and identical calls merge", "[catalog
     auto two = std::async(std::launch::async, [&] { return c.search(owner, {"alpha"}, "together"); });
     CHECK(one.get().items.at(0).title == two.get().items.at(0).title);
     CHECK(c.alpha->searches.load() - before == 1);
+}
+
+TEST_CASE("personal playlist caches and cursors follow account principal version and revocation", "[catalog][stage-d]") {
+    Catalog c{"personal"};
+    const auto owner = c.principal(), other = c.principal("other");
+    const auto a = c.cookie(owner,"alpha","a=1"), b = c.cookie(owner,"alpha","b=1");
+    ListRequest request{owner,"alpha","",2,{}};
+    CHECK(c.catalog->user_playlists(request).error().code == ErrorCode::credentials_required);
+    REQUIRE(c.credentials->set_default(owner,"alpha",a));
+    auto first = unwrap(c.catalog->user_playlists(request));
+    CHECK(first.items.front().name == a);
+    CHECK(unwrap(c.catalog->user_playlists(request)).cache.hit);
+    auto next = request; next.cursor = first.page.next_cursor;
+    REQUIRE(next.cursor);
+    REQUIRE(c.credentials->set_default(owner,"alpha",b));
+    CHECK(c.catalog->user_playlists(next).error().code == ErrorCode::cursor_expired);
+    auto second = unwrap(c.catalog->user_playlists(request));
+    CHECK(second.items.front().name == b); CHECK_FALSE(second.cache.hit);
+    REQUIRE(c.credentials->set_default(owner,"alpha",a));
+    CHECK(c.catalog->user_playlists(next).error().code == ErrorCode::cursor_expired);
+    next.cursor = unwrap(c.catalog->user_playlists(request)).page.next_cursor;
+    REQUIRE(c.credentials->update(owner,a,{ports::SecretBytes{"a=2"},{},{}}));
+    CHECK(c.catalog->user_playlists(next).error().code == ErrorCode::cursor_expired);
+    CHECK_FALSE(unwrap(c.catalog->user_playlists(request)).cache.hit);
+    const auto foreign = c.cookie(other,"alpha","a=2");
+    REQUIRE(c.credentials->set_default(other,"alpha",foreign));
+    auto other_request = request; other_request.owner_id = other;
+    CHECK(unwrap(c.catalog->user_playlists(other_request)).items.front().name == foreign);
+    other_request.cursor = unwrap(c.catalog->user_playlists(request)).page.next_cursor;
+    CHECK(c.catalog->user_playlists(other_request).error().code == ErrorCode::cursor_expired);
+    REQUIRE(c.credentials->revoke(owner,a));
+    CHECK(c.catalog->user_playlists(request).error().code == ErrorCode::credentials_required);
 }
 
 TEST_CASE("accounts partition caches and cursors", "[catalog]") {

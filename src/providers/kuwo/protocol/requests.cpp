@@ -3,6 +3,7 @@
 #include "application/transport/url.hpp"
 
 #include <utility>
+#include <mbedtls/base64.h>
 
 namespace music_service::providers::kuwo::protocol {
 
@@ -36,11 +37,29 @@ ports::HttpRequest track_page(std::string_view rid) {
 }
 
 ports::HttpRequest standard_audio(std::string_view rid, std::string_view client_id) {
+    return audio(rid, client_id, "128kmp3");
+}
+
+ports::HttpRequest audio(std::string_view rid, std::string_view client_id, std::string_view bitrate) {
     std::string url = "https://mobi.kuwo.cn/mobi.s?f=web&source=kwplayercar_ar_6.0.0.9_B_jiakong_vh.apk&from=PC"
-                      "&type=convert_url_with_sign&br=128kmp3";
+                      "&type=convert_url_with_sign&br=" + std::string{bitrate};
     url += "&rid=" + std::string{rid};
     url += "&user=" + encode_query_component(client_id);
     return get(std::move(url), "resolve_audio");
+}
+
+ports::HttpRequest lyrics(std::string_view rid) {
+    std::string raw = "user=12345,web,web,web&requester=localhost&req=1&rid=MUSIC_" + std::string{rid} + "&lrcx=1";
+    constexpr std::string_view key = "yeelion";
+    for (std::size_t i = 0; i < raw.size(); ++i) raw[i] ^= key[i % key.size()];
+    std::string encoded(4 * ((raw.size() + 2) / 3) + 1, '\0');
+    std::size_t size{};
+    mbedtls_base64_encode(reinterpret_cast<unsigned char*>(encoded.data()), encoded.size(), &size,
+        reinterpret_cast<const unsigned char*>(raw.data()), raw.size());
+    encoded.resize(size);
+    auto r = get("https://newlyric.kuwo.cn/newlyric.lrc?" + encoded, "lyrics");
+    r.max_response_bytes = 512 * 1024;
+    return r;
 }
 
 namespace {

@@ -1,0 +1,121 @@
+#include "audio_processing/ncm.hpp"
+#include "audio_processing/verifying_processor.hpp"
+#include "infrastructure/filesystem/paths.hpp"
+#include <catch2/catch_test_macros.hpp>
+#include <filesystem>
+#include <fstream>
+#include <thread>
+
+using namespace music_service;
+namespace fs = std::filesystem;
+namespace ports = application::ports;
+namespace {
+std::string read(const fs::path& path) {
+    std::ifstream file{path, std::ios::binary};
+    return {std::istreambuf_iterator<char>{file}, {}};
+}
+struct NcmTemp {
+    fs::path root;
+    explicit NcmTemp(std::string_view label) : root(fs::temp_directory_path() / ("music-service-ncm-unit-" + std::string{label})) {
+        fs::remove_all(root); fs::create_directories(root);
+    }
+    ~NcmTemp() { std::error_code ec; fs::remove_all(root, ec); }
+    fs::path input(std::string_view bytes) {
+        const auto path = root / "input.ncm";
+        std::ofstream out{path, std::ios::binary}; out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        return path;
+    }
+};
+const fs::path fixtures = fs::path{MUSIC_SERVICE_TEST_FIXTURES} / "audio";
+ports::OperationContext context() { return {std::chrono::steady_clock::now() + std::chrono::seconds{20}, {}}; }
+std::size_t u32(const std::string& bytes, std::size_t at) {
+    std::size_t n = 0;
+    for (unsigned i = 0; i < 4; ++i) n |= std::size_t{static_cast<unsigned char>(bytes[at + i])} << (8 * i);
+    return n;
+}
+}
+
+TEST_CASE("native NCM imports independent MP3 and padded FLAC fixtures without changing payload", "[ncm]") {
+    for (const auto* format : {"mp3", "flac"}) {
+        CAPTURE(format);
+        NcmTemp temp{"payload"};
+        const auto input = temp.input(read(fixtures / (std::string{"synthetic-"} + format + ".ncm")));
+        auto processor = audio_processing::ProcessorCatalog::builtin().find({"audio.ncm", 1, "netease.ncm"});
+        REQUIRE(processor);
+        auto report = (*processor)->process({input, {}, domain::MetadataPolicy::skip, {}}, context());
+        REQUIRE(report);
+        CHECK(report->facts.container == format);
+        const auto original = read(fixtures / (std::string{format} == "mp3" ? "ncm-plain.mp3" : "sine-3s.flac"));
+        CHECK(read(report->output) == original);
+        CHECK(report->source_metadata->title == "NCM synthetic");
+        REQUIRE(report->source_metadata->artists.size() == 1);
+        CHECK(report->source_metadata->artists.front() == "Synthetic artist");
+        CHECK(report->source_metadata->album == "Synthetic album");
+        CHECK(report->source_metadata->lyrics == "[00:00.00]Synthetic lyric\n");
+        REQUIRE(report->source_metadata->cover);
+        CHECK(report->source_metadata->cover->data == read(fixtures / "cover.png"));
+        CHECK(read(input) == read(fixtures / (std::string{"synthetic-"} + format + ".ncm")));
+    }
+}
+
+TEST_CASE("NCM rejects bad headers lengths keys metadata and truncated audio", "[ncm]") {
+    auto original = read(fixtures / "synthetic-mp3.ncm");
+    const auto meta_size_at = 14 + u32(original, 10);
+    const auto frame_size_at = meta_size_at + 4 + u32(original, meta_size_at) + 5;
+    for (const auto kind : {0, 1, 2, 3, 4, 5, 6, 7}) {
+        CAPTURE(kind);
+        NcmTemp temp{"corruption"};
+        auto bad = original;
+        if (kind == 0) bad[0] = 'X';
+        if (kind == 1) bad.replace(10, 4, 4, '\xff');
+        if (kind == 2) bad[14] ^= 0x51;
+        if (kind == 3) bad[meta_size_at + 4] ^= 0x44;
+        if (kind == 4) bad.replace(frame_size_at, 4, 4, '\0');
+        if (kind == 5) bad.replace(frame_size_at, 4, 4, '\xff');
+        if (kind == 6) bad.resize(19);
+        if (kind == 7) bad.pop_back();
+        auto report = audio_processing::NcmProcessor{}.process({temp.input(bad), {}, domain::MetadataPolicy::skip, {}}, context());
+        REQUIRE_FALSE(report);
+        CHECK(report.error().code == domain::ErrorCode::audio_invalid);
+        CHECK_FALSE(fs::exists(temp.root / "ncm-decoded.part"));
+    }
+}
+
+TEST_CASE("NCM bounds inputs respects cancellation and never replaces an output", "[ncm]") {
+    NcmTemp temp{"limits"};
+    const auto input = temp.input(read(fixtures / "synthetic-mp3.ncm"));
+    const auto output = temp.root / "decoded";
+    auto limited = audio_processing::NcmDecryptor{}.decode(input, output, context(), 100);
+    CHECK_FALSE(limited);
+    CHECK_FALSE(fs::exists(output));
+    std::stop_source stop; stop.request_stop();
+    auto canceled = audio_processing::NcmDecryptor{}.decode(input, output, {context().deadline, stop.get_token()});
+    REQUIRE_FALSE(canceled);
+    CHECK(canceled.error().code == domain::ErrorCode::canceled);
+    auto expired = audio_processing::NcmDecryptor{}.decode(input, output, {std::chrono::steady_clock::now(), {}});
+    REQUIRE_FALSE(expired);
+    CHECK(expired.error().code == domain::ErrorCode::deadline_exceeded);
+    { std::ofstream existing{output}; existing << "preserve"; }
+    CHECK_FALSE(audio_processing::NcmDecryptor{}.decode(input, output, context()));
+    CHECK(read(output) == "preserve");
+}
+
+TEST_CASE("NCM streaming cancellation removes partial decoded output", "[ncm]") {
+    NcmTemp temp{"cancellation"};
+    const auto input = temp.input(read(fixtures / "synthetic-mp3.ncm") + std::string(16 * 1024 * 1024, '\0'));
+    const auto output = temp.root / "decoded";
+    std::stop_source stop;
+    std::jthread watcher([&](std::stop_token token) {
+        const auto end = std::chrono::steady_clock::now() + std::chrono::seconds{3};
+        while (!token.stop_requested()) {
+            std::error_code ec;
+            const auto size = fs::file_size(output, ec);
+            if ((!ec && size >= 65536) || std::chrono::steady_clock::now() >= end) { stop.request_stop(); break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+    });
+    auto result = audio_processing::NcmDecryptor{}.decode(input, output, {context().deadline, stop.get_token()});
+    REQUIRE_FALSE(result);
+    CHECK(result.error().code == domain::ErrorCode::canceled);
+    CHECK_FALSE(fs::exists(output));
+}

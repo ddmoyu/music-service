@@ -24,6 +24,8 @@ public:
     // listed and is reported unavailable while it is missing.
     explicit LocalDestinationFiles(std::map<std::string, std::filesystem::path> roots);
 
+    domain::Result<bool> matches(const std::string& destination_id, const std::string& relative_path,
+                                  const application::ports::FileFingerprint& expected) override;
     domain::Result<bool> exists(const std::string& destination_id, const std::string& relative_path) override;
     domain::Result<std::optional<application::ports::FileFingerprint>>
     fingerprint(const std::string& destination_id, const std::string& relative_path) override;

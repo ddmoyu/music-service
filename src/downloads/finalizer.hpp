@@ -4,6 +4,7 @@
 #include "application/ports/storage/destination_files.hpp"
 #include "application/ports/storage/publication_repository.hpp"
 #include "domain/result.hpp"
+#include "application/media/file_bundle.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -50,7 +51,12 @@ struct FinalizeRequest {
     std::string target_path;    // wanted relative path including the extension
     ports::ProcessingReport report;
     std::string properties_json{"{}"}; // actual track, quality, ... stored with the asset
+    std::vector<application::media::BundleMember> bundle{}; // audio first; workspace/target are directories
 };
+
+// Checks every member against the durable manifest; legacy products remain single files.
+domain::Result<bool> publication_matches(ports::DestinationFiles& files, const std::string& destination,
+    const std::string& path, const PublicationEvidence& evidence);
 
 struct FinalizerOptions {
     std::uint32_t max_name_candidates{100};

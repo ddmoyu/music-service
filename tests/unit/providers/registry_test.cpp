@@ -92,7 +92,7 @@ TEST_CASE("the built-in manifest registers Kuwo", "[providers]") {
     CHECK(kuwo.supports("track_detail"));
     CHECK(kuwo.supports("parse_links"));
     CHECK(kuwo.supports("resolve_audio"));
-    CHECK_FALSE(kuwo.supports("lyrics"));
+    CHECK(kuwo.supports("lyrics"));
     CHECK(kuwo.auth_methods.empty()); // standard quality needs no account
     // Networked capabilities need the upstream client; link parsing does not.
     CHECK(registry->require<ports::ITrackSearch>("kuwo").error().code == domain::ErrorCode::internal);

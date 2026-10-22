@@ -308,6 +308,26 @@ TEST_CASE("different product or content rules are different downloads", "[downlo
     CHECK(std::get<domain::ManualTarget>(stored.selection()).target == track("aud", "t1"));
 }
 
+TEST_CASE("new quality and lyric semantics do not reuse older completed products", "[downloads][stage-e]") {
+    Downloads d{"old-product-version"};
+    const auto current = d.create(d.request(), 1);
+    REQUIRE(d.service->cancel(d.owner, current.view.task.task_id));
+    const auto& i = current.view.intent;
+    auto old_product = i.product();
+    old_product.metadata_config_version = "metadata-v1";
+    auto old_intent = unwrap(domain::NormalizedDownloadIntent::normalize({i.owner_id(), i.original_track(),
+        i.selection(), i.account_bindings(), i.requirement(), i.metadata_policy(), old_product}));
+    const auto old = unwrap(d.tasks->create({std::move(old_intent), d.key(2), "old", false}));
+    (void)d.complete("old.mp3");
+    const auto fresh = d.create(d.request(), 3);
+    CHECK_FALSE(fresh.reused);
+    CHECK(fresh.view.task.task_id != old.task.task_id);
+    CHECK(fresh.view.task.status == TaskStatus::queued);
+    const auto replay = d.create(d.request(), 1);
+    CHECK(replay.replayed);
+    CHECK(replay.view.task.task_id == current.view.task.task_id);
+}
+
 TEST_CASE("completed results are reused only while they still hold", "[downloads]") {
     Downloads d{"completed"};
     const auto first = d.create(d.request(), 1);

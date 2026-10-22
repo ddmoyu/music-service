@@ -44,6 +44,11 @@ struct OutputOptions {
     bool embed_lyrics{true};
     std::uint64_t cover_max_bytes{8 * 1024 * 1024};
     std::uint32_t metadata_timeout_seconds{10};
+    std::string lyrics_variant{"lrc"}; // lrc | verbatim | romanized; fallback to available original
+
+    bool export_lyrics{false};
+    bool export_cover{false};
+    bool sidecars_required{false};
 
     friend bool operator==(const OutputOptions&, const OutputOptions&) = default;
 };

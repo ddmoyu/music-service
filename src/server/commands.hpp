@@ -36,6 +36,7 @@ inline constexpr int exit_usage = 2;  // bad arguments or configuration
 //   principal create --name NAME | principal list | principal enable|disable --id ID
 //   token issue --principal ID --scopes A,B --output FILE | token list --principal ID
 //   token revoke --id ID
+//   import-ncm --input FILE --principal ID --destination ID [--metadata-policy POLICY]
 // Management commands run offline: they take the instance lock and fail while the
 // service runs. Token plaintext only ever goes to the new file named by --output (or
 // the bootstrap file for init), never to the console.

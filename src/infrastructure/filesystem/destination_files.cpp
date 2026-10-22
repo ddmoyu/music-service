@@ -64,6 +64,13 @@ domain::Result<fs::path> LocalDestinationFiles::resolve(const std::string& desti
     return resolve_within(base.value(), relative_path);
 }
 
+domain::Result<bool> LocalDestinationFiles::matches(const std::string& destination_id, const std::string& relative_path,
+                                                    const ports::FileFingerprint& expected) {
+    auto actual = fingerprint(destination_id, relative_path);
+    if (!actual) return actual.error();
+    return actual.value() && **actual == expected;
+}
+
 domain::Result<bool> LocalDestinationFiles::exists(const std::string& destination_id,
                                                    const std::string& relative_path) {
     auto path = resolve(destination_id, relative_path);

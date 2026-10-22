@@ -85,7 +85,7 @@ std::string encode_intent(const domain::NormalizedDownloadIntent& intent) {
     const auto& requirement = intent.requirement();
     const auto& product = intent.product();
     json document{
-        {"schema", product.output ? 2 : schema_version},
+        {"schema", product.output ? ((product.output->export_lyrics || product.output->export_cover) ? 4 : (product.output->lyrics_variant == "lrc" ? 2 : 3)) : schema_version},
         {"owner_id", intent.owner_id()},
         {"original_track", ref_to_json(intent.original_track())},
         {"selection", selection},
@@ -105,6 +105,12 @@ std::string encode_intent(const domain::NormalizedDownloadIntent& intent) {
         document["product"]["output"] = {{"name_format", o.name_format}, {"folder_layout", o.folder_layout},
             {"embed_cover", o.embed_cover}, {"embed_lyrics", o.embed_lyrics},
             {"cover_max_bytes", o.cover_max_bytes}, {"metadata_timeout_seconds", o.metadata_timeout_seconds}};
+        if (o.export_lyrics || o.export_cover) {
+            document["product"]["output"]["export_lyrics"] = o.export_lyrics;
+            document["product"]["output"]["export_cover"] = o.export_cover;
+            document["product"]["output"]["sidecars_required"] = o.sidecars_required;
+        }
+        if (o.lyrics_variant != "lrc") document["product"]["output"]["lyrics_variant"] = o.lyrics_variant;
     }
     return document.dump();
 }
@@ -116,7 +122,7 @@ domain::Result<domain::NormalizedDownloadIntent> decode_intent(std::string_view 
     }
     try {
         const auto schema = doc.at("schema").get<int>();
-        if (schema != schema_version && schema != 2) {
+        if (schema != schema_version && schema != 2 && schema != 3 && schema != 4) {
             return corrupt("unsupported schema");
         }
         auto original = ref_from_json(doc.at("original_track"));
@@ -185,7 +191,7 @@ domain::Result<domain::NormalizedDownloadIntent> decode_intent(std::string_view 
              product.at("naming_config_version").get<std::string>(),
              product.at("metadata_config_version").get<std::string>()},
         };
-        if (schema == 2) {
+        if (schema >= 2) {
             const auto& o = product.at("output");
             // 先以宽类型读取和核验，避免负数或溢出被截成合法的无符号值。
             const auto bytes = o.at("cover_max_bytes").get<std::int64_t>();
@@ -197,6 +203,13 @@ domain::Result<domain::NormalizedDownloadIntent> decode_intent(std::string_view 
                 o.at("folder_layout").get<std::string>(), o.at("embed_cover").get<bool>(),
                 o.at("embed_lyrics").get<bool>(), static_cast<std::uint64_t>(bytes),
                 static_cast<std::uint32_t>(timeout)};
+            if (schema == 3) draft.product.output->lyrics_variant = o.at("lyrics_variant").get<std::string>();
+            if (schema == 4) draft.product.output->lyrics_variant = o.value("lyrics_variant", std::string{"lrc"});
+            if (schema == 4) {
+                draft.product.output->export_lyrics = o.at("export_lyrics").get<bool>();
+                draft.product.output->export_cover = o.at("export_cover").get<bool>();
+                draft.product.output->sidecars_required = o.at("sidecars_required").get<bool>();
+            }
         }
         return domain::NormalizedDownloadIntent::normalize(std::move(draft));
     } catch (const json::exception&) {

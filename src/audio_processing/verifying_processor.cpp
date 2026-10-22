@@ -1,4 +1,5 @@
 #include "audio_processing/verifying_processor.hpp"
+#include "audio_processing/ncm.hpp"
 
 #include "audio_processing/format/byte_reader.hpp"
 #include "audio_processing/format/flac.hpp"
@@ -86,6 +87,7 @@ namespace {
 
 // What the container's structure says, before any tag is written.
 struct Measured {
+    std::optional<std::int32_t> bits_per_sample;
     std::optional<std::string> codec;
     std::optional<std::int32_t> sample_rate_hz;
     std::optional<std::int32_t> channels;
@@ -135,6 +137,7 @@ domain::Result<Measured> measure(format::ByteReader& reader, domain::Container c
             return std::move(flac).error();
         }
         m.codec = "flac";
+        m.bits_per_sample = flac->bits_per_sample;
         m.sample_rate_hz = flac->sample_rate_hz;
         m.channels = flac->channels;
         m.duration_ms = flac->duration_ms;
@@ -293,6 +296,7 @@ domain::Result<ports::ProcessingReport> VerifyingProcessor::process(const ports:
     facts.codec = structure->codec;
     facts.sample_rate_hz = structure->sample_rate_hz;
     facts.channels = structure->channels;
+    facts.bits_per_sample = structure->bits_per_sample;
     facts.bitrate_bps = structure->bitrate_bps;
     facts.variable_bitrate = structure->variable_bitrate;
     facts.duration_ms = structure->duration_ms;
@@ -423,6 +427,7 @@ ProcessorCatalog::create(std::vector<std::shared_ptr<ports::AudioProcessor>> pro
 ProcessorCatalog ProcessorCatalog::builtin() {
     ProcessorCatalog catalog;
     catalog.processors_.push_back(std::make_shared<VerifyingProcessor>());
+    catalog.processors_.push_back(std::make_shared<NcmProcessor>());
     return catalog;
 }
 

@@ -11,6 +11,7 @@ add_library(music_service_downloads STATIC
     resume_policy.cpp
     runner.cpp
     scheduler.cpp
+    sidecars.cpp
 )
 add_library(music_service::downloads ALIAS music_service_downloads)
 target_link_libraries(music_service_downloads

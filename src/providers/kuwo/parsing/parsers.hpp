@@ -1,6 +1,7 @@
 #pragma once
 
 #include "domain/catalog/track.hpp"
+#include "domain/catalog/collections.hpp"
 #include "domain/result.hpp"
 
 #include <cstdint>
@@ -44,6 +45,8 @@ struct AudioEvidence {
 };
 
 domain::Result<AudioEvidence> parse_audio(std::string_view body, std::string_view requested_rid);
+// newlyric.lrc：最多 512 KiB 压缩输入、2 MiB 解压输出，严格 GB18030 解码。
+domain::Result<domain::TrackLyrics> parse_lyrics(std::string_view body);
 
 // The rid of a Kuwo song link: www.kuwo.cn/play_detail/{rid} or
 // m.kuwo.cn/newh5app/play_detail/{rid}, http or https. Anything else is

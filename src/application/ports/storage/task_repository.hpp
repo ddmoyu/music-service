@@ -65,6 +65,7 @@ struct CompletedResult {
     std::string relative_path;
     std::uint64_t size_bytes{0}; // what was published; a file of another size is not it
     bool file_available{false};
+    std::string properties_json{"{}"};
 };
 
 struct CreateTaskCommand {

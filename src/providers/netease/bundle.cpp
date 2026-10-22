@@ -14,19 +14,26 @@ ports::ProviderBundle make_bundle() {
         .source = std::move(source).value(),
         .name = "网易云音乐",
         .implementation_id = "netease-native",
-        .implementation_version = "0.1.3",
+        .implementation_version = "0.1.5",
     };
     const std::vector<std::string> cookie{std::string{cookie_profile}};
-    // What N07 verified on 2026-10-22. Only audio and verification use an account.
+    // N07 capabilities, verified on 2026-10-22. Account requirements are per capability.
     bundle.capabilities = {
         {.key = "search_tracks", .pagination = ports::Pagination::cursor, .catalog_kind = ports::CatalogKind::live},
-        {.key = "track_detail"},
+        {.key = "track_detail", .credentials = ports::CredentialRequirement::optional, .auth_profiles = cookie},
         {.key = "parse_links"},
         {.key = "lyrics"},
         {.key = "search_playlists", .pagination = ports::Pagination::cursor, .catalog_kind = ports::CatalogKind::live},
         {.key = "search_albums", .pagination = ports::Pagination::cursor, .catalog_kind = ports::CatalogKind::live},
-        {.key = "playlist_detail"}, {.key = "album_detail"},
-        {.key = "playlist_tracks", .pagination = ports::Pagination::cursor},
+        {.key = "playlist_detail", .credentials = ports::CredentialRequirement::optional, .auth_profiles = cookie}, {.key = "album_detail"},
+        {.key = "playlist_tracks", .credentials = ports::CredentialRequirement::optional, .auth_profiles = cookie, .pagination = ports::Pagination::cursor},
+        {.key = "user_playlists", .credentials = ports::CredentialRequirement::required, .auth_profiles = cookie, .pagination = ports::Pagination::cursor, .catalog_kind = ports::CatalogKind::live},
+        {.key = "artist_tracks", .pagination = ports::Pagination::cursor, .catalog_kind = ports::CatalogKind::live},
+        {.key = "search_artists", .pagination = ports::Pagination::cursor, .catalog_kind = ports::CatalogKind::live},
+        {.key = "artist_albums", .pagination = ports::Pagination::cursor, .catalog_kind = ports::CatalogKind::live},
+        {.key = "podcast_detail", .credentials = ports::CredentialRequirement::optional, .auth_profiles = cookie},
+        {.key = "episode_detail", .credentials = ports::CredentialRequirement::optional, .auth_profiles = cookie},
+        {.key = "podcast_episodes", .credentials = ports::CredentialRequirement::optional, .auth_profiles = cookie, .pagination = ports::Pagination::cursor, .catalog_kind = ports::CatalogKind::live},
         {.key = "album_tracks", .pagination = ports::Pagination::cursor},
         {.key = "categories", .catalog_kind = ports::CatalogKind::live},
         {.key = "category_playlists", .pagination = ports::Pagination::cursor, .catalog_kind = ports::CatalogKind::live},
@@ -38,6 +45,13 @@ ports::ProviderBundle make_bundle() {
         {.key = "verify_credentials", .credentials = ports::CredentialRequirement::required, .auth_profiles = cookie},
     };
     bundle.bindings = {
+        ports::CapabilityBinding::bind<ports::IUserPlaylists>(make_user_playlists),
+        ports::CapabilityBinding::bind<ports::ArtistTracks>(make_artist_tracks),
+        ports::CapabilityBinding::bind<ports::ArtistSearch>(make_artist_search),
+        ports::CapabilityBinding::bind<ports::ArtistAlbums>(make_artist_albums),
+        ports::CapabilityBinding::bind<ports::PodcastDetail>(make_podcast_detail),
+        ports::CapabilityBinding::bind<ports::PodcastEpisodes>(make_podcast_episodes),
+        ports::CapabilityBinding::bind<ports::EpisodeDetail>(make_episode_detail),
         ports::CapabilityBinding::bind<ports::ITrackSearch>(make_search),
         ports::CapabilityBinding::bind<ports::ITrackDetail>(make_detail),
         ports::CapabilityBinding::bind<ports::ILinkParser>(make_link_parser),
@@ -66,7 +80,7 @@ ports::ProviderBundle make_bundle() {
         .scopes = {"vip"},
         .verifier = make_verifier,
     }};
-    bundle.quality_hints = {domain::Quality::standard, domain::Quality::high, domain::Quality::lossless};
+    bundle.quality_hints = {domain::Quality::standard, domain::Quality::high, domain::Quality::lossless, domain::Quality::hires};
     return bundle;
 }
 

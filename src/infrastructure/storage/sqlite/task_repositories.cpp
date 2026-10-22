@@ -1,9 +1,12 @@
 #include "infrastructure/storage/sqlite/task_repositories.hpp"
 
 #include "infrastructure/storage/intent_codec.hpp"
+#include "application/media/file_bundle.hpp"
 #include "infrastructure/storage/sqlite/sql_support.hpp"
 
 #include <nlohmann/json.hpp>
+#include <array>
+#include <algorithm>
 
 namespace music_service::infrastructure::storage::sqlite {
 
@@ -525,7 +528,7 @@ SqliteTaskRepository::find_idempotent(const std::string& owner_id, const std::st
 domain::Result<std::vector<ports::CompletedResult>>
 SqliteTaskRepository::completed_results(const std::string& owner_id, const domain::DownloadFingerprint& fingerprint) {
     return ctx_.database->read([&](Connection& db) -> domain::Result<std::vector<ports::CompletedResult>> {
-        auto s = db.prepare("SELECT t.id, t.version, f.id, f.version, f.destination_id, f.relative_path, f.status, f.size_bytes"
+        auto s = db.prepare("SELECT t.id, t.version, f.id, f.version, f.destination_id, f.relative_path, f.status, f.size_bytes, f.properties"
                             " FROM download_tasks t JOIN task_files tf ON tf.task_id = t.id"
                             " JOIN file_assets f ON f.id = tf.file_id"
                             " WHERE t.owner_id = ? AND t.status = 'completed' AND t.fingerprint_digest = ?"
@@ -540,7 +543,7 @@ SqliteTaskRepository::completed_results(const std::string& owner_id, const domai
                                           st.text(4),
                                           st.text(5),
                                           static_cast<std::uint64_t>(st.integer(7)),
-                                          st.text(6) == "available"};
+                                          st.text(6) == "available", st.text(8)};
         });
     });
 }
@@ -1029,7 +1032,7 @@ SqliteTaskRepository::requeue_interrupted(std::chrono::system_clock::time_point 
     const auto now_ms = to_millis(now);
     return ctx_.database->write([&](Connection& db) -> domain::Result<std::vector<ports::TaskRecord>> {
         auto s = db.prepare("SELECT " + std::string{task_columns} + " FROM download_tasks WHERE status IN " +
-                            std::string{running_list} + " ORDER BY created_at, id");
+                            std::string{running_list} + " OR (original_source = 'local_ncm' AND status IN ('queued','waiting_retry')) ORDER BY created_at, id");
         if (!s) {
             return std::move(s).error();
         }
@@ -1037,6 +1040,11 @@ SqliteTaskRepository::requeue_interrupted(std::chrono::system_clock::time_point 
         if (!found) {
             return std::move(found).error();
         }
+        auto local = db.prepare("SELECT id FROM download_tasks WHERE original_source = 'local_ncm'"
+                                " AND status NOT IN ('completed','failed','canceled')");
+        if (!local) return local.error();
+        auto local_ids = collect<std::string>(*local, [](const Statement& st) { return st.text(0); });
+        if (!local_ids) return local_ids.error();
         std::vector<ports::TaskRecord> requeued;
         for (const auto& task : found.value()) {
             Update update;
@@ -1047,6 +1055,11 @@ SqliteTaskRepository::requeue_interrupted(std::chrono::system_clock::time_point 
             update.resume_stage = task.status == TaskStatus::downloading || task.status == TaskStatus::processing
                                       ? TaskStatus::downloading
                                       : TaskStatus::resolving;
+            if (std::find(local_ids->begin(), local_ids->end(), task.task_id) != local_ids->end()) {
+                update = Update{};
+                update.to = TaskStatus::failed;
+                update.error_json = R"({"code":"LOCAL_IMPORT_INTERRUPTED","message":"rerun the local import command","retryable":false})";
+            }
             auto done = apply(db, task.task_id, update, now_ms);
             if (!done) {
                 return std::move(done).error();
@@ -1209,14 +1222,14 @@ SqlitePublicationRepository::complete(const std::string& task_id, const std::str
         if (auto legal = domain::check_transition(task->status, TaskStatus::completed); !legal) {
             return legal.error();
         }
-        auto reservation = db.prepare("SELECT destination_id, reserved_path FROM finalization_intents"
+        auto reservation = db.prepare("SELECT destination_id, reserved_path, evidence FROM finalization_intents"
                                       " WHERE task_id = ? AND execution_id = ?");
         if (!reservation) {
             return std::move(reservation).error();
         }
         reservation->bind(1, task_id).bind(2, execution_id);
-        auto reserved = first<std::pair<std::string, std::string>>(*reservation, [](const Statement& st) {
-            return std::pair{st.text(0), st.text(1)};
+        auto reserved = first<std::array<std::string, 3>>(*reservation, [](const Statement& st) {
+            return std::array<std::string, 3>{st.text(0), st.text(1), st.text(2)};
         });
         if (!reserved) {
             return std::move(reserved).error();
@@ -1226,14 +1239,19 @@ SqlitePublicationRepository::complete(const std::string& task_id, const std::str
                                  "no publication intent for this execution", false, {}};
         }
         // The asset is exactly what this task reserved: its owner, destination and path.
-        const auto& [reserved_destination, reserved_path] = *reserved.value();
+        const auto& [reserved_destination, reserved_path, evidence_text] = *reserved.value();
+        const auto evidence = nlohmann::json::parse(evidence_text, nullptr, false);
+        if (!evidence.is_object()) return domain::Error::validation("evidence", "invalid publication");
+        auto members = application::media::bundle_members(evidence.value("properties", nlohmann::json::object()).dump());
+        if (!members) return members.error();
+        const auto asset_path = reserved_path + (members->empty() ? "" : "/" + members->front().name);
         if (asset.owner_id != task->owner_id) {
             return domain::Error::validation("owner_id", "differs from the task's owner");
         }
         if (asset.destination_id != reserved_destination) {
             return domain::Error::validation("destination_id", "differs from the reserved destination");
         }
-        if (asset.relative_path != reserved_path) {
+        if (asset.relative_path != asset_path) {
             return domain::Error::validation("relative_path", "differs from the reserved path");
         }
         auto remove_intent = db.prepare("DELETE FROM finalization_intents WHERE task_id = ?"
@@ -1255,7 +1273,7 @@ SqlitePublicationRepository::complete(const std::string& task_id, const std::str
         insert->bind(1, file_id)
             .bind(2, task->owner_id)
             .bind(3, reserved_destination)
-            .bind(4, reserved_path)
+            .bind(4, asset_path)
             .bind(5, path_key(reserved_path))
             .bind(6, static_cast<std::int64_t>(asset.size_bytes))
             .bind(7, asset.container)

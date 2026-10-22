@@ -39,6 +39,10 @@ const std::map<std::string_view, std::type_index>& capability_ports() {
         {ports::capability_traits<ports::ICategories>::key, typeid(ports::ICategories)},
         {ports::capability_traits<ports::ICharts>::key, typeid(ports::ICharts)},
         {ports::capability_traits<ports::IRecommendedPlaylists>::key, typeid(ports::IRecommendedPlaylists)},
+        {ports::capability_traits<ports::IUserPlaylists>::key, typeid(ports::IUserPlaylists)},
+        {ports::capability_traits<ports::PodcastDetail>::key, typeid(ports::PodcastDetail)},
+        {ports::capability_traits<ports::PodcastEpisodes>::key, typeid(ports::PodcastEpisodes)},
+        {ports::capability_traits<ports::EpisodeDetail>::key, typeid(ports::EpisodeDetail)},
     };
     return ports_by_key;
 }

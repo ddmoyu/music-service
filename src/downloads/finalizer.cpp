@@ -113,6 +113,24 @@ domain::Result<PublicationEvidence> decode_evidence(std::string_view text) {
                                result->dump()};
 }
 
+domain::Result<bool> publication_matches(ports::DestinationFiles& files, const std::string& destination,
+    const std::string& path, const PublicationEvidence& evidence) {
+    auto members = application::media::bundle_members(evidence.properties_json);
+    if (!members) return members.error();
+    if (members->empty()) {
+        auto actual = files.fingerprint(destination, path);
+        if (!actual) return actual.error();
+        return actual.value() && **actual == evidence.file;
+    }
+    if (members->front().file != evidence.file) return domain::Error::validation("bundle", "audio evidence differs");
+    for (const auto& member : *members) {
+        auto actual = files.fingerprint(destination, path + "/" + member.name);
+        if (!actual) return actual.error();
+        if (!actual.value() || **actual != member.file) return false;
+    }
+    return true;
+}
+
 std::string file_etag(const ports::FileFingerprint& file) {
     return "\"sha256-" + file.sha256.substr(0, 32) + "\"";
 }
@@ -190,9 +208,12 @@ domain::Result<ports::CompletedPublication> commit_publication(ports::Publicatio
                                                                const ports::PendingPublication& pending,
                                                                const PublicationEvidence& evidence) {
     const auto& intent = pending.intent;
+    auto members = application::media::bundle_members(evidence.properties_json);
+    if (!members) return members.error();
+    const auto audio_path = intent.reserved_path + (members->empty() ? "" : "/" + members->front().name);
     const ports::NewFileAsset asset{pending.task.owner_id,
                                     intent.destination_id,
-                                    intent.reserved_path,
+                                    audio_path,
                                     evidence.file.size_bytes,
                                     evidence.container.empty() ? std::nullopt
                                                                : std::optional<std::string>{evidence.container},
@@ -220,7 +241,8 @@ domain::Result<ports::CompletedPublication> Finalizer::publish(const FinalizeReq
     if (required_stage_failed(request.report) || !validated(request.report) || request.report.facts.sha256.empty()) {
         return audio_refused("not_validated");
     }
-    auto bytes = files_->fingerprint(task.destination_id, request.workspace_file);
+    const auto audio_work = request.workspace_file + (request.bundle.empty() ? "" : "/" + request.bundle.front().name);
+    auto bytes = files_->fingerprint(task.destination_id, audio_work);
     if (!bytes) {
         return std::move(bytes).error();
     }
@@ -245,6 +267,19 @@ domain::Result<ports::CompletedPublication> Finalizer::publish(const FinalizeReq
         properties["metadata_status"] = metadata_status(request.report);
     }
 
+    if (!request.bundle.empty()) {
+        auto members = request.bundle;
+        for (auto& member : members) {
+            auto part = files_->fingerprint(task.destination_id, request.workspace_file + "/" + member.name);
+            if (!part || !part.value() || part.value()->size_bytes != member.file.size_bytes)
+                return audio_refused("bundle_member_changed");
+            if (!member.file.sha256.empty() && member.file.sha256 != part.value()->sha256)
+                return audio_refused("bundle_member_changed");
+            member.file = **part;
+        }
+        properties = json::parse(application::media::with_bundle(properties.dump(), members));
+        if (!application::media::bundle_members(properties.dump())) return audio_refused("bundle_invalid");
+    }
     const PublicationEvidence evidence{file, request.target_path, request.report.facts.container, properties.dump(),
                                        result_of(request.report)};
     ports::PublicationIntent intent{task.task_id, *task.execution_id, task.destination_id, request.workspace_file,

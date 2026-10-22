@@ -32,7 +32,7 @@ public:
 
     // NOT_FOUND for unknown, foreign or no longer permitted files; FILE_MISSING for files
     // gone from their destination; DESTINATION_UNAVAILABLE while the root is offline.
-    domain::Result<OpenFile> open(const std::string& owner_id, const std::string& file_id);
+    domain::Result<OpenFile> open(const std::string& owner_id, const std::string& file_id, const std::string& part = "audio");
 
     // The metadata after the same checks (the file is opened and closed again).
     domain::Result<ports::FileAssetRecord> describe(const std::string& owner_id, const std::string& file_id);

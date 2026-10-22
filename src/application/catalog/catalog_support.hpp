@@ -57,7 +57,7 @@ inline std::size_t item_bytes(const domain::Track& track) {
 }
 inline std::size_t item_bytes(const domain::Playlist& p) {
     return 256 + p.name.size() + p.ref.id.value().size() + p.creator.value_or("").size() +
-           p.description.value_or("").size() + p.artwork.value_or("").size();
+           p.description.value_or("").size() + p.artwork.value_or("").size() + p.relationship.value_or("").size();
 }
 inline std::size_t item_bytes(const domain::Album& a) {
     std::size_t bytes = 256 + a.title.size() + a.ref.id.value().size() + a.artwork.value_or("").size() +
@@ -77,7 +77,7 @@ inline std::size_t item_bytes(const domain::Chart& c) {
     return 256 + c.name.size() + c.ref.id.value().size() + c.description.value_or("").size();
 }
 inline std::size_t item_bytes(const domain::TrackLyrics& l) {
-    std::size_t bytes = 128 + l.lrc.value_or("").size() + l.translated_lrc.value_or("").size();
+    std::size_t bytes = 128 + l.lrc.value_or("").size() + l.translated_lrc.value_or("").size() + l.romanized_lrc.value_or("").size();
     for (const auto& line : l.karaoke) {
         bytes += 32;
         for (const auto& word : line.words) {
@@ -85,6 +85,16 @@ inline std::size_t item_bytes(const domain::TrackLyrics& l) {
         }
     }
     return bytes;
+}
+
+inline std::size_t item_bytes(const domain::Podcast& p) {
+    return 256 + p.ref.id.value().size() + p.title.size() + p.presenter.value_or("").size() +
+        p.description.value_or("").size() + p.artwork.value_or("").size();
+}
+inline std::size_t item_bytes(const domain::Episode& e) {
+    return 384 + e.ref.id.value().size() + e.podcast.id.value().size() + e.title.size() + e.podcast_title.size() +
+        e.presenter.value_or("").size() + e.description.value_or("").size() + e.artwork.value_or("").size() +
+        (e.audio_ref ? e.audio_ref->id.value().size() : 0);
 }
 
 } // namespace music_service::application::catalog::support

@@ -9,6 +9,7 @@
 | nlohmann/json | v3.12.0 | `55f93686c01528224f448c19128836e7df245f72` | 协议边界 JSON | MIT |
 | SQLite | 3.54.1 amalgamation | SHA3-256 `92281c86…df28e30` | 持久化 | Public domain |
 | TagLib | v2.3.2 | `deadc2990767dfbda0701e0ab35fdeea653db08f`（子模块 utfcpp v4.2.0 `2d8e20b2…`） | MP3／FLAC／MP4 标签读写（audio_processing） | LGPL-2.1 或 MPL-1.1，按 MPL-1.1 静态链接 |
+| zlib | 1.3.2 | 官方归档 SHA-256 `bb329a0a…0119d16`，构建输入逐文件 SHA3-256 | 酷我歌词有界解压；静态链接 | zlib |
 | Catch2 | v3.16.1 | `08092139210881f01a34e60c5f2fd6afa0ea4024` | 测试，仅 BUILD_TESTING=ON 时获取 | BSL-1.0 |
 
 ## 规则
@@ -27,3 +28,5 @@ cpp-httplib v0.62.0 支持 OpenSSL、Mbed TLS 和 wolfSSL。Mbed TLS 是纯 CMak
 ## 已记录的体积
 
 源码目录（含 `.git`，Windows 调试构建）：Mbed TLS 约 191 MB（含 framework 子模块），nlohmann/json 约 186 MB，Catch2 约 18 MB，cpp-httplib 约 14 MB，SQLite 约 11 MB，TagLib 约 11 MB（含 utfcpp）。调试版 tag.lib 约 37 MB。产物：调试版依赖测试程序 7.8 MB；调试版 mbedcrypto／mbedtls／mbedx509 静态库约 3.4／1.7／0.5 MB；发布版 SQLite 静态库约 3.1 MB。发布包体积待服务程序存在后在 T37 测量。
+
+zlib 来自[官方 1.3.2 发布](https://zlib.net/)，关闭共享库、示例与安装规则；包中包含 LICENSE。GB18030 转换使用 Windows 系统代码页或 POSIX iconv，不依赖命令行工具。

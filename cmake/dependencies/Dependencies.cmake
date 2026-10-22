@@ -83,6 +83,19 @@ set(BUILD_TESTING OFF)
 FetchContent_MakeAvailable(music_service_taglib)
 set(BUILD_TESTING "${music_service_build_testing}")
 
+set(ZLIB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(ZLIB_BUILD_STATIC ON CACHE BOOL "" FORCE)
+set(ZLIB_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(ZLIB_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(music_service_zlib
+    URL "${MUSIC_SERVICE_ZLIB_URL}"
+    URL_HASH "SHA256=${MUSIC_SERVICE_ZLIB_SHA256}"
+    DOWNLOAD_EXTRACT_TIMESTAMP FALSE
+    EXCLUDE_FROM_ALL
+)
+FetchContent_MakeAvailable(music_service_zlib)
+music_service_verify_file_hashes(zlib "${music_service_zlib_SOURCE_DIR}" ${MUSIC_SERVICE_ZLIB_FILE_SHA3_256})
+
 music_service_verify_git_dependency(mbedtls "${music_service_mbedtls_SOURCE_DIR}" "${MUSIC_SERVICE_MBEDTLS_COMMIT}")
 music_service_verify_git_dependency(cpp-httplib "${music_service_httplib_SOURCE_DIR}" "${MUSIC_SERVICE_HTTPLIB_COMMIT}")
 music_service_verify_git_dependency(nlohmann-json "${music_service_json_SOURCE_DIR}" "${MUSIC_SERVICE_JSON_COMMIT}")

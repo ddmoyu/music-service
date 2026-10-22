@@ -1,6 +1,7 @@
 #pragma once
 
 #include "domain/result.hpp"
+#include "application/ports/storage/destination_files.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -27,6 +28,8 @@ public:
 class PublishedFiles {
 public:
     virtual ~PublishedFiles() = default;
+
+    virtual domain::Result<bool> matches(const std::string&, const std::string&, const FileFingerprint&) { return false; }
 
     virtual domain::Result<std::unique_ptr<ReadableFile>> open_read(const std::string& destination_id,
                                                                     const std::string& relative_path) = 0;

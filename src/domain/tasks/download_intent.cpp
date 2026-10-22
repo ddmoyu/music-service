@@ -230,6 +230,12 @@ DownloadFingerprint fingerprint(const NormalizedDownloadIntent& intent) {
             .flag("output.lyrics", output->embed_lyrics)
             .number("output.cover_max", output->cover_max_bytes)
             .number("output.timeout", output->metadata_timeout_seconds);
+        if (output->export_lyrics || output->export_cover) {
+            writer.flag("output.export_lyrics", output->export_lyrics)
+                .flag("output.export_cover", output->export_cover)
+                .flag("output.sidecars_required", output->sidecars_required);
+        }
+        if (output->lyrics_variant != "lrc") writer.field("output.lyrics_variant", output->lyrics_variant);
     }
     result.canonical = writer.str();
     result.digest = to_hex(fnv1a64(result.canonical));
@@ -237,6 +243,10 @@ DownloadFingerprint fingerprint(const NormalizedDownloadIntent& intent) {
 }
 
 Result<void> validate_output_options(const OutputOptions& options) {
+    if (options.sidecars_required && !options.export_lyrics && !options.export_cover)
+        return Error::validation("output.sidecars_required", "requires an enabled sidecar");
+    if (options.lyrics_variant != "lrc" && options.lyrics_variant != "verbatim" && options.lyrics_variant != "romanized")
+        return Error::validation("output.lyrics_variant", "must be lrc, verbatim or romanized");
     if (options.name_format != "title" && options.name_format != "artist_title" && options.name_format != "title_artist") {
         return Error::validation("output.name_format", "must be title, artist_title or title_artist");
     }

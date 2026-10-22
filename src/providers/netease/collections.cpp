@@ -69,8 +69,8 @@ private:
 };
 
 template<bool Playlist> struct Collection {
-    static auto request(std::string_view id) {
-        if constexpr (Playlist) return protocol::playlist(id, call_for());
+    static auto request(std::string_view id, std::string_view cookie = {}) {
+        if constexpr (Playlist) return protocol::playlist(id, call_for(cookie));
         else return protocol::album(id, call_for());
     }
     static auto parse(std::string_view body, std::string_view id) {
@@ -84,7 +84,8 @@ public:
     explicit Detail(const ports::ProviderSetup& s) : client_(s) {}
     domain::Result<typename Tag::Item> detail(const ports::ProviderContext& c, const domain::PlatformRef& ref) override {
         if (auto valid = check_entity(ref); !valid) return valid.error();
-        auto body = client_.body(Collection<Playlist>::request(ref.id.value()), c);
+        const auto cookie = Playlist && c.secret ? c.secret->reveal() : std::string_view{};
+        auto body = client_.body(Collection<Playlist>::request(ref.id.value(), cookie), c, cookie);
         if (!body) return body.error();
         auto data = Collection<Playlist>::parse(*body, ref.id.value());
         if (!data) return data.error();
@@ -111,9 +112,10 @@ public:
             if (std::none_of(charts->begin(), charts->end(), [&](const auto& v) { return v.ref == ref; }))
                 return Error{ErrorCode::not_found, "netease chart not found", false, {}};
         }
-        auto request = Collection<Playlist>::request(ref.id.value());
+        const auto cookie = std::is_same_v<Tag, tag::PlaylistTracks> && c.secret ? c.secret->reveal() : std::string_view{};
+        auto request = Collection<Playlist>::request(ref.id.value(), cookie);
         request.operation = std::string{Tag::key};
-        auto body = client_.body(std::move(request), c);
+        auto body = client_.body(std::move(request), c, cookie);
         if (!body) return body.error();
         auto data = Collection<Playlist>::parse(*body, ref.id.value());
         if (!data) return data.error();
@@ -132,9 +134,9 @@ public:
                 const auto until = std::min(at + 50, end);
                 const std::vector<std::string> ids(data->ids.begin() + static_cast<std::ptrdiff_t>(at),
                                                   data->ids.begin() + static_cast<std::ptrdiff_t>(until));
-                auto details_request = protocol::song_details(ids, call_for());
+                auto details_request = protocol::song_details(ids, call_for(cookie));
                 details_request.operation = std::string{Tag::key};
-                auto response = client_.body(std::move(details_request), c);
+                auto response = client_.body(std::move(details_request), c, cookie);
                 if (!response) return response.error();
                 auto tracks = parsing::parse_tracks(*response);
                 if (!tracks) return tracks.error();

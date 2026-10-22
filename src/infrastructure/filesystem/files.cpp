@@ -23,6 +23,9 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <sys/stdio.h>
+#endif
 #endif
 
 namespace music_service::infrastructure::filesystem {
@@ -317,12 +320,30 @@ domain::Result<std::string> read_file(const fs::path& path, std::size_t max_byte
 }
 
 domain::Result<void> rename_no_replace(const fs::path& from, const fs::path& to) {
+#ifndef _WIN32
+    // Bundle members were fsynced individually; persist their directory entries before
+    // the one directory rename makes the complete product visible.
+    std::error_code inspect;
+    const bool source_directory = fs::is_directory(from, inspect);
+    if (source_directory) {
+        if (const auto ec = sync_directory(from); ec) return file_error("flush bundle", from, ec);
+    }
+    if (inspect) return file_error("inspect rename source", from, inspect);
+#endif
 #ifdef _WIN32
     if (!::MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_WRITE_THROUGH)) {
         return file_error("rename", to, last_error());
     }
     return domain::ok();
 #else
+#ifdef __APPLE__
+    // Darwin has its own exclusive rename, including directories.
+    if (source_directory) {
+        if (::renamex_np(from.c_str(), to.c_str(), RENAME_EXCL) != 0) return file_error("rename", to, last_error());
+        if (const auto ec = sync_directory(to.parent_path()); ec) return file_error("flush directory", to.parent_path(), ec);
+        return domain::ok();
+    }
+#endif
 #ifdef RENAME_NOREPLACE
     if (::renameat2(AT_FDCWD, from.c_str(), AT_FDCWD, to.c_str(), RENAME_NOREPLACE) == 0) {
         if (const auto ec = sync_directory(to.parent_path()); ec) {

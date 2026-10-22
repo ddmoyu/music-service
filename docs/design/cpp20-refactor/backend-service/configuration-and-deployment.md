@@ -91,7 +91,8 @@ app_profile 的 version 是管理配置中的正整数，应用身份或授权�
   "downloads": {"workers": 3, "per_source": 2, "max_attempts": 3, "transport_retries": 2,
     "output": {"name_format": "artist_title", "folder_layout": "flat",
       "embed_cover": true, "embed_lyrics": true, "cover_max_bytes": 8388608,
-      "metadata_timeout_seconds": 10}},
+      "metadata_timeout_seconds": 10, "lyrics_variant": "lrc",
+      "export_lyrics": false, "export_cover": false, "sidecars_required": false}},
   "features": {"file_access": true, "media_proxy": false, "direct_media_urls": false, "automatic_fallback": false, "transcoding": false},
   "logging": {"format": "json", "level": "info"}
 }
@@ -262,3 +263,6 @@ SSE 退出时停止接受订阅，唤醒等待并关闭现有流，注销订阅�
 ## 发布前需验证
 
 按上述支持矩阵逐项记录构建、启动、HTTPS、下载、停止与恢复结果；覆盖实际 TLS 组合、目标系统／架构／运行库、NAS 文件系统、端口和 CORS、媒体长流、中文与长路径、权限、容器非 root 与持久卷、停止信号与停机上限、数据库迁移与备份、文件重名和链接路径、依赖分发总大小。支持级别分为设计目标、构建通过、运行验证通过和正式发布，不用单一系统测试代替其他组合。数字默认值验证后只修改本页的配置基线并同步实际配置定义；运行时与图引用配置键，不复制一份数值表。
+
+
+0.1.6 的本地 NCM 导入命令、默认关闭的歌词／封面导出、目录产物与恢复规则见[配置键名](../../../../config/README.md#ncm-本地导入与侧文件)。导入与其他离线管理命令共用实例锁；运行服务时返回 INSTANCE_LOCKED。发布目录要求同一文件系统支持不覆盖目标的目录重命名；Windows 使用 MoveFileEx、Linux 使用 renameat2、macOS 使用 renamex_np。文件系统不支持时明确失败，不退化成覆盖或逐个移动。当前新增功能的实测环境为 Windows MSVC；其他系统与 NAS 文件系统仍需对应环境验收。

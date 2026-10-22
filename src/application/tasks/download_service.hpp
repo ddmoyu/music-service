@@ -5,6 +5,7 @@
 #include "application/ports/runtime/download_queue.hpp"
 #include "application/ports/storage/task_repository.hpp"
 #include "domain/result.hpp"
+#include "application/ports/storage/published_files.hpp"
 #include "domain/tasks/download_intent.hpp"
 
 #include <cstdint>
@@ -107,7 +108,7 @@ public:
                                        std::uint64_t size_bytes)>
                         file_intact,
                     std::uint32_t max_batch_items, std::shared_ptr<ports::DownloadQueue> queue = {},
-                    std::optional<domain::OutputOptions> output = {});
+                    std::optional<domain::OutputOptions> output = {}, std::shared_ptr<ports::PublishedFiles> bundle_files = {});
 
     // Idempotency-Key: 16 to 128 printable ASCII characters without spaces.
     static domain::Result<void> check_idempotency_key(std::string_view key);
@@ -149,6 +150,7 @@ private:
     std::uint32_t max_batch_items_;
     std::shared_ptr<ports::DownloadQueue> queue_; // empty: tasks only queue
     std::optional<domain::OutputOptions> output_;
+    std::shared_ptr<ports::PublishedFiles> bundle_files_;
 };
 
 } // namespace music_service::application::tasks

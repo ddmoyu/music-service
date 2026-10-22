@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <format>
@@ -105,7 +106,7 @@ domain::Result<domain::Track> track_of(const json& song) {
         return protocol_error("song id is not usable");
     }
     domain::Track track{*ref, std::move(*name), {}, std::nullopt, std::nullopt, {}};
-    if (const auto artists = song.find("ar"); artists != song.end() && artists->is_array()) {
+    if (const auto artists = song.find(song.contains("ar") ? "ar" : "artists"); artists != song.end() && artists->is_array()) {
         for (const auto& artist : *artists) {
             if (!artist.is_object()) {
                 continue;
@@ -121,7 +122,7 @@ domain::Result<domain::Track> track_of(const json& song) {
             track.artists.push_back(std::move(summary));
         }
     }
-    if (const auto album = song.find("al"); album != song.end() && album->is_object()) {
+    if (const auto album = song.find(song.contains("al") ? "al" : "album"); album != song.end() && album->is_object()) {
         if (auto picture = text(*album, "picUrl"); picture && !picture->empty()) {
             auto url = application::transport::Url::parse(*picture);
             if (url && url->host().ends_with(".music.126.net")) {
@@ -146,7 +147,7 @@ domain::Result<domain::Track> track_of(const json& song) {
     if (track.track_total && track.track_number && *track.track_total < *track.track_number) {
         track.track_total.reset();
     }
-    if (const auto duration = integer(song, "dt"); duration && *duration > 0) {
+    if (const auto duration = integer(song, song.contains("dt") ? "dt" : "duration"); duration && *duration > 0) {
         track.duration_ms = *duration;
     }
     return track;
@@ -326,10 +327,66 @@ domain::Result<domain::TrackLyrics> parse_lyrics(std::string_view body) {
     }
     lyrics.lrc = lyric_text(*parsed, "lrc");
     lyrics.translated_lrc = lyric_text(*parsed, "tlyric");
-    if (!lyrics.lrc) {
-        lyrics.translated_lrc.reset();
-        lyrics.unavailable = true;
+    lyrics.romanized_lrc = lyric_text(*parsed, "romalrc");
+    for (const auto* key : {"lrc", "tlyric", "romalrc", "yrc"}) {
+        const auto item = parsed->find(key);
+        if (item != parsed->end() && !item->is_null() &&
+            (!item->is_object() || (item->contains("lyric") && !(*item)["lyric"].is_null() && !(*item)["lyric"].is_string())))
+            lyrics.warnings.push_back(std::string{key} == "yrc" ? "YRC_MALFORMED" : "LYRICS_MALFORMED");
     }
+    if (const auto yrc = lyric_text(*parsed, "yrc")) {
+        // Bounded single-pass parser. Invalid timing never becomes wrapped/negative timestamps.
+        const auto number = [](std::string_view s, std::int64_t& n) {
+            const auto [end, ec] = std::from_chars(s.data(), s.data() + s.size(), n);
+            return !s.empty() && ec == std::errc{} && end == s.data() + s.size() && n >= 0 && n <= 86400000;
+        };
+        std::string_view rest{*yrc};
+        bool malformed = false;
+        std::size_t words = 0, lines = 0;
+        while (!rest.empty()) {
+            const auto newline = rest.find('\n');
+            auto line = rest.substr(0, newline);
+            rest = newline == rest.npos ? std::string_view{} : rest.substr(newline + 1);
+            if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+            if (line.find_first_not_of(" \t\r") == line.npos || line.front() == '{') continue; // Credit metadata is not timed words.
+            if (++lines > 10000 || words > 100000) { malformed = true; break; }
+            const auto comma = line.find(','), close = line.find(']');
+            domain::KaraokeLine k;
+            if (line.front() != '[' || comma == line.npos || close == line.npos || comma > close ||
+                !number(line.substr(1, comma - 1), k.start_ms) ||
+                !number(line.substr(comma + 1, close - comma - 1), k.duration_ms) ||
+                k.duration_ms > 86400000 - k.start_ms) { malformed = true; continue; }
+            line.remove_prefix(close + 1);
+            bool valid = true;
+            while (!line.empty()) {
+                const auto a = line.find(','), b = a == line.npos ? line.npos : line.find(',', a + 1);
+                const auto end = line.find(')');
+                domain::KaraokeWord word;
+                std::int64_t flags{};
+                if (line.front() != '(' || a == line.npos || b == line.npos || end == line.npos || b >= end ||
+                    !number(line.substr(1, a - 1), word.start_ms) ||
+                    !number(line.substr(a + 1, b - a - 1), word.duration_ms) ||
+                    !number(line.substr(b + 1, end - b - 1), flags) ||
+                    word.start_ms < k.start_ms || word.start_ms > k.start_ms + k.duration_ms ||
+                    word.duration_ms > k.start_ms + k.duration_ms - word.start_ms ||
+                    (!k.words.empty() && word.start_ms < k.words.back().start_ms) || ++words > 100000) {
+                    valid = false; break;
+                }
+                line.remove_prefix(end + 1);
+                // A literal '(' in a lyric is text unless it starts a timing token.
+                auto next = line.find('(');
+                while (next != line.npos && (next + 1 == line.size() || line[next + 1] < '0' || line[next + 1] > '9'))
+                    next = line.find('(', next + 1);
+                word.text = line.substr(0, next);
+                k.words.push_back(std::move(word));
+                line = next == line.npos ? std::string_view{} : line.substr(next);
+            }
+            if (valid && !k.words.empty()) lyrics.karaoke.push_back(std::move(k));
+            else malformed = true;
+        }
+        if (malformed) lyrics.warnings.push_back("YRC_MALFORMED");
+    }
+    lyrics.unavailable = !lyrics.lrc && !lyrics.translated_lrc && !lyrics.romanized_lrc && lyrics.karaoke.empty();
     return lyrics;
 }
 
@@ -347,9 +404,11 @@ domain::Result<Account> parse_account(std::string_view body) {
         return protocol_error("account has no id");
     }
     account.signed_in = true;
+    account.user_id = id_of(*record);
     if (const auto profile = parsed->find("profile"); profile != parsed->end() && profile->is_object()) {
         account.nickname = text(*profile, "nickname");
         account.vip_type = integer(*profile, "vipType");
+        if (auto uid = id_of(*profile, "userId")) account.user_id = std::move(uid);
     }
     if (!account.vip_type) {
         account.vip_type = integer(*record, "vipType");
@@ -467,6 +526,34 @@ domain::Result<CollectionSearch<domain::Playlist>> parse_playlist_search(std::st
 }
 domain::Result<CollectionSearch<domain::Album>> parse_album_search(std::string_view body) {
     return search_collection<domain::Album>(body, "albums", "albumCount", album_of);
+}
+
+domain::Result<CollectionSearch<domain::Artist>> parse_artist_search(std::string_view body) {
+    return search_collection<domain::Artist>(body, "artists", "artistCount", [](const json& item) -> domain::Result<domain::Artist> {
+        auto id = id_of(item);
+        auto name = text(item, "name");
+        if (!id || !name || name->empty()) return protocol_error("artist lacks id or name");
+        return domain::Artist{*ref_of(*id), *name, picture_of(item, "picUrl")};
+    });
+}
+
+domain::Result<ArtistAlbums> parse_artist_albums(std::string_view body, std::string_view id) {
+    auto doc = parse_body(body);
+    if (!doc) return doc.error();
+    auto artist = doc->find("artist");
+    auto albums = doc->find("hotAlbums");
+    auto more = doc->find("more");
+    if (artist == doc->end() || !artist->is_object() || id_of(*artist) != id ||
+        albums == doc->end() || !albums->is_array() || albums->size() > 50 ||
+        more == doc->end() || !more->is_boolean()) return protocol_error("invalid artist albums page");
+    ArtistAlbums result{{}, more->get<bool>()};
+    for (const auto& value : *albums) {
+        auto a = album_of(value);
+        if (!a) return a.error();
+        result.items.push_back(std::move(*a));
+    }
+    if (result.more && result.items.empty()) return protocol_error("empty continuing artist page");
+    return result;
 }
 
 domain::Result<std::vector<domain::Category>> parse_categories(std::string_view body) {
@@ -606,6 +693,129 @@ domain::Result<std::vector<domain::Track>> parse_tracks(std::string_view body) {
     return tracks;
 }
 
+domain::Result<DiscoveryPlaylists> parse_user_playlists(std::string_view body, std::string_view uid) {
+    auto parsed = parse_body(body);
+    if (!parsed) return parsed.error();
+    const auto list = parsed->find("playlist");
+    if (list == parsed->end() || !list->is_array() || list->size() > 50 ||
+        !parsed->contains("more") || !(*parsed)["more"].is_boolean())
+        return protocol_error("personal playlist array missing or too large");
+    DiscoveryPlaylists result;
+    result.more = flag(*parsed, "more");
+    for (const auto& v : *list) {
+        auto p = playlist_of(v);
+        if (!p) return p.error();
+        const auto creator = v.find("creator");
+        const auto owner = creator != v.end() && creator->is_object() ? id_of(*creator, "userId") : std::nullopt;
+        if (owner && *owner == uid) p->relationship = "created";
+        else if (flag(v, "subscribed")) p->relationship = "subscribed";
+        else return protocol_error("personal playlist relationship unknown");
+        result.items.push_back(std::move(*p));
+    }
+    if (result.more && result.items.empty()) return protocol_error("empty personal page claims more");
+    return result;
+}
+
+domain::Result<ArtistTracks> parse_artist_tracks(std::string_view body, std::string_view id) {
+    auto parsed = parse_body(body);
+    if (!parsed) return parsed.error();
+    const auto artist = parsed->find("artist"), list = parsed->find("hotSongs");
+    if (artist == parsed->end() || artist->is_null()) return Error{ErrorCode::not_found, "artist not found", false, {}};
+    if (id_of(*artist) != id || list == parsed->end() || !list->is_array() || list->size() > 50)
+        return protocol_error("invalid artist hot songs");
+    ArtistTracks result;
+    std::vector<std::string> ids;
+    for (const auto& item : *list) {
+        auto track = track_of(item);
+        if (!track) return track.error();
+        ids.push_back(track->ref.id.value());
+        result.tracks.push_back(std::move(*track));
+    }
+    result.revision = revision_of(*artist, ids);
+    return result;
+}
+
+namespace {
+domain::Result<domain::Podcast> podcast_of(const json& item) {
+    const auto id = id_of(item), name = text(item, "name");
+    if (!id || !name || name->empty()) return protocol_error("podcast lacks id or name");
+    domain::Podcast p{*ref_of(*id), *name};
+    p.artwork = picture_of(item, "picUrl");
+    p.description = text(item, "desc");
+    p.episode_count = count_of(item, "programCount");
+    if (const auto dj = item.find("dj"); dj != item.end()) p.presenter = text(*dj, "nickname");
+    return p;
+}
+
+domain::Result<domain::Episode> episode_of(const json& item) {
+    const auto id = id_of(item), name = text(item, "name");
+    const auto radio = item.find("radio");
+    if (!id || !name || radio == item.end()) return protocol_error("episode lacks id, name or radio");
+    auto p = podcast_of(*radio);
+    if (!p) return p.error();
+    domain::Episode e{*ref_of(*id), p->ref, *name, p->title};
+    e.artwork = picture_of(item, "coverUrl");
+    if (!e.artwork) e.artwork = p->artwork;
+    e.presenter = p->presenter;
+    if (const auto dj = item.find("dj"); dj != item.end()) e.presenter = text(*dj, "nickname");
+    e.description = text(item, "description");
+    e.published_at = date_of(item, "createTime", false);
+    if (auto duration = integer(item, "duration"); duration && *duration > 0) e.duration_ms = duration;
+    const auto fee = integer(item, "programFeeType");
+    e.requires_purchase = fee && *fee != 0 && !flag(item, "buyed");
+    if (const auto song = item.find("mainSong"); song != item.end()) {
+        if (const auto sid = id_of(*song)) e.audio_ref = ref_of("program:" + *id + ":" + *sid);
+    }
+    return e;
+}
+} // namespace
+
+std::optional<ProgramAudio> program_audio(std::string_view id) {
+    if (!id.starts_with("program:")) return std::nullopt;
+    id.remove_prefix(8);
+    const auto colon = id.find(':');
+    if (colon == id.npos || !is_valid_song_id(id.substr(0, colon)) || !is_valid_song_id(id.substr(colon + 1)))
+        return std::nullopt;
+    return ProgramAudio{std::string{id.substr(0, colon)}, std::string{id.substr(colon + 1)}};
+}
+
+domain::Result<domain::Podcast> parse_podcast(std::string_view body, std::string_view id) {
+    auto parsed = parse_body(body);
+    if (!parsed) return parsed.error();
+    const auto p = parsed->find("data");
+    if (p == parsed->end() || p->is_null()) return Error{ErrorCode::not_found, "podcast not found", false, {}};
+    if (id_of(*p) != id) return protocol_error("podcast id mismatch");
+    return podcast_of(*p);
+}
+
+domain::Result<domain::Episode> parse_episode(std::string_view body, std::string_view id) {
+    auto parsed = parse_body(body);
+    if (!parsed) return parsed.error();
+    const auto p = parsed->find("program");
+    if (p == parsed->end() || p->is_null()) return Error{ErrorCode::not_found, "episode not found", false, {}};
+    if (id_of(*p) != id) return protocol_error("episode id mismatch");
+    return episode_of(*p);
+}
+
+domain::Result<Episodes> parse_episodes(std::string_view body, std::string_view radio) {
+    auto parsed = parse_body(body);
+    if (!parsed) return parsed.error();
+    const auto list = parsed->find("programs");
+    if (list == parsed->end() || !list->is_array() || list->size() > 100 ||
+        !parsed->contains("more") || !(*parsed)["more"].is_boolean()) return protocol_error("invalid episode array or paging flag");
+    Episodes result;
+    result.total = count_of(*parsed, "count");
+    result.more = flag(*parsed, "more");
+    for (const auto& item : *list) {
+        auto e = episode_of(item);
+        if (!e) return e.error();
+        if (e->podcast.id.value() != radio) return protocol_error("episode belongs to another radio");
+        result.items.push_back(std::move(*e));
+    }
+    if (result.more && result.items.empty()) return protocol_error("empty episode page claims more");
+    return result;
+}
+
 domain::Result<Link> parse_link(std::string_view link) {
     const auto refuse = [] { return Error::validation("link", "is not a supported netease link"); };
     // The web player keeps its route in the fragment: /#/song?id=N.
@@ -626,12 +836,15 @@ domain::Result<Link> parse_link(std::string_view link) {
         path.remove_suffix(1);
     }
     if (path.starts_with("/m/")) path.remove_prefix(2);
-    for (const auto* kind : {"song", "playlist", "album"}) {
+    for (const auto* kind : {"song", "playlist", "album", "artist", "djradio", "program"}) {
         const auto prefix = "/" + std::string{kind};
         std::optional<std::string_view> id;
         if (path == prefix) id = query_value(url->target(), "id");
         else if (path.starts_with(prefix + "/")) id = path.substr(prefix.size() + 1);
-        if (id && is_valid_song_id(*id)) return Link{std::string{kind} == "song" ? "track" : kind, std::string{*id}};
+        if (id && is_valid_song_id(*id)) {
+            const std::string k{kind};
+            return Link{k == "song" ? "track" : k == "djradio" ? "podcast" : k == "program" ? "episode" : k, std::string{*id}};
+        }
     }
     return refuse();
 }

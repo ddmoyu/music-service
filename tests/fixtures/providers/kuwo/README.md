@@ -22,3 +22,5 @@
 | `chart-16-pn0-rn2.json`、`chart-missing.json` | `ksong.s`（encode=utf8），热歌榜与不存在的榜单 | 无需处理 |
 
 上游格式变化时重新录制并更新本表，不手工编造字段。
+
+0.1.5 的 `lyric-synthetic.bin`、`lyric-invalid-encoding.bin`、`lyric-oversized.bin` 是人工构造的压缩协议数据，分别覆盖中文解码、非法 GB18030 和超过 2 MiB 解压上限；不含真实歌词或账号数据。

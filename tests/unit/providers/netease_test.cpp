@@ -182,7 +182,7 @@ TEST_CASE("netease requests are weapi POSTs to music.163.com", "[providers][nete
     CHECK(protocol::song_url("5257138", "standard", anonymous).body ==
           weapi_body_of(R"({"ids":"[5257138]","level":"standard","encodeType":"flac","csrf_token":""})"));
     CHECK(protocol::lyric("5257138", anonymous).body ==
-          weapi_body_of(R"({"id":5257138,"lv":-1,"kv":-1,"tv":-1,"csrf_token":""})"));
+          weapi_body_of(R"({"id":5257138,"lv":-1,"kv":-1,"tv":-1,"rv":-1,"yv":-1,"csrf_token":""})"));
 
     // A signed-in call carries the csrf token in the URL and the payload.
     const auto signed_in = protocol::account({std::string{fixed_key}, "abc123"});
@@ -449,7 +449,7 @@ TEST_CASE("netease collection links preserve the entity kind", "[netease][collec
     }
     CHECK(unwrap(parsing::parse_link("https://music.163.com/#/album?id=1")).kind == "album");
     CHECK(unwrap(parsing::parse_link("https://music.163.com/song?id=1")).kind == "track");
-    for (const auto* url : {"https://music.163.com.evil/playlist?id=1", "https://163cn.tv/abc", "https://music.163.com/artist?id=1",
+    for (const auto* url : {"https://music.163.com.evil/playlist?id=1", "https://163cn.tv/abc", "https://music.163.com/artist?id=01",
                            "https://music.163.com/album?id=01", "https://music.163.com/album/1/extra",
                            "https://music.163.com:9999/album?id=1", "https://music.163.com/album?id=1&id=2"}) CHECK_FALSE(parsing::parse_link(url));
 }
@@ -600,13 +600,15 @@ TEST_CASE("netease audio: standard and access evidence", "[providers][netease]")
     CHECK_FALSE(audio.shareable);
     CHECK(upstream->calls.back().request.secret_headers.empty()); // anonymous: no cookie
 
-    // Hi-Res is not independently verified: strict fails without a call.
+    // Hi-Res 请求必须实际发送；上游降级不能满足 strict。
     const auto calls = upstream->calls.size();
+    upstream->respond(200, fixture("url-5257138-standard.json"));
     const auto strict_high =
-        resolver->resolve_audio(anonymous_context(), test::track("netease", "5257138"),
-                                {domain::Quality::hires, domain::QualityPolicy::strict, false});
-    CHECK(strict_high.error().code == ErrorCode::quality_unavailable);
-    CHECK(upstream->calls.size() == calls);
+        unwrap(resolver->resolve_audio(anonymous_context(), test::track("netease", "5257138"),
+                                {domain::Quality::hires, domain::QualityPolicy::strict, false}));
+    CHECK(domain::evaluate_resource({domain::Quality::hires, domain::QualityPolicy::strict, false},
+        {strict_high.actual_quality, strict_high.completeness}).error().code == ErrorCode::quality_unavailable);
+    CHECK(upstream->calls.size() == calls + 1);
 
     upstream->respond(200, fixture("url-210049-vip.json"));
     const auto vip = resolver->resolve_audio(anonymous_context(), test::track("netease", "210049"), {});
@@ -683,7 +685,8 @@ TEST_CASE("the netease bundle registers its capabilities and cookie profile", "[
     }
     for (const auto* key : {"search_tracks", "track_detail", "parse_links", "lyrics", "resolve_audio",
                             "verify_credentials", "categories", "category_playlists", "recommend_playlists",
-                            "charts", "chart_detail", "chart_tracks"}) {
+                            "charts", "chart_detail", "chart_tracks", "user_playlists", "artist_tracks",
+                            "podcast_detail", "podcast_episodes", "episode_detail"}) {
         INFO(key);
         CHECK(std::find(keys.begin(), keys.end(), key) != keys.end());
     }
@@ -692,7 +695,7 @@ TEST_CASE("the netease bundle registers its capabilities and cookie profile", "[
     CHECK(view.auth_methods[0].kind == ports::CredentialKind::cookie);
     CHECK(view.auth_methods[0].supports_verify);
     CHECK(bundle.quality_hints == std::vector<domain::Quality>{domain::Quality::standard, domain::Quality::high,
-                                                            domain::Quality::lossless});
+                                                            domain::Quality::lossless, domain::Quality::hires});
 }
 
 TEST_CASE("netease C quality uses response evidence and shared downgrade policy", "[providers][netease][stage-c]") {
@@ -921,6 +924,211 @@ TEST_CASE("netease C charts use a validated playlist with bounded ordered track 
         CHECK(upstream->calls[i].request.operation == "chart_tracks");
         CHECK(upstream->calls[i].request.secret_headers.empty());
     }
+}
+
+TEST_CASE("netease D personal playlists require the bound account and retain relationships", "[providers][netease][stage-d]") {
+    FixedKey key;
+    auto upstream = std::make_shared<FakeUpstream>();
+    auto port = unwrap(netease::make_user_playlists(setup(upstream)));
+    CHECK(port->user_playlists(anonymous_context(), {2, {}}).error().code == ErrorCode::credentials_required);
+    CHECK(upstream->calls.empty());
+    const auto account = R"({"code":200,"account":{"id":99},"profile":{"userId":123}})";
+    const auto lists = R"({"code":200,"playlist":[{"id":1,"name":"mine","creator":{"userId":123}},
+        {"id":2,"name":"saved","creator":{"userId":456},"subscribed":true}],"more":true})";
+    upstream->respond(200, account);
+    upstream->respond(200, lists);
+    auto first = unwrap(port->user_playlists(user_context("MUSIC_U=test; __csrf=abc"), {2, {}}));
+    CHECK(first.page.items[0].relationship == "created");
+    CHECK(first.page.items[1].relationship == "subscribed");
+    CHECK(first.next_cursor == "2");
+    CHECK_FALSE(first.page.page.total);
+    CHECK(upstream->calls[1].request.body == weapi_body_of(R"({"uid":123,"offset":0,"limit":2,"includeVideo":false,"csrf_token":"abc"})"));
+    for (const auto& call : upstream->calls) {
+        CHECK(call.request.operation == "user_playlists");
+        CHECK(header(call.request.secret_headers, "Cookie"));
+        CHECK_FALSE(header(call.request.headers, "Cookie"));
+    }
+    upstream->respond(200, account);
+    upstream->respond(200, R"({"code":200,"playlist":[],"more":false})");
+    CHECK_FALSE(unwrap(port->user_playlists(user_context("MUSIC_U=test"), {2, first.next_cursor})).next_cursor);
+    upstream->respond(200, R"({"code":200,"account":null})");
+    CHECK(port->user_playlists(user_context("MUSIC_U=expired"), {2, {}}).error().code == ErrorCode::credentials_required);
+}
+
+TEST_CASE("netease D private playlists send bound cookies to both catalog requests", "[providers][netease][stage-d]") {
+    FixedKey key;
+    auto upstream = std::make_shared<FakeUpstream>();
+    auto port = unwrap(netease::make_playlist_tracks(setup(upstream)));
+    auto p = nlohmann::json::parse(fixture("collection-playlist.json"));
+    p["playlist"]["trackIds"] = {{{"id", 5257138}}};
+    upstream->respond(200, p.dump());
+    upstream->respond(200, fixture("detail-5257138.json"));
+    const auto id = std::to_string(p["playlist"]["id"].get<std::int64_t>());
+    CHECK(unwrap(port->list(user_context("MUSIC_U=private"), test::track("netease", id), {1, {}})).page.items.size() == 1);
+    REQUIRE(upstream->calls.size() == 2);
+    for (const auto& call : upstream->calls) CHECK(header(call.request.secret_headers, "Cookie"));
+}
+
+TEST_CASE("netease D artist hot list uses stable IDs and rejects changed pagination", "[providers][netease][stage-d]") {
+    FixedKey key;
+    auto upstream = std::make_shared<FakeUpstream>();
+    auto port = unwrap(netease::make_artist_tracks(setup(upstream)));
+    nlohmann::json data{{"code",200},{"artist",{{"id",1},{"name","same name"}}},
+        {"hotSongs", {{{"id",10},{"name","one"}},{{"id",11},{"name","two"}}}}};
+    upstream->respond(200, data.dump());
+    auto first = unwrap(port->list(anonymous_context(), test::track("netease","1"), {1,{}}));
+    REQUIRE(first.next_cursor);
+    CHECK_FALSE(first.page.page.total);
+    CHECK(first.page.page.listed_total == 2);
+    upstream->respond(200, data.dump());
+    CHECK(unwrap(port->list(anonymous_context(), test::track("netease","1"), {1,first.next_cursor})).page.items.front().ref.id.value() == "11");
+    CHECK_FALSE(parsing::parse_artist_tracks(data.dump(), "2")); // same display name is irrelevant
+    data["hotSongs"][1]["id"] = 12;
+    upstream->respond(200, data.dump());
+    CHECK(port->list(anonymous_context(), test::track("netease","1"), {1,first.next_cursor}).error().code == ErrorCode::cursor_expired);
+    data["hotSongs"] = nlohmann::json::array();
+    CHECK(unwrap(parsing::parse_artist_tracks(data.dump(),"1")).tracks.empty());
+    CHECK(unwrap(parsing::parse_link("https://music.163.com/#/artist?id=1")).kind == "artist");
+}
+
+TEST_CASE("netease D YRC preserves independent variants and bounds malformed timing", "[providers][netease][stage-d]") {
+    nlohmann::json data{{"code",200},{"lrc",{{"lyric","[00:01.00]原文"}}},
+        {"tlyric",{{"lyric","[00:05.00]translation"}}},{"romalrc",{{"lyric","[00:01.25]romaji"}}},
+        {"yrc",{{"lyric","[1000,1000](1000,400,0)原(1400,600,0)文\n[9223372036854775807,1](0,1,0)bad\n[-1,1](0,1,0)bad"}}}};
+    auto lyrics = unwrap(parsing::parse_lyrics(data.dump()));
+    REQUIRE(lyrics.karaoke.size() == 1);
+    CHECK(lyrics.karaoke[0].words[1].start_ms == 1400);
+    CHECK(lyrics.karaoke[0].words[1].duration_ms == 600);
+    CHECK(lyrics.karaoke[0].words[1].text == "文");
+    CHECK(lyrics.lrc == "[00:01.00]原文");
+    CHECK(lyrics.translated_lrc == "[00:05.00]translation");
+    CHECK(lyrics.romanized_lrc == "[00:01.25]romaji");
+    CHECK(lyrics.warnings == std::vector<std::string>{"YRC_MALFORMED"});
+    data.erase("lrc");
+    CHECK_FALSE(unwrap(parsing::parse_lyrics(data.dump())).unavailable);
+    data["yrc"]["lyric"] = "[1000,10](1000,20,0)outside";
+    CHECK(unwrap(parsing::parse_lyrics(data.dump())).karaoke.empty());
+    data["yrc"]["lyric"] = 123;
+    CHECK_FALSE(unwrap(parsing::parse_lyrics(data.dump())).warnings.empty());
+    data["yrc"]["lyric"] = " \t\n[1000,20](1000,20,0)one\n[1000,20](1000,20,0)two";
+    auto repeated = unwrap(parsing::parse_lyrics(data.dump()));
+    CHECK(repeated.karaoke.size() == 2);
+    CHECK(repeated.warnings.empty());
+}
+
+namespace {
+nlohmann::json program_fixture(int id = 100) {
+    return {{"id",id},{"name","episode"},{"mainSong",{{"id",200}}},{"duration",150000},
+        {"radio",{{"id",300},{"name","podcast"},{"programCount",230}}},
+        {"dj",{{"nickname","presenter"}}},{"programFeeType",0},{"buyed",false}};
+}
+}
+
+TEST_CASE("netease D episodes page beyond 100 without confusing radio program and audio IDs", "[providers][netease][stage-d]") {
+    FixedKey key;
+    auto upstream = std::make_shared<FakeUpstream>();
+    auto port = unwrap(netease::make_podcast_episodes(setup(upstream)));
+    std::optional<std::string> cursor;
+    std::vector<std::string> ids;
+    for (int at = 0; at < 230; at += 100) {
+        auto items = nlohmann::json::array();
+        for (int i = at; i < std::min(at+100,230); ++i) items.push_back(program_fixture(100+i));
+        upstream->respond(200, nlohmann::json{{"code",200},{"programs",items},{"count",230},{"more",at+100<230}}.dump());
+        auto page = unwrap(port->list(anonymous_context(), test::track("netease","300"), {100,cursor}));
+        CHECK(page.page.page.total == 230);
+        for (const auto& e : page.page.items) ids.push_back(e.ref.id.value());
+        cursor = page.next_cursor;
+    }
+    CHECK(ids.size() == 230);
+    CHECK(ids.front() == "100"); CHECK(ids.back() == "329"); CHECK_FALSE(cursor);
+    CHECK(upstream->calls.back().request.body == weapi_body_of(R"({"radioId":300,"offset":200,"limit":100,"asc":true,"csrf_token":""})"));
+    auto e = unwrap(parsing::parse_episode(nlohmann::json{{"code",200},{"program",program_fixture()}}.dump(), "100"));
+    CHECK(e.presenter == "presenter"); CHECK(e.audio_ref->id.value() == "program:100:200");
+    CHECK(unwrap(parsing::parse_link("https://music.163.com/#/djradio?id=300")).kind == "podcast");
+    CHECK(unwrap(parsing::parse_link("https://music.163.com/program?id=100")).kind == "episode");
+    upstream->respond(200, nlohmann::json{{"code",200},{"programs",{program_fixture()}},{"count",10001},{"more",true}}.dump());
+    CHECK(port->list(anonymous_context(), test::track("netease","300"), {1,"9999"}).error().code == ErrorCode::upstream_failed);
+    CHECK(parsing::parse_episodes(R"({"code":200,"programs":[]})", "300").error().code == ErrorCode::upstream_failed);
+}
+
+TEST_CASE("netease D program resolver validates mapping purchase preview and metadata", "[providers][netease][stage-d]") {
+    FixedKey key;
+    auto upstream = std::make_shared<FakeUpstream>();
+    auto resolver = unwrap(netease::make_resolver(setup(upstream)));
+    auto details = unwrap(netease::make_detail(setup(upstream)));
+    const auto ref = test::track("netease","program:100:200");
+    const auto program = nlohmann::json{{"code",200},{"program",program_fixture()}};
+    upstream->respond(200, program.dump());
+    auto detail = unwrap(details->track_detail(anonymous_context(),ref));
+    CHECK(detail.artists.empty()); CHECK(detail.album->title == "podcast"); CHECK(detail.ref == ref);
+    auto paid = program; paid["program"]["programFeeType"] = 1;
+    upstream->respond(200, paid.dump());
+    CHECK(resolver->resolve_audio(anonymous_context(),ref,{}).error().code == ErrorCode::credentials_required);
+    auto replaced = program; replaced["program"]["mainSong"]["id"] = 201;
+    upstream->respond(200, replaced.dump());
+    CHECK(resolver->resolve_audio(anonymous_context(),ref,{}).error().code == ErrorCode::not_found);
+    for (bool preview : {false,true}) {
+        upstream->respond(200,program.dump());
+        auto entry = nlohmann::json{{"id",200},{"code",200},
+            {"url","https://m1.music.126.net/test.mp3"},{"type","mp3"},{"br",128000},{"level",nullptr},
+            {"time",0},{"freeTrialInfo",preview ? nlohmann::json{{"start",0},{"end",30}} : nlohmann::json{}}};
+        auto audio = nlohmann::json{{"code",200},{"data",nlohmann::json::array({entry})}};
+        upstream->respond(200,audio.dump());
+        auto result = unwrap(resolver->resolve_audio(user_context("MUSIC_U=bound"),ref,{}));
+        CHECK(result.actual_track == ref);
+        CHECK(result.completeness == (preview ? domain::Completeness::preview : domain::Completeness::full));
+        CHECK(std::none_of(result.request_headers.begin(), result.request_headers.end(), [](const auto& h) { return h.first == "Cookie"; }));
+        CHECK(upstream->calls.back().request.body == weapi_body_of(R"({"ids":"[200]","level":"standard","encodeType":"flac","csrf_token":""})"));
+    }
+}
+
+TEST_CASE("netease artist search and albums validate identity pagination and protocol", "[netease][stage-e]") {
+    FixedKey key;
+    auto upstream = std::make_shared<FakeUpstream>();
+    auto search = unwrap(netease::make_artist_search(setup(upstream)));
+    auto albums = unwrap(netease::make_artist_albums(setup(upstream)));
+    const auto first = R"({"code":200,"result":{"artistCount":2,"artists":[{"id":1,"name":"歌手甲"}]}})";
+    upstream->respond(200, first);
+    auto found = unwrap(search->search(anonymous_context(), {"歌手",1,{}}));
+    REQUIRE(found.page.items.size() == 1);
+    CHECK(found.page.items[0].name == "歌手甲");
+    CHECK(found.next_cursor == "1");
+    CHECK(upstream->calls.back().request.body == weapi_body_of(
+        R"({"s":"歌手","type":100,"offset":0,"limit":1,"total":true,"csrf_token":""})"));
+    upstream->respond(200, R"({"code":200,"result":{"artistCount":2,"artists":[{"id":2,"name":"歌手乙"}]}})");
+    CHECK_FALSE(unwrap(search->search(anonymous_context(), {"歌手",1,found.next_cursor})).next_cursor);
+    const auto page = R"({"code":200,"artist":{"id":1},"hotAlbums":[{"id":10,"name":"专辑"}],"more":true})";
+    upstream->respond(200, page);
+    auto list = unwrap(albums->list(anonymous_context(), test::track("netease","1"), {1,{}}));
+    CHECK(list.next_cursor == "1");
+    CHECK_FALSE(list.page.page.total); // artist.albumSize 可能包含未在本目录公开的项目。
+    CHECK(list.page.items[0].ref.id.value() == "10");
+    CHECK(upstream->calls.back().request.url.find("artist/albums/1") != std::string::npos);
+    for (const auto* bad : {R"({"code":200,"artist":{"id":2},"hotAlbums":[],"more":false})",
+        R"({"code":200,"artist":{"id":1},"hotAlbums":[]})",
+        R"({"code":200,"artist":{"id":1},"hotAlbums":[],"more":true})"}) {
+        CHECK_FALSE(parsing::parse_artist_albums(bad,"1"));
+    }
+    CHECK_FALSE(search->search(anonymous_context(), {"x",51,{}}));
+    CHECK_FALSE(albums->list(anonymous_context(), test::track("netease","1"), {1,"10001"}));
+    upstream->respond(200,page);
+    CHECK_FALSE(albums->list(anonymous_context(), test::track("netease","1"), {1,"9999"}));
+}
+
+TEST_CASE("netease hires requires explicit upstream level and preserves account downgrades", "[netease][stage-e]") {
+    FixedKey key;
+    auto upstream = std::make_shared<FakeUpstream>();
+    auto resolver = unwrap(netease::make_resolver(setup(upstream)));
+    auto data = nlohmann::json::parse(fixture("url-5257138-standard.json"));
+    data["data"][0]["level"] = "hires";
+    data["data"][0]["type"] = "flac";
+    data["data"][0]["br"] = 2500000;
+    upstream->respond(200, data.dump());
+    auto result = unwrap(resolver->resolve_audio(user_context("MUSIC_U=synthetic"), test::track("netease","5257138"),
+        {domain::Quality::hires,domain::QualityPolicy::strict,false}));
+    CHECK(result.actual_quality == domain::Quality::hires);
+    CHECK(upstream->calls.back().request.body == weapi_body_of(
+        R"({"ids":"[5257138]","level":"hires","encodeType":"flac","csrf_token":""})"));
 }
 
 TEST_CASE("netease live protocol probe", "[providers][online-netease]") {

@@ -14,10 +14,11 @@ class FakeApi:
         self.items = [{"ref": item} for item in json.loads(fixture.read_text())["items"]]
         self.accepted, self.sizes, self.reads = {}, [], 0
         self.lose_response = False
+        self.kind = "playlist"
 
     def json(self, method, path, body=None, headers=None, expect=None):
         if path == "/api/v1/links/parse":
-            data = {"matched": True, "kind": "playlist", "ref": {"source": "both", "id": "230"}}
+            data = {"matched": True, "kind": self.kind, "ref": {"source": "both", "id": "230"}}
         elif method == "GET":
             self.reads += 1
             query = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
@@ -54,6 +55,22 @@ class ClientTest(unittest.TestCase):
         self.assertTrue(report["enumeration_finished"])
         actual = [item["track"] for batch in self.api.accepted.values() for item in batch["items"]]
         self.assertEqual(actual, [i["ref"] for i in self.api.items])
+
+    def test_podcast_selection_uses_audio_reference_and_skips_unavailable(self):
+        self.api.kind = "podcast"
+        for i, item in enumerate(self.api.items):
+            item["audio_ref"] = {"source": "both", "id": f"program:{i+1}:audio{i+1}"}
+        self.api.items[0]["audio_ref"] = None
+        self.api.items[1]["requires_purchase"] = True
+        report = collect(self.api, "test", self.path, ids={"1", "2", "3"})
+        self.assertEqual(report["unavailable_items"], 2)
+        self.assertEqual(report["submitted_items"], 1)
+        self.assertEqual(report["batches"][0]["request"]["items"][0]["track"]["id"], "program:3:audio3")
+
+    def test_artist_hot_list_bound(self):
+        self.api.kind = "artist"
+        with self.assertRaises(ValueError):
+            collect(self.api, "test", self.path, page_size=51)
 
     def test_selection_retains_order_and_duplicates(self):
         self.api.items.insert(2, self.api.items[0])

@@ -153,6 +153,18 @@ TEST_CASE("rename refuses to replace an existing target", "[filesystem][files]")
     REQUIRE(rename_no_replace(from, to));
     CHECK(*read_file(to, 64) == "new");
     CHECK_FALSE(fs::exists(from));
+    const auto bundle = dir.path() / "work-bundle";
+    const auto published = dir.path() / "song.files";
+    REQUIRE(create_directories(bundle, Privacy::normal));
+    REQUIRE(create_directories(published, Privacy::normal));
+    REQUIRE(write_new_file(bundle / "song.mp3", "audio", Privacy::normal));
+    REQUIRE(write_new_file(bundle / "song.lrc", "lyrics", Privacy::normal));
+    REQUIRE_FALSE(rename_no_replace(bundle, published)); // even an empty target is not replaced
+    REQUIRE(fs::remove(published));
+    REQUIRE(rename_no_replace(bundle, published));
+    CHECK(*read_file(published / "song.mp3", 64) == "audio");
+    CHECK(*read_file(published / "song.lrc", 64) == "lyrics");
+    CHECK_FALSE(fs::exists(bundle));
 }
 
 TEST_CASE("private directories are created with parents", "[filesystem][files]") {

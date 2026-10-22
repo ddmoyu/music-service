@@ -61,6 +61,18 @@ struct DiscoveryPlaylists {
     bool more{};
 };
 domain::Result<DiscoveryPlaylists> parse_discovery_playlists(std::string_view body, bool recommendations);
+domain::Result<DiscoveryPlaylists> parse_user_playlists(std::string_view body, std::string_view uid);
+struct ArtistTracks { std::vector<domain::Track> tracks; std::string revision; };
+domain::Result<ArtistTracks> parse_artist_tracks(std::string_view body, std::string_view id);
+domain::Result<CollectionSearch<domain::Artist>> parse_artist_search(std::string_view body);
+struct ArtistAlbums { std::vector<domain::Album> items; bool more{}; };
+domain::Result<ArtistAlbums> parse_artist_albums(std::string_view body, std::string_view id);
+domain::Result<domain::Podcast> parse_podcast(std::string_view body, std::string_view id);
+domain::Result<domain::Episode> parse_episode(std::string_view body, std::string_view id);
+struct Episodes { std::vector<domain::Episode> items; std::optional<std::uint64_t> total; bool more{}; };
+domain::Result<Episodes> parse_episodes(std::string_view body, std::string_view radio);
+struct ProgramAudio { std::string program_id; std::string song_id; };
+std::optional<ProgramAudio> program_audio(std::string_view id);
 struct Link { std::string kind; std::string id; };
 domain::Result<Link> parse_link(std::string_view link);
 
@@ -90,6 +102,7 @@ struct Account {
     bool signed_in{false};
     std::optional<std::string> nickname;
     std::optional<std::int64_t> vip_type; // 0 none; other values are the platform's membership kinds
+    std::optional<std::string> user_id; // internal only; never exposed as account metadata
 };
 
 // w/nuser/account/get. account null is a cookie that belongs to nobody.

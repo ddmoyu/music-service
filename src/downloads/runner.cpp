@@ -1,4 +1,5 @@
 #include "downloads/runner.hpp"
+#include "downloads/sidecars.hpp"
 
 #include "application/transport/http_rules.hpp"
 #include "application/transport/upstream_client.hpp"
@@ -578,10 +579,12 @@ std::optional<RunReport> Execution::choose_name() {
     const bool named = checkpoint_ && checkpoint_->track == key && !checkpoint_->name.empty();
     const auto policy = intent_->metadata_policy();
     name_ = named ? checkpoint_->name : s_.file_name(actual_->source.value() + "-" + actual_->id.value());
-    if (intent_->product().output && policy == domain::MetadataPolicy::skip) {
+    const bool sidecars = intent_->product().output &&
+        (intent_->product().output->export_lyrics || intent_->product().output->export_cover);
+    if (intent_->product().output && policy == domain::MetadataPolicy::skip && !sidecars) {
         metadata_fields_ = {{"cover", "disabled"}, {"lyrics", "disabled"}};
     }
-    if (named && policy == domain::MetadataPolicy::skip) {
+    if (named && policy == domain::MetadataPolicy::skip && !sidecars) {
         return std::nullopt;
     }
     auto detail = s_.providers->track_detail(actual_->source.value());
@@ -612,7 +615,7 @@ std::optional<RunReport> Execution::choose_name() {
     metadata_ = std::move(metadata);
     if (intent_->product().output) {
         if (!named) name_ = output_name(*track, *intent_->product().output, s_.file_name);
-        if (policy != domain::MetadataPolicy::skip) {
+        if (policy != domain::MetadataPolicy::skip || sidecars) {
             metadata_->track_number = track->track_number;
             metadata_->track_total = track->track_total;
             return collect_metadata(*track);
@@ -631,12 +634,16 @@ std::optional<RunReport> Execution::metadata_error(std::string field, const Erro
         return on_error(cause, resume_stage());
     }
     metadata_fields_.emplace_back(field, "fetch_failed");
-    if (intent_->metadata_policy() == domain::MetadataPolicy::required) {
+    const auto& output = intent_->product().output;
+    const bool embed = !output || (field == "cover" ? output->embed_cover : output->embed_lyrics);
+    const bool required_sidecar = output && output->sidecars_required &&
+        (field == "cover" ? output->export_cover : output->export_lyrics);
+    if ((intent_->metadata_policy() == domain::MetadataPolicy::required && embed) || required_sidecar) {
         return on_error(error(ErrorCode::metadata_failed, "required metadata could not be obtained",
                               cause.retryable || cause.code == ErrorCode::deadline_exceeded,
                               field, std::string{domain::to_string(cause.code)}), resume_stage());
     }
-    metadata_warnings_.push_back("METADATA_PARTIAL");
+    if (embed && intent_->metadata_policy() != domain::MetadataPolicy::skip) metadata_warnings_.push_back("METADATA_PARTIAL");
     metadata_warnings_.push_back(field == "cover" ? "COVER_FETCH_FAILED" : "LYRICS_FETCH_FAILED");
     return std::nullopt;
 }
@@ -648,7 +655,7 @@ std::optional<RunReport> Execution::collect_metadata(const domain::Track& track)
                                                 std::chrono::seconds{options.metadata_timeout_seconds}),
                                         context().stop};
     };
-    if (!options.embed_cover) {
+    if ((!options.embed_cover || intent_->metadata_policy() == domain::MetadataPolicy::skip) && !options.export_cover) {
         metadata_fields_.emplace_back("cover", "disabled");
     } else if (!track.artwork) {
         metadata_fields_.emplace_back("cover", "unavailable");
@@ -683,7 +690,7 @@ std::optional<RunReport> Execution::collect_metadata(const domain::Track& track)
             }
         }
     }
-    if (!options.embed_lyrics) {
+    if ((!options.embed_lyrics || intent_->metadata_policy() == domain::MetadataPolicy::skip) && !options.export_lyrics) {
         metadata_fields_.emplace_back("lyrics", "disabled");
     } else {
         auto port = s_.providers->capability<ports::ILyrics>(actual_->source.value());
@@ -697,7 +704,11 @@ std::optional<RunReport> Execution::collect_metadata(const domain::Track& track)
             if (!lyrics) {
                 if (auto ended = metadata_error("lyrics", lyrics.error())) return ended;
             } else {
-                auto text = embedded_lyrics(*lyrics);
+                metadata_warnings_.insert(metadata_warnings_.end(), lyrics->warnings.begin(), lyrics->warnings.end());
+                if (!lyrics->unavailable && ((options.lyrics_variant == "verbatim" && lyrics->karaoke.empty()) ||
+                    (options.lyrics_variant == "romanized" && !lyrics->romanized_lrc)))
+                    metadata_warnings_.push_back("LYRICS_VARIANT_FALLBACK");
+                auto text = embedded_lyrics(*lyrics, options.lyrics_variant);
                 if (text.empty()) metadata_fields_.emplace_back("lyrics", "unavailable");
                 else metadata_->lyrics = std::move(text);
             }
@@ -1063,6 +1074,10 @@ std::optional<RunReport> Execution::process() {
          audio_->completeness},
         intent_->metadata_policy(),
         metadata_};
+    if (request.metadata && intent_->product().output) {
+        if (!intent_->product().output->embed_cover) request.metadata->cover.reset();
+        if (!intent_->product().output->embed_lyrics) request.metadata->lyrics.reset();
+    }
     const auto ctx = context();
 
     domain::Result<ports::ProcessingReport> report{
@@ -1093,6 +1108,9 @@ std::optional<RunReport> Execution::process() {
         }
         return on_error(e, TaskStatus::downloading);
     }
+    auto measured_quality = verified_quality(audio_->actual_quality, report->facts);
+    if (!measured_quality) return fail(measured_quality.error());
+    audio_->actual_quality = *measured_quality;
     auto verdict = domain::evaluate_resource(intent_->requirement(), {audio_->actual_quality, report->completeness});
     if (!verdict) {
         return fail(verdict.error()); // e.g. measured to be a preview
@@ -1135,6 +1153,11 @@ RunReport Execution::publish() {
     const auto output = report_->output.filename().u8string();
     FinalizeRequest request{task_, s_.work_files->relative_path(task_.task_id, std::string{output.begin(), output.end()}),
                             name_ + "." + report_->facts.container, *report_, properties.dump()};
+    if (intent_->product().output) {
+        auto prepared = prepare_sidecars(request, *s_.work_files, metadata_.value_or(ports::TrackMetadata{}),
+                                         *intent_->product().output, context());
+        if (!prepared) return on_error(prepared.error(), TaskStatus::downloading);
+    }
     auto published = s_.finalizer->publish(request);
     if (published) {
         task_ = published->task;

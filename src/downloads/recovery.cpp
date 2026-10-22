@@ -45,7 +45,9 @@ Recovery::Recovery(std::shared_ptr<ports::PublicationRepository> publications,
 
 RecoveredTask Recovery::give_up(const ports::TaskRecord& task, const std::string& reason,
                                 const domain::Error& cause, bool may_retry) {
-    const bool retry = may_retry && task.attempt < options_.max_attempts;
+    auto intent = tasks_->get_intent(task.task_id);
+    const bool local_import = intent && intent->original_track().source.value() == "local_ncm";
+    const bool retry = may_retry && !local_import && task.attempt < options_.max_attempts;
     auto abandoned = publications_->abandon(task.task_id, task.execution_id.value_or(""), task.version,
                                             retry ? TaskStatus::waiting_retry : TaskStatus::failed,
                                             finalization_error_json(reason, cause));
@@ -63,11 +65,11 @@ RecoveredTask Recovery::recover(const ports::PendingPublication& pending) {
         return give_up(task, "evidence_unreadable", evidence.error(), false);
     }
 
-    auto target = files_->fingerprint(intent.destination_id, intent.reserved_path);
+    auto target = publication_matches(*files_, intent.destination_id, intent.reserved_path, *evidence);
     if (!target && offline(target.error())) {
         return {task.task_id, RecoveryAction::deferred, "destination_unavailable"};
     }
-    if (target && target.value() && *target.value() == evidence->file) {
+    if (target && target.value()) {
         // Renamed before the crash (or linked, with the work file still present).
         auto committed = commit_publication(*publications_, *files_, pending, evidence.value());
         if (!committed) {
@@ -76,11 +78,11 @@ RecoveredTask Recovery::recover(const ports::PendingPublication& pending) {
         return {task.task_id, RecoveryAction::completed, "target_matches"};
     }
 
-    auto work = files_->fingerprint(intent.destination_id, intent.workspace_file);
+    auto work = publication_matches(*files_, intent.destination_id, intent.workspace_file, *evidence);
     if (!work && offline(work.error())) {
         return {task.task_id, RecoveryAction::deferred, "destination_unavailable"};
     }
-    if (!work || !work.value() || *work.value() != evidence->file) {
+    if (!work || !work.value()) {
         // Nothing intact to publish; a half-rewritten work file is not trusted.
         const domain::Error cause{ErrorCode::file_system, "no intact product", false, {}};
         return give_up(task, "product_missing", cause, true);

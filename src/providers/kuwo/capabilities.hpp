@@ -16,8 +16,8 @@ namespace ports = application::ports;
 domain::Result<std::shared_ptr<ports::ITrackSearch>> make_search(const ports::ProviderSetup& setup);
 domain::Result<std::shared_ptr<ports::ITrackDetail>> make_detail(const ports::ProviderSetup& setup);
 domain::Result<std::shared_ptr<ports::ILinkParser>> make_link_parser(const ports::ProviderSetup& setup);
-// Standard quality (128 kbit/s MP3) only. Evidence follows the upstream answer: a
-// substitute clip is reported as a preview, never as the song.
+domain::Result<std::shared_ptr<ports::ILyrics>> make_lyrics(const ports::ProviderSetup& setup);
+// standard／high MP3 与 lossless FLAC；替代 rid 的片段始终报告 preview。
 domain::Result<std::shared_ptr<ports::IAssetResolver>> make_resolver(const ports::ProviderSetup& setup);
 
 } // namespace music_service::providers::kuwo

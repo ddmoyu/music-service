@@ -46,6 +46,13 @@ application::ports::HttpRequest category_playlists(std::string_view category, st
     std::uint32_t limit, const Call& call);
 application::ports::HttpRequest recommendations(const Call& call);
 application::ports::HttpRequest charts(const Call& call);
+application::ports::HttpRequest user_playlists(std::string_view uid, std::uint32_t offset, std::uint32_t limit, const Call& call);
+application::ports::HttpRequest artist_tracks(std::string_view id, const Call& call);
+application::ports::HttpRequest search_artists(std::string_view keyword, std::uint32_t offset, std::uint32_t limit, const Call& call);
+application::ports::HttpRequest artist_albums(std::string_view id, std::uint32_t offset, std::uint32_t limit, const Call& call);
+application::ports::HttpRequest podcast(std::string_view id, const Call& call);
+application::ports::HttpRequest episodes(std::string_view id, std::uint32_t offset, std::uint32_t limit, const Call& call);
+application::ports::HttpRequest episode(std::string_view id, const Call& call);
 
 // song/enhance/player/url/v1 at the given level ("standard" is 128 kbit/s).
 application::ports::HttpRequest song_url(std::string_view id, std::string_view level, const Call& call);

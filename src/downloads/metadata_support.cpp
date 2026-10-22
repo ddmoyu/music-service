@@ -2,8 +2,26 @@
 
 #include <cstdint>
 #include <algorithm>
+#include <charconv>
+#include <format>
+#include <map>
 
 namespace music_service::downloads {
+
+domain::Result<std::optional<domain::Quality>> verified_quality(std::optional<domain::Quality> declared,
+    const application::ports::AudioFacts& facts) {
+    if (!declared) return declared;
+    std::optional<domain::Quality> measured;
+    if (facts.container == "flac") {
+        measured = facts.sample_rate_hz.value_or(0) >= 48000 && facts.bits_per_sample.value_or(0) >= 24
+            ? domain::Quality::hires : domain::Quality::lossless;
+    } else if (facts.container == "mp3" && facts.bitrate_bps) {
+        measured = *facts.bitrate_bps >= 300000 ? domain::Quality::high : domain::Quality::standard;
+    }
+    if (!measured && *declared >= domain::Quality::high)
+        return domain::Error{domain::ErrorCode::quality_unavailable, "audio bytes do not verify the declared quality", false, {}};
+    return measured && *measured < *declared ? measured : declared;
+}
 namespace {
 std::uint32_t be32(std::string_view bytes, std::size_t at) {
     std::uint32_t value = 0;
@@ -71,13 +89,52 @@ std::optional<std::string> picture_mime(std::string_view b) {
     return {};
 }
 
-std::string embedded_lyrics(const domain::TrackLyrics& lyrics) {
-    if (lyrics.unavailable || !lyrics.lrc) return {};
-    std::string text = *lyrics.lrc;
-    // 保留两份时间轴，翻译独立成段，不按行号强行合并。
-    if (lyrics.translated_lrc && !lyrics.translated_lrc->empty()) {
-        text += "\n\n[translation]\n" + *lyrics.translated_lrc;
+std::string embedded_lyrics(const domain::TrackLyrics& lyrics, std::string_view variant) {
+    if (lyrics.unavailable) return {};
+    const auto stamp = [](std::int64_t ms) { return std::format("{:02}:{:02}.{:03}", ms / 60000, ms / 1000 % 60, ms % 1000); };
+    std::string text, translation = lyrics.translated_lrc.value_or("");
+    if ((variant == "verbatim" || !lyrics.lrc) && !lyrics.karaoke.empty() &&
+        !(variant == "romanized" && lyrics.romanized_lrc)) {
+        // Match translation timestamps exactly, never pair lines by index or invent word timing.
+        std::multimap<std::int64_t, std::string> timed;
+        std::string unmatched;
+        std::string_view rest{translation};
+        while (!rest.empty()) {
+            const auto nl = rest.find('\n');
+            const auto line = rest.substr(0, nl);
+            rest = nl == rest.npos ? std::string_view{} : rest.substr(nl + 1);
+            const auto colon = line.find(':'), dot = line.find('.'), close = line.find(']');
+            std::int64_t minute{}, second{}, fraction{};
+            const auto number = [](std::string_view s, std::int64_t& n) {
+                auto [end, ec] = std::from_chars(s.data(), s.data() + s.size(), n);
+                return !s.empty() && ec == std::errc{} && end == s.data() + s.size() && n >= 0;
+            };
+            bool valid = line.starts_with('[') && colon < dot && dot < close && close < line.size() &&
+                close - dot <= 4 && number(line.substr(1, colon - 1), minute) && minute < 1440 &&
+                number(line.substr(colon + 1, dot - colon - 1), second) && second < 60 &&
+                number(line.substr(dot + 1, close - dot - 1), fraction);
+            if (valid) {
+                for (std::size_t digits = close - dot - 1; digits < 3; ++digits) fraction *= 10;
+                timed.emplace(minute * 60000 + second * 1000 + fraction, std::string{line});
+            } else if (!line.empty()) unmatched += std::string{line} + "\n";
+        }
+        for (const auto& line : lyrics.karaoke) {
+            text += "[" + stamp(line.start_ms) + "]";
+            for (const auto& word : line.words) text += "<" + stamp(word.start_ms) + ">" + word.text;
+            text += "<" + stamp(line.start_ms + line.duration_ms) + ">\n";
+            const auto range = timed.equal_range(line.start_ms);
+            for (auto i = range.first; i != range.second; ++i) text += i->second + "\n";
+            timed.erase(range.first, range.second);
+        }
+        for (const auto& [time, line] : timed) { (void)time; unmatched += line + "\n"; }
+        translation = std::move(unmatched);
+    } else if (variant == "romanized" && lyrics.romanized_lrc) {
+        text = *lyrics.romanized_lrc;
+    } else {
+        text = lyrics.lrc.value_or("");
     }
+    if (!translation.empty()) text += "\n\n[translation]\n" + translation;
+    if (text.empty() && lyrics.romanized_lrc) text = *lyrics.romanized_lrc;
     return text;
 }
 

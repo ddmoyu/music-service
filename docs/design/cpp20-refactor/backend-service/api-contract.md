@@ -215,7 +215,11 @@ features 反映实际构建及运行配置；客户端不能把该示例的布�
 | `GET /api/v1/charts/detail` | source、id | Chart 信息 |
 | `GET /api/v1/charts/tracks` | source、id | limit=50（1～100）、cursor |
 | `GET /api/v1/recommendations/playlists` | source | limit=20（1～50）、cursor（平台支持时） |
-| `GET /api/v1/lyrics` | source、id | context_ref；lrc、translated_lrc、karaoke、warnings |
+| `GET /api/v1/lyrics` | source、id | context_ref；lrc、translated_lrc、romanized_lrc、karaoke、warnings |
+| `GET /api/v1/me/playlists` | source | limit=20（1～50）、cursor；当前默认账号的自建／收藏歌单 |
+| `GET /api/v1/podcasts/detail` | source、id | 电台详情 |
+| `GET /api/v1/podcasts/episodes` | source、id | limit=50（1～100）、cursor；节目列表 |
+| `GET /api/v1/episodes/detail` | source、id | 节目详情及 audio_ref |
 | `POST /api/v1/links/parse` | body.text | 解析实体类型与 ref；分享文本最多 4096 字符 |
 
 曲目／歌单列表 data 为 `{items, page}`，详情 data 为实体对象。集合的 track_count 允许未知，返回的当前页大小不等于集合完整大小。不支持某种详情时明确返回 CAPABILITY_UNSUPPORTED，而不是用搜索结果伪装完整详情。
@@ -226,11 +230,17 @@ features 反映实际构建及运行配置；客户端不能把该示例的布�
 
 网易云 `resolve_audio` 的 high 映射 exhigh，lossless 映射 FLAC；实际返回档位可能受账号、歌曲或购买权限制。strict 降级返回 QUALITY_UNAVAILABLE；allow_lower 返回实际档位及 QUALITY_LOWERED。Hi-Res 未注册支持，严格请求拒绝，允许降级时最多尝试 lossless；试听仍按 allow_preview 判定。凭据验证 301／403／account=null 为 invalid，不因会员标记承诺每首歌可下载。
 
-links/parse 返回 `{matched, kind, ref}`，kind 为 track／playlist／album／artist。未匹配时 200 matched=false；支持的短链可有限展开，目标仍须属于平台允许范围，不实现任意地址跳转代理。
+links/parse 返回 `{matched, kind, ref}`，kind 为 track／playlist／album／artist／podcast／episode。未匹配时 200 matched=false；支持的短链可有限展开，目标仍须属于平台允许范围，不实现任意地址跳转代理。
 
 v1 为单实体解析契约；文本含多个不同的已识别实体时返回 400 VALIDATION_FAILED，要求缩小输入范围。重复出现同一实体不视为多个目标。
 
 歌词无内容时返回 200，lrc 为 null 并说明 unavailable；平台不支持歌词属于 422，与一首歌恰好没有歌词不同。karaoke 使用结构化行／词时间，明确毫秒单位，不要求前端识别私有加密格式。
+
+0.1.4：个人目录能力为 `user_playlists`，只读取当前 principal 绑定的默认凭据，不接受任意上游 uid。无账号返回 CREDENTIALS_REQUIRED；`relationship` 为 created／subscribed，公共歌单中该字段可为 null。默认账号切换、凭据更新和撤销沿用现有缓存／游标失效规则。网易云 `artist_tracks` 每页上限为 50，只表示热门曲目，`total=null`、`listed_total<=50`，并非全部作品。
+
+播客响应字段见 [实体模型](data-models.md#歌曲与集合)。节目 `ref.id` 不能直接提交下载；使用 `audio_ref`（可能为 null），通过现有 `/downloads` 或 `/download-batches` 提交。网易云内部引用形如 `program:节目ID:音频ID`，客户端将其视为不透明 ID；服务重新校验节目音频映射。已知未购买节目 `requires_purchase=true`；该字段为 false 不保证音源可用，最后由解析／下载检查权限、试听与文件内容。主播在 `presenter` 独立展示，下载标题为节目标题、album 为电台名，artist 留空。当前仅声明节目 standard 品质，不提供订阅同步、追更或转码。
+
+原文、翻译和罗马音时间轴独立保留，`romanized_lrc` 缺失为 null。YRC 损坏部分跳过并返回 `YRC_MALFORMED`，不影响有效 LRC。服务配置 `downloads.output.lyrics_variant` 控制标签写入，缺少选定变体时回退原文，任务的 `result.warnings` 返回 `LYRICS_VARIANT_FALLBACK`。
 
 ## 8. 音源解析、探测与换源候选
 
@@ -462,6 +472,10 @@ direct URL 是可能携带限时授权参数的敏感能力，仅在此显式访
 
 媒体 CORS 允许配置的前端来源与 Range／条件请求，暴露 Content-Length、Content-Range、Accept-Ranges、ETag、Content-Disposition。票据不得写入 access log、错误回显或 Referer 外发；票据位于 URL 路径中，经反向代理部署时须在代理日志中同样脱敏，见[部署约定](configuration-and-deployment.md#运行与集成方式)。远程访问必须经 HTTPS，规则见配置 security。
 
+0.1.6：文件描述增加 `artifacts`，旧单文件为 null；有侧文件时列出每项 `kind`（audio／lyrics／cover）、`name`（单个文件名）、`container`、`size_bytes`、`sha256`。`GET/HEAD /media/v1/files/{file_id}?part=lyrics` 或 `?part=cover` 使用同一 files:read Bearer；文件票据 URL 可加同样参数，票据授权整个产物集合。省略 part 或 part=audio 仍返回音频。未知 part 为 400，未生成的部分为 404；曾发布但后来缺失／改写的任意部分使整组返回 410 FILE_MISSING。每个部分有独立内容 ETag、MIME、长度与 Range；origin asset 及其票据不接受 part。只允许一个 part 查询参数，不接受文件路径。
+
+本地 `import-ncm` 生成普通持久任务与文件资产，origin 为 local_ncm；它不是新增在线平台。导入命令仅在服务停止后执行；本地任务在发布前异常中断时状态 failed、错误 LOCAL_IMPORT_INTERRUPTED，应重新执行本地命令，不走下载 API 的平台重试。
+
 ### 10.5 Range、缓存与错误
 
 - 文件完整 GET 返回 200、Content-Type、已知 Content-Length、强 ETag 与 Accept-Ranges；HEAD 返回完整资源元信息且无 body，忽略 Range。
@@ -531,3 +545,12 @@ paused 只停止领取新任务，已有任务继续；取消活动任务仍走�
 0.1.1 兼容扩展：歌曲的 `artwork` 在有可信平台封面时为 HTTPS URL；`track_number`、`track_total` 为正整数或 null。下载结果新增 `metadata_fields`，取值见 [任务模型](data-models.md#下载任务)。客户端忽略不认识的可选字段即可；下载请求无需增加参数。输出默认配置由服务端 `downloads.output` 控制，并在受理时固定；单任务仍可使用 `metadata_policy`。
 
 重点验证 JSON 示例可解析、单位一致、逐源分页不重复第一页、所有错误有 request_id、下载提交可靠持久化、同键幂等、批次创建原子性、资源 owner 隔离、状态转换竞争、媒体票据范围与到期、Range／If-Range／304／416，以及关闭前端后任务生命周期独立。
+
+
+### 0.1.5 已接入能力补充
+
+- 酷我新增 `lyrics`，quality_hints 为 standard／high／lossless。
+- 网易云新增 `search_artists` 与 `artist_albums`，复用既有歌手搜索／专辑接口；歌手热门列表仍最多 50 首。quality_hints 增加 hires，表示可请求，并不保证账号可获得。
+- 5sing 的 `TrackLyrics.lrc` 可为上游纯文本；空白内容才标 unavailable。
+- 下载发布前按实测音频复核实际档位；Hi-Res 需平台明确声明且文件至少 24 bit／48 kHz。降级遵守 strict／allow_lower；新产品版本避免复用未经该检查的旧文件，旧幂等请求保持原结果。
+- 网易云扫码登录未实现。

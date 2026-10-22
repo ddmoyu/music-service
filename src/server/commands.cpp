@@ -13,6 +13,8 @@
 #include "infrastructure/storage/sqlite/connection.hpp"
 #include "providers/registry/builtin_bundles.hpp"
 #include "server/instance.hpp"
+#include "server/ncm_import.hpp"
+#include <thread>
 
 #ifdef _MSC_VER
 #pragma warning(push)
@@ -95,6 +97,7 @@ void usage(std::ostream& out) {
            "  token issue --principal ID --scopes A,B --output FILE\n"
            "  token list --principal ID | token revoke --id ID\n"
            "  backup --output FILE                   consistent database copy, also while serving\n"
+           "  import-ncm --input FILE --principal ID --destination ID [--metadata-policy best_effort|required|skip]\n"
            "  restore --input FILE                   replace the database (service stopped)\n";
 }
 
@@ -527,14 +530,14 @@ int run_command(const std::vector<std::string>& args, Console console, CommandHo
     }
     const bool known = command == "serve" || command == "check-config" || command == "init" ||
                        command == "healthcheck" || command == "principal" || command == "token" ||
-                       command == "backup" || command == "restore";
+                       command == "backup" || command == "restore" || command == "import-ncm";
     if (!known) {
         console.err << "error: unknown command " << command << '\n';
         usage(console.err);
         return exit_usage;
     }
     if (command != "principal" && command != "token") {
-        const bool takes_options = command == "backup" || command == "restore";
+        const bool takes_options = command == "backup" || command == "restore" || command == "import-ncm";
         if (parsed->words.size() > 1 || (!takes_options && !parsed->options.empty())) {
             usage(console.err);
             return exit_usage;
@@ -565,6 +568,35 @@ int run_command(const std::vector<std::string>& args, Console console, CommandHo
     }
     if (command == "restore") {
         return cmd_restore(*parsed, config.value(), console);
+    }
+    if (command == "import-ncm") {
+        if (!only_options(*parsed, {"input", "principal", "destination", "metadata-policy"}, console)) return exit_usage;
+        const auto input = required(*parsed, "input", console);
+        const auto principal = required(*parsed, "principal", console);
+        const auto destination = required(*parsed, "destination", console);
+        if (!input || !principal || !destination) return exit_usage;
+        const auto option = parsed->options.find("metadata-policy");
+        const auto text = option == parsed->options.end() ? std::string{"best_effort"} : option->second;
+        if (text != "best_effort" && text != "required" && text != "skip") {
+            console.err << "error: metadata-policy must be best_effort, required or skip\n"; return exit_usage;
+        }
+        const auto policy = text == "skip" ? domain::MetadataPolicy::skip :
+            (text == "required" ? domain::MetadataPolicy::required : domain::MetadataPolicy::best_effort);
+        std::stop_source cancel;
+        if (hooks.should_stop && hooks.should_stop()) cancel.request_stop();
+        std::jthread monitor([&](std::stop_token stop) {
+            while (!stop.stop_requested()) {
+                if (hooks.should_stop && hooks.should_stop()) { cancel.request_stop(); break; }
+                std::this_thread::sleep_for(std::chrono::milliseconds{20});
+            }
+        });
+        auto result = import_ncm(*config, path_from_utf8(*input), *principal, *destination, policy,
+            {std::chrono::steady_clock::now() + config->download_timeouts.attempt, cancel.get_token()});
+        if (!result) { print_error(console, result.error()); return exit_failed; }
+        console.out << nlohmann::json{{"task_id", result->task.task_id}, {"file_id", result->asset.id},
+            {"status", "completed"}, {"relative_path", result->asset.relative_path},
+            {"result", nlohmann::json::parse(*result->task.result_json)}}.dump() << '\n';
+        return exit_ok;
     }
     return cmd_serve(config.value(), console, std::move(hooks));
 }

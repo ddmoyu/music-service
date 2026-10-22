@@ -289,6 +289,28 @@ domain::Result<DirectoryResult<domain::Category>> CatalogService::categories(con
                                           through<ports::ICategories>(*providers_, source, &ports::ICategories::categories));
 }
 
+domain::Result<ListResult<domain::Playlist>> CatalogService::user_playlists(const ListRequest& request) {
+    auto r = request;
+    r.id.clear();
+    return list_of<domain::Playlist>(r, ports::capability::user_playlists, 50, 20, false,
+        [call = through<ports::IUserPlaylists>(*providers_, r.source, &ports::IUserPlaylists::user_playlists)](
+            const ports::ProviderContext& c, const domain::PlatformRef&, const ports::ListQuery& q) { return call(c, q); });
+}
+domain::Result<EntityResult<domain::Podcast>> CatalogService::podcast_detail(
+    const std::string& owner, const std::string& source, const std::string& id) {
+    return detail_of<domain::Podcast>(owner, source, id, ports::capability::podcast_detail,
+        through<ports::PodcastDetail>(*providers_, source, &ports::PodcastDetail::detail));
+}
+domain::Result<EntityResult<domain::Episode>> CatalogService::episode_detail(
+    const std::string& owner, const std::string& source, const std::string& id) {
+    return detail_of<domain::Episode>(owner, source, id, ports::capability::episode_detail,
+        through<ports::EpisodeDetail>(*providers_, source, &ports::EpisodeDetail::detail));
+}
+domain::Result<ListResult<domain::Episode>> CatalogService::podcast_episodes(const ListRequest& r) {
+    return list_of<domain::Episode>(r, ports::capability::podcast_episodes, 100, 50, true,
+        through<ports::PodcastEpisodes>(*providers_, r.source, &ports::PodcastEpisodes::list));
+}
+
 domain::Result<DirectoryResult<domain::Chart>> CatalogService::charts(const std::string& owner_id,
                                                                       const std::string& source) {
     return directory_of<domain::Chart>(owner_id, source, ports::capability::charts,

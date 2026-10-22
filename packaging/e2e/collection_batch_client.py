@@ -54,9 +54,11 @@ def collect(api, link, path, *, ids=None, page_size=50, batch_size=100,
     if Path(path).exists():
         raise Failure("manifest already exists; use --replay or a new path")
     parsed = api.json("POST", "/api/v1/links/parse", {"text": link})[2]
-    if not parsed["matched"] or parsed["kind"] not in ("playlist", "album"):
-        raise Failure("link is not a supported playlist or album")
+    if not parsed["matched"] or parsed["kind"] not in ("playlist", "album", "artist", "podcast", "episode"):
+        raise Failure("link is not a supported collection or episode")
     ref, kind = parsed["ref"], parsed["kind"]
+    if kind == "artist" and page_size > 50:
+        raise ValueError("artist hot songs page size must be at most 50")
     report = {"collection": {"kind": kind, "ref": ref}, "pages_read": 0,
               "fetched_items": 0, "submitted_items": 0, "unavailable_items": 0,
               "enumeration_finished": False, "stop_reason": None, "batches": []}
@@ -77,7 +79,12 @@ def collect(api, link, path, *, ids=None, page_size=50, batch_size=100,
         query = {**ref, "limit": page_size}
         if cursor:
             query["cursor"] = cursor
-        data = api.json("GET", f"/api/v1/{kind}s/tracks?" + urllib.parse.urlencode(query))[2]
+        if kind == "episode":
+            episode = api.json("GET", "/api/v1/episodes/detail?" + urllib.parse.urlencode(ref))[2]
+            data = {"items": [episode], "page": {"has_more": False}}
+        else:
+            route = "podcasts/episodes" if kind == "podcast" else f"{kind}s/tracks"
+            data = api.json("GET", f"/api/v1/{route}?" + urllib.parse.urlencode(query))[2]
         report["pages_read"] += 1
         report["fetched_items"] += len(data["items"])
         page = data["page"]
@@ -86,7 +93,11 @@ def collect(api, link, path, *, ids=None, page_size=50, batch_size=100,
         for item in data["items"]:
             if ids is not None and item["ref"]["id"] not in ids:
                 continue
-            pending.append({"track": item["ref"]})
+            audio = item.get("audio_ref") if kind in ("podcast", "episode") else item["ref"]
+            if audio is None or item.get("requires_purchase"):
+                report["unavailable_items"] += 1
+                continue
+            pending.append({"track": audio})
             at_bound = report["submitted_items"] + len(pending) >= max_items
             if len(pending) == batch_size or at_bound:
                 stopped = flush()

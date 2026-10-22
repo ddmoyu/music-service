@@ -549,7 +549,7 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
             }
             return false;
         },
-        config.download_limits.max_batch_items, state->scheduler, config.downloads.output);
+        config.download_limits.max_batch_items, state->scheduler, config.downloads.output, state->files);
 
     if (config.events.enabled) {
         state->events = std::make_unique<event_server::EventServer>(

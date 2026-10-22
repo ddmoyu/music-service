@@ -72,17 +72,45 @@
 | --- | --- |
 | `name_format` | `title` 歌名；`artist_title` 歌手 - 歌名；`title_artist` 歌名 - 歌手 |
 | `folder_layout` | `flat` 平铺；`artist` 歌手目录；`artist_album` 歌手／专辑目录 |
-| `embed_cover`、`embed_lyrics` | 布尔值，独立控制嵌入；任务 `metadata_policy=skip` 时均不获取、不写入 |
+| `embed_cover`、`embed_lyrics` | 布尔值，独立控制嵌入；任务 `metadata_policy=skip` 时不嵌入；若开启侧文件，仍独立获取对应内容 |
+| `export_lyrics`、`export_cover` | 默认 false；独立导出 `.lrc`、JPEG／PNG，与嵌入选项互不依赖 |
+| `sidecars_required` | 默认 false；开启后所有已选择的侧文件必须可用，否则任务失败；至少启用一项导出 |
+| `lyrics_variant` | 默认 `lrc`；`verbatim` 优先逐字时间；`romanized` 优先罗马音；缺失回退可用原文并返回警告 |
 | `cover_max_bytes` | 1～33554432 字节，默认 8 MiB；仅接收通过结构检查的 JPEG／PNG，不缩放、不转码 |
 | `metadata_timeout_seconds` | 1～60 秒；每次封面或歌词获取预算，且不超过当前任务／尝试剩余期限 |
 
 缺失歌手／专辑目录分别用 `未知歌手`／`未知专辑`；歌名为空时用 source-id。每段限制为 60 个 UTF-8 字节并清理路径字符与 Windows 保留名，防止元数据带入目录跳转；同名文件沿用原有编号避让，不覆盖。目标根仍需满足系统路径约束。
 
-网易云从详情取得可信封面及专辑曲号；总曲数无可信字段则不写。5sing 使用已有歌词能力，不把上传者头像当作歌曲封面；酷我尚无歌词能力。本阶段不为缺失封面另发专辑查询。
+网易云从详情取得可信封面及专辑曲号；总曲数无可信字段则不写。5sing 使用已有歌词能力，不把上传者头像当作歌曲封面；酷我已接入原生行级歌词。本阶段不为缺失封面另发专辑查询。
 
 `best_effort`（默认）下获取失败允许发布音频，结果列出 `METADATA_PARTIAL` 与 `COVER_FETCH_FAILED`／`LYRICS_FETCH_FAILED`；`required` 下获取／写入失败按错误可重试性重试或失败，失败不发布。平台没有提供可信封面、明确没有歌词或不支持歌词时不会使 required 失败。原文 LRC 保持不变，译文以空行、`[translation]`、译文 LRC 独立附加，不按行强行合并。
 
-这些选项全部进入持久下载意图和复用指纹。升级前的 schema 1 任务保留旧命名及基础标签行为；新任务使用 schema 2 快照。幂等重放仍返回最初任务；新配置下的新请求不会复用旧配置产物。旧版程序不支持 schema 2 意图，回退程序前应恢复对应旧版备份。
+这些选项全部进入持久下载意图和复用指纹。schema 1 任务保留旧命名及基础标签行为，schema 2 的歌词变体固定为 lrc；非默认歌词变体使用 schema 3 快照。开启侧文件使用 schema 4；新程序兼容 schema 1～4，默认未导出且 lrc 不改变已有 schema 2 指纹。幂等重放仍返回最初任务，新的歌词选择不复用另一变体产物。旧程序不识别新 schema，回退时恢复对应版本的一致备份。
+
+verbatim 生成增强 LRC：`[mm:ss.mmm]<mm:ss.mmm>词…<行结束时间>`。译文按精确毫秒时间匹配到行后，不按行号拼接；不能匹配的译文原样保留在独立 `[translation]` 段。romanized 使用其自身时间轴，译文仍独立。未提供所选变体时返回 `LYRICS_VARIANT_FALLBACK`；原始 LRC、翻译、罗马音和结构化逐字仍可从歌词 API 分别读取。
+
+## NCM 本地导入与侧文件
+
+```powershell
+# 停止使用同一 data_dir 的服务后执行；输入文件保留。
+music-service --config config.json import-ncm --input "D:\音乐\歌曲.ncm" --principal prn_local --destination dst_default
+```
+
+`--metadata-policy` 支持 `best_effort`（默认）、`required`、`skip`，沿用音频标签语义。目标目录必须配置给该 principal 且接收新任务。NCM 只读指定本地文件，不扫描目录、不提供远程任意路径接口。输入上限取 `downloads.max_file_bytes` 与 2 GiB 的较小值，MP3／FLAC 按解密后的内容识别；不转码、不提升品质。文件内已有歌曲／专辑／歌手／歌词／封面用于标签和侧文件，不额外联网补全本地文件元数据。
+
+开启导出示例：
+
+```json
+{"downloads":{"output":{"export_lyrics":true,"export_cover":true,"sidecars_required":false,"embed_lyrics":false,"embed_cover":false}}}
+```
+
+开启任一导出后，产物为 `歌手 - 歌名.files/歌手 - 歌名.mp3`（或 FLAC），同目录放同基名 `.lrc` 和 `.jpg`／`.png`；目录重名自动编号，整组不覆盖已有内容。未开启时仍保持原单音频路径。纯文本歌词保留原文写入 `.lrc`，不伪造时间戳；`lyrics_variant` 对下载侧文件同样有效。
+
+可选内容不可用时记录 `metadata_fields.lyrics_file/cover_file=unavailable` 与 `SIDECAR_*_UNAVAILABLE`；写盘或发布错误使任务失败，不发布不完整文件。required 侧文件不可用则报 METADATA_FAILED。所有文件先在工作目录中写入、刷新，保存完整清单后单次移动目录，最后事务提交资产；恢复逐个核验 SHA-256。读文件与复用也检查整组文件，任一删除或改写即视为残缺。服务当前没有删除成品 HTTP 接口；本机删除时以 `.files` 目录为单位，历史保留。
+
+命令输出 task_id、file_id 与相对路径。相同输入、账号归属、目标和选项下的完整成品可复用；Ctrl+C 在发布前取消，进程异常退出后尚未发布的本地任务标为 LOCAL_IMPORT_INTERRUPTED，需重新执行命令。已经保存发布意图的任务由启动恢复继续完成。离线命令期间没有在线 SSE，但启动后的 HTTP 任务及文件查询可见其结果。
+
+文件描述的 `artifacts` 列出实际产物；在 `/media/v1/files/{file_id}` 或该文件的票据 URL 上加 `?part=lyrics`／`?part=cover` 取回侧文件，省略时返回音频。权限、范围请求和票据撤销沿用整个文件资产的规则；音源 asset 票据不接受 part。
 
 ## 启动前的组合检查
 

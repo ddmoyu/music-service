@@ -489,6 +489,70 @@ TEST_CASE("new downloads fetch bounded metadata and publish readable tags in fol
     CHECK(lyric_calls == 1);
 }
 
+TEST_CASE("sidecar fetch and tag requirements are independent", "[runner][sidecars]") {
+    Runs r{"sidecar-policy"};
+    r.output = domain::OutputOptions{};
+    r.output->embed_cover = r.output->embed_lyrics = false;
+    r.output->export_lyrics = true;
+    r.metadata_policy = domain::MetadataPolicy::required;
+    bool required_side = false;
+    SECTION("optional lyric failure does not fail required basic tags") {}
+    SECTION("required lyric failure fails even when tags are skipped") {
+        required_side = true;
+        r.output->sidecars_required = true;
+        r.metadata_policy = domain::MetadataPolicy::skip;
+    }
+    r.script->lyrics = [](const ports::ProviderContext&) -> domain::Result<domain::TrackLyrics> {
+        return domain::Error{ErrorCode::upstream_failed, "lyric unavailable now", false, {}};
+    };
+    const auto id = r.create();
+    CHECK(r.run_next().outcome == (required_side ? RunOutcome::failed : RunOutcome::completed));
+    const auto task = r.get(id);
+    if (required_side) {
+        CHECK_FALSE(task.result_json);
+        CHECK(json::parse(*task.error_json)["code"] == "METADATA_FAILED");
+    } else {
+        const auto result = json::parse(*task.result_json);
+        CHECK(result["metadata_status"] == "complete");
+        CHECK(result["metadata_fields"]["lyrics_file"] == "unavailable");
+    }
+}
+
+TEST_CASE("sidecar-only downloads keep audio bytes and reject corrupt bundles for reuse", "[runner][sidecars]") {
+    using application::tasks::DownloadService;
+    using application::tasks::DownloadRequest;
+    Runs r{"sidecar-reuse"};
+    domain::OutputOptions options;
+    options.embed_cover = options.embed_lyrics = false;
+    options.export_lyrics = options.sidecars_required = true;
+    r.script->lyrics = [](const ports::ProviderContext&) -> domain::Result<domain::TrackLyrics> {
+        return domain::TrackLyrics{"[00:00]test", {}, {}, false, {}};
+    };
+    DownloadService service{r.tasks, r.registry, r.credentials,
+        {{"dst_main", infrastructure::filesystem::path_to_utf8(r.root), {r.owner}, true}}, {},
+        [&](const std::string&, const std::string& path, std::uint64_t size) {
+            const auto file = r.root / infrastructure::filesystem::path_from_utf8(path);
+            return fs::is_regular_file(file) && fs::file_size(file) == size;
+        }, 100, {}, options, r.files};
+    DownloadRequest request{track("src", "1")};
+    request.metadata_policy = domain::MetadataPolicy::skip;
+    const auto first = unwrap(service.create(r.owner, request, "sidecar-create-0001", "same"));
+    CHECK(r.run_next().outcome == RunOutcome::completed);
+    const auto task = r.get(first.view.task.task_id);
+    const auto file_id = json::parse(*task.result_json)["file_id"].get<std::string>();
+    const auto asset = unwrap(r.publications->get_asset(r.owner, file_id));
+    auto path = r.root / infrastructure::filesystem::path_from_utf8(asset.relative_path);
+    CHECK(read_bytes(path) == r.audio);
+    const auto intact = unwrap(service.create(r.owner, request, "sidecar-create-0002", "same"));
+    CHECK(intact.reused);
+    CHECK(intact.view.task.task_id == first.view.task.task_id);
+    path.replace_extension(".lrc");
+    { std::ofstream out{path, std::ios::binary | std::ios::trunc}; out << "[00:00]FAIL"; }
+    const auto corrupt = unwrap(service.create(r.owner, request, "sidecar-create-0003", "same"));
+    CHECK_FALSE(corrupt.reused);
+    CHECK(corrupt.view.task.task_id != first.view.task.task_id);
+}
+
 TEST_CASE("metadata acquisition failures obey policy and never masquerade as absence", "[runner][output]") {
     Runs r{"metadata-errors"};
     r.output = domain::OutputOptions{};
@@ -988,6 +1052,34 @@ TEST_CASE("an expired address changing quality discards the partial file", "[dow
     CHECK_FALSE(header(last, "If-Range"));
     CHECK(without_id3v2(read_bytes(r.root / "detail.mp3")) == r.audio);
     CHECK(json::parse(r.get(id).execution_json.value())["actual_quality"] == "standard");
+}
+
+TEST_CASE("byte evidence downgrade obeys strict and allow_lower before publication", "[downloads][runner][stage-e]") {
+    for (const auto policy : {domain::QualityPolicy::strict, domain::QualityPolicy::allow_lower}) {
+        Runs r{policy == domain::QualityPolicy::strict ? "bytes-strict" : "bytes-lower"};
+        r.script->answer = [](const domain::TrackRef& t) -> domain::Result<ports::ResolvedAudio> {
+            return ports::ResolvedAudio{t, domain::Quality::high, domain::Completeness::full, "mp3", 320000,
+                "https://cdn.test/wrong-bitrate.mp3", {}, {}, 30010, ports::ProcessingPlan{}};
+        }; // 实际传输仍是测试服务器生成的 128 kbps MP3。
+        domain::DownloadIntentDraft draft{r.owner, track("src","1"), domain::SameSource{},
+            {anonymous(r.owner,"src")}, {domain::Quality::high, policy, false},
+            domain::MetadataPolicy::best_effort, {"dst_main","d1","n1","m1"}};
+        const auto created = unwrap(r.tasks->create({unwrap(domain::NormalizedDownloadIntent::normalize(std::move(draft))),
+            "byte-quality-test", "h", false}));
+        const auto result = r.run_next();
+        const auto task = r.get(created.task.task_id);
+        if (policy == domain::QualityPolicy::strict) {
+            CHECK(result.outcome == RunOutcome::failed);
+            CHECK(json::parse(*task.error_json)["code"] == "QUALITY_UNAVAILABLE");
+            CHECK_FALSE(fs::exists(r.root / "detail.mp3"));
+        } else {
+            CHECK(result.outcome == RunOutcome::completed);
+            const auto execution = json::parse(*task.execution_json);
+            CHECK(execution["actual_quality"] == "standard");
+            CHECK(std::find(execution["warnings"].begin(), execution["warnings"].end(), "QUALITY_LOWERED") != execution["warnings"].end());
+            CHECK(without_id3v2(read_bytes(r.root / "detail.mp3")) == r.audio);
+        }
+    }
 }
 
 TEST_CASE("Retry-After moves the next attempt later, within its cap", "[downloads][runner]") {

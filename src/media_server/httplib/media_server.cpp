@@ -451,13 +451,13 @@ struct MediaServer::Impl {
         return std::nullopt;
     }
 
-    bool refuse_query(const httplib::Request& req, httplib::Response& res) {
+    bool refuse_query(const httplib::Request& req, httplib::Response& res, bool allow_part = false) {
         if (stopping) {
             send_error(res, {503, "SERVICE_BUSY", "the media service is stopping", true, {}},
                        res.get_header_value("X-Request-Id"));
             return true;
         }
-        if (!req.params.empty()) {
+        if (!req.params.empty() && !(allow_part && req.params.size() == 1 && req.has_param("part"))) {
             send_error(
                 res, {400, "VALIDATION_FAILED", "request is invalid", false, {{"query", "no parameters are accepted"}}},
                 res.get_header_value("X-Request-Id"));
@@ -467,7 +467,7 @@ struct MediaServer::Impl {
     }
 
     void file(const httplib::Request& req, httplib::Response& res) {
-        if (refuse_query(req, res)) {
+        if (refuse_query(req, res, true)) {
             return;
         }
         auto session = bearer(req, res, accounts::scope::files_read);
@@ -481,7 +481,7 @@ struct MediaServer::Impl {
     void ticket(const httplib::Request& req, httplib::Response& res) {
         res.set_header("Cache-Control", "no-store");
         res.set_header("Referrer-Policy", "no-referrer");
-        if (refuse_query(req, res)) {
+        if (refuse_query(req, res, true)) {
             return;
         }
         const auto request_id = res.get_header_value("X-Request-Id");
@@ -496,6 +496,7 @@ struct MediaServer::Impl {
             return;
         }
         if (grant->kind != media::TargetKind::file) {
+            if (refuse_query(req, res)) return;
             proxy(req, res, grant->owner_id, grant->target_id);
             return;
         }
@@ -705,7 +706,7 @@ struct MediaServer::Impl {
             send_error(res, from_domain(slot.error()), request_id);
             return;
         }
-        auto opened = services.files->open(owner, file_id);
+        auto opened = services.files->open(owner, file_id, req.has_param("part") ? req.get_param_value("part") : "audio");
         if (!opened) {
             send_error(res, from_domain(opened.error()), request_id);
             return;
