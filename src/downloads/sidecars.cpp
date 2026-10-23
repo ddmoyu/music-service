@@ -30,7 +30,7 @@ domain::Result<void> prepare_sidecars(FinalizeRequest& request, ports::WorkFiles
     std::string ext = "jpg";
     if (metadata.cover && metadata.cover->data.size() <= options.cover_max_bytes) {
         const auto mime = picture_mime(metadata.cover->data);
-        if (mime) { image = metadata.cover->data; ext = *mime == "image/png" ? "png" : "jpg"; }
+        if (mime) { image = metadata.cover->data; ext = *mime == "image/png" ? "png" : *mime == "image/webp" ? "webp" : "jpg"; }
     }
     if (auto r = add(options.export_cover, "cover", ext, image); !r) return r;
     auto audio = files.open(request.task.destination_id, request.task.task_id, "bundle/" + filename, 0);

@@ -42,22 +42,14 @@ bool is_timeout(const Error& error) {
 
 } // namespace
 
-struct CatalogService::CursorState {
-    std::string kind; // the search capability key: a playlist cursor never continues tracks
-    std::string source;
-    std::string query;
-    std::uint32_t limit{0};
-    std::string identity;                         // AuthIdentityKey::canonical()
-    std::optional<std::uint64_t> selection_version; // when the default selection was used
-    std::string implementation;
-    std::string provider_cursor;
-};
-
 CatalogService::CatalogService(CatalogLimits limits, std::shared_ptr<const ports::ProviderDirectory> providers,
                                std::shared_ptr<accounts::CredentialService> credentials,
                                std::shared_ptr<ports::WorkExecutor> executor, std::shared_ptr<const ports::Clock> clock,
                                std::function<std::string()> new_cursor_id)
-    : limits_(std::move(limits)), providers_(std::move(providers)), credentials_(std::move(credentials)),
+    : limits_([&] {
+          if (!limits.handle_budget) limits.handle_budget = std::make_shared<ports::MemoryBudget>(limits.handles.total_bytes);
+          return std::move(limits);
+      }()), providers_(std::move(providers)), credentials_(std::move(credentials)),
       executor_(std::move(executor)), clock_(std::move(clock)),
       entity_cache_(limits_.cache.catalog_entries, static_cast<std::size_t>(limits_.cache.catalog_bytes / 2),
                     limits_.cache.catalog_ttl),
@@ -66,11 +58,8 @@ CatalogService::CatalogService(CatalogLimits limits, std::shared_ptr<const ports
       cursors_(std::make_shared<HandleTable<CursorState>>(
           limits_.handles.cursors,
           std::max<std::size_t>(1, limits_.handles.cursors / std::max<std::size_t>(1, limits_.per_owner_handle_share)),
-          new_cursor_id)),
-      list_cursors_(std::make_shared<HandleTable<ListCursor>>(
-          limits_.handles.cursors,
-          std::max<std::size_t>(1, limits_.handles.cursors / std::max<std::size_t>(1, limits_.per_owner_handle_share)),
-          std::move(new_cursor_id))) {}
+          new_cursor_id, limits_.handle_budget, [](const CursorState& value) { return value.bytes(); })),
+      list_cursors_(cursors_) {}
 
 domain::Result<std::vector<std::string>> CatalogService::select_sources(const SearchRequest& request,
                                                                        std::string_view key) {
@@ -142,7 +131,7 @@ domain::Result<BasicSearchResult<Item>> CatalogService::search_of(const SearchRe
             return Error{ErrorCode::cursor_expired, "the cursor has expired", false, {}};
         }
         cursor = std::move(found->first);
-        if (cursor->kind != key || cursor->source != request.sources.front() || cursor->query != query ||
+        if (cursor->kind != key || cursor->source != request.sources.front() || cursor->subject != query ||
             cursor->limit != request.limit) {
             return Error{ErrorCode::cursor_mismatch, "the cursor belongs to another source or query", false, {}};
         }
@@ -190,8 +179,17 @@ domain::Result<BasicSearchResult<Item>> CatalogService::search_of(const SearchRe
             shared->waiting.pop_front();
             ++shared->running;
             auto submitted = executor_->submit([this, shared, source = sources[index], index, copy, cursor, per_source,
-                                                key, call, stop = shared->stop.get_token()](std::stop_token) {
-                auto outcome = run_search_of<Item>(copy, source, key, cursor, per_source, stop, call);
+                                                key, call, stop = shared->stop.get_token()](std::stop_token pool_stop) {
+                BasicSourceResult<Item> outcome;
+                outcome.source = source;
+                std::stop_source local_stop;
+                const std::stop_callback caller_stopped{stop, [&local_stop] { local_stop.request_stop(); }};
+                const std::stop_callback pool_stopped{pool_stop, [&local_stop] { local_stop.request_stop(); }};
+                try {
+                    outcome = run_search_of<Item>(copy, source, key, cursor, per_source, local_stop.get_token(), call);
+                } catch (...) {
+                    outcome.error = Error{ErrorCode::internal, "the source failed unexpectedly", false, {}};
+                }
                 const std::lock_guard lock{shared->mutex};
                 if (!shared->results[index]) {
                     shared->results[index] = std::move(outcome);
@@ -357,8 +355,10 @@ BasicSourceResult<Item> CatalogService::run_search_of(const SearchRequest& reque
             return fail(Error{ErrorCode::upstream_timeout, "the source did not answer in time", true, {}});
         }
         stored = std::move(fetched).value();
-        std::size_t bytes = 128;
-        for (const auto& item : std::any_cast<const ports::CatalogPage<Item>&>(*stored).page.items) {
+        const auto& cached_page = std::any_cast<const ports::CatalogPage<Item>&>(*stored);
+        // Private cursors may retain a bounded upstream window for stable pagination.
+        std::size_t bytes = 128 + cache_key.size() + cached_page.next_cursor.value_or("").size();
+        for (const auto& item : cached_page.page.items) {
             bytes += item_bytes(item);
         }
         entity_cache_.put(cache_key, stored, bytes, now);
@@ -370,7 +370,7 @@ BasicSourceResult<Item> CatalogService::run_search_of(const SearchRequest& reque
     }
     const auto* page = &std::any_cast<const ports::CatalogPage<Item>&>(*stored);
     SourcePage source_page{request.limit, page->page.page.returned, page->page.page.total, page->page.page.has_more,
-                           std::nullopt};
+                           std::nullopt, page->page.page.listed_total, page->page.page.unavailable_count};
     if (page->next_cursor) {
         auto handle = cursors_->put(request.owner_id,
                                     CursorState{std::string{key}, source, request.q, request.limit, identity,

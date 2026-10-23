@@ -57,6 +57,96 @@ std::ptrdiff_t index_of(const std::vector<std::string>& names, const std::string
 
 } // namespace
 
+TEST_CASE("saturated upstream requests leave health queries and cancellation responsive", "[stability][server]") {
+    class SlowSearch final : public ports::ITrackSearch {
+    public:
+        std::atomic<int> entered{0};
+        std::atomic<bool> release{false};
+        domain::Result<ports::TrackSearchPage> search_tracks(const ports::ProviderContext& context,
+                                                            const ports::TrackSearchQuery& query) override {
+            ++entered;
+            while (!release && !context.operation.stop.stop_requested() &&
+                   std::chrono::steady_clock::now() < context.operation.deadline) std::this_thread::sleep_for(2ms);
+            return MockSearch{source("cat")}.search_tracks(context, query);
+        }
+    };
+    Deployment d{"admission-control"};
+    d.config["control"]["workers"] = 3;
+    d.config["admission"] = {{"global", 8}, {"per_principal", 1}}; // effective global is workers - 1
+    d.write_config();
+    REQUIRE(d.run({"init"}).code == server::exit_ok);
+    const auto admin_token = d.read(d.bootstrap());
+    std::vector<std::string> tokens{admin_token};
+    for (int i = 0; i < 2; ++i) {
+        const auto made = d.run({"principal", "create", "--name", "reader" + std::to_string(i)});
+        REQUIRE(made.code == server::exit_ok);
+        const auto principal = made.out.substr(0, made.out.find('\t'));
+        const auto path = d.dir / "out" / ("token" + std::to_string(i));
+        REQUIRE(d.run({"token", "issue", "--principal", principal, "--scopes", "catalog:read", "--output",
+                       path_to_utf8(path)}).code == server::exit_ok);
+        tokens.push_back(d.read(path));
+    }
+    auto slow = std::make_shared<SlowSearch>();
+    auto catalog = mock_catalog("cat");
+    catalog.bindings[0] = ports::CapabilityBinding::bind<ports::ITrackSearch>(
+        [slow](const ports::ProviderSetup&) -> domain::Result<std::shared_ptr<ports::ITrackSearch>> {
+            return std::shared_ptr<ports::ITrackSearch>{slow};
+        });
+    RunningService service{d, std::make_shared<infrastructure::observability::MemorySink>(),
+                           std::vector<ports::ProviderBundle>{mock_audio("aud"), catalog}, true};
+    auto admin = service.client(admin_token);
+    const auto credential = body(admin.Post("/api/v1/credentials", R"({"source":"aud","cookie":"good"})", "application/json"))["data"];
+    const auto credential_id = credential["credential_id"].get<std::string>();
+    REQUIRE(admin.Put("/api/v1/credential-defaults/aud", json{{"credential_id", credential_id}}.dump(), "application/json")->status == 200);
+    const auto created = admin.Post("/api/v1/downloads", httplib::Headers{{"Idempotency-Key", "capacity-test-key"}},
+        R"({"track":{"source":"aud","id":"one"}})", "application/json");
+    REQUIRE(created);
+    INFO(created->body);
+    REQUIRE(created->status == 202);
+    const auto task = body(created)["data"]["task_id"].get<std::string>();
+    auto request = [&](const std::string& token) {
+        return std::async(std::launch::async, [&, token] {
+            return service.client(token).Get("/api/v1/search/tracks?q=held&sources=cat");
+        });
+    };
+    auto first = request(tokens[0]);
+    auto second = request(tokens[1]);
+    const auto until = std::chrono::steady_clock::now() + 2s;
+    while (slow->entered < 2 && std::chrono::steady_clock::now() < until) std::this_thread::sleep_for(2ms);
+    CHECK(slow->entered == 2);
+    const auto started = std::chrono::steady_clock::now();
+    const auto per_owner = service.client(tokens[0]).Get("/api/v1/search/tracks?q=extra&sources=cat");
+    REQUIRE(per_owner);
+    CHECK(per_owner->status == 429);
+    CHECK(per_owner->get_header_value("Retry-After") == "1");
+    const auto global = service.client(tokens[2]).Get("/api/v1/search/tracks?q=extra&sources=cat");
+    REQUIRE(global);
+    CHECK(global->status == 503);
+    CHECK(service.client().Get("/health/live")->status == 200);
+    CHECK(admin.Get(("/api/v1/downloads/" + task).c_str())->status == 200);
+    const auto canceled = admin.Post(("/api/v1/downloads/" + task + "/cancel").c_str());
+    REQUIRE(canceled);
+    CHECK((canceled->status == 200 || canceled->status == 202));
+    CHECK(std::chrono::steady_clock::now() - started < 1s);
+    CHECK(body(admin.Get("/api/v1/limits"))["data"]["admission"]["global"] == 2);
+    slow->release = true;
+    CHECK(first.get()->status == 200);
+    CHECK(second.get()->status == 200);
+    CHECK(service.client(tokens[2]).Get("/api/v1/search/tracks?q=after&sources=cat")->status == 200);
+}
+
+TEST_CASE("sources all fits the nine built-in source count by default", "[stability][server]") {
+    Deployment d{"nine-sources"};
+    REQUIRE(d.run({"init"}).code == server::exit_ok);
+    std::vector<ports::ProviderBundle> bundles;
+    for (int i = 0; i < 9; ++i) bundles.push_back(mock_catalog("source" + std::to_string(i)));
+    RunningService service{d, std::make_shared<infrastructure::observability::MemorySink>(), std::move(bundles)};
+    const auto response = service.client(d.read(d.bootstrap())).Get("/api/v1/search/tracks?q=test&sources=all");
+    REQUIRE(response);
+    REQUIRE(response->status == 200);
+    CHECK(body(response)["data"]["items"].size() == 9);
+}
+
 TEST_CASE("offline commands initialize the instance and manage identities", "[server]") {
     Deployment d{"offline"};
 
@@ -186,7 +276,7 @@ TEST_CASE("the service serves the control API and stops in order", "[server]") {
         CHECK(error_code(reader_client.Get("/api/v1/providers?limit=1&cursor=" + cursor)) == "CURSOR_MISMATCH");
         CHECK(admin.Get("/api/v1/providers?colour=blue")->status == 400);
         CHECK(admin.Get("/api/v1/providers?limit=0")->status == 400);
-        CHECK(body(admin.Get("/api/v1/limits"))["data"]["catalog"]["max_sources_per_request"] == 8);
+        CHECK(body(admin.Get("/api/v1/limits"))["data"]["catalog"]["max_sources_per_request"] == 16);
 
         // Destinations follow the configured ACL and never show the directory.
         const auto mine = body(admin.Get("/api/v1/destinations"))["data"]["items"];
@@ -213,7 +303,7 @@ TEST_CASE("the service serves the control API and stops in order", "[server]") {
             "application/json");
         CHECK(full->status == 201);
         CHECK(error_code(admin.Post("/api/v1/credentials", R"({"source":"aud","kind":"oauth2","auth_profile":"x","secret":{}})",
-                                    "application/json")) == "CAPABILITY_UNSUPPORTED");
+                                    "application/json")) == "VALIDATION_FAILED"); // 未注册 profile 仍不可导入
         CHECK(error_code(admin.Post("/api/v1/credentials", R"({"source":"ghost","cookie":"a"})", "application/json")) ==
               "UNKNOWN_PROVIDER");
         CHECK(error_code(admin.Post("/api/v1/credentials", R"({"source":"aud","cookie":"a","extra":1})",

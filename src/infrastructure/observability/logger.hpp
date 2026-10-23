@@ -13,6 +13,7 @@
 #include <string_view>
 #include <variant>
 #include <vector>
+#include <thread>
 
 namespace music_service::infrastructure::observability {
 
@@ -86,6 +87,30 @@ private:
     std::vector<LogRecord> records_;
 };
 
+// Owns its output sink. Producers never wait for output I/O; queue size, bytes and
+// shutdown drain time are bounded. A stuck writer retains its owned state until
+// the OS returns, and counts against a process-wide worker cap (no thread leaks
+// from repeated service restarts). The target must own all resources it uses.
+class AsyncLogSink final : public LogSink {
+public:
+    struct Stats { std::uint64_t written{0}, dropped{0}, failures{0}; std::size_t queued{0}, bytes{0}; };
+    explicit AsyncLogSink(std::shared_ptr<LogSink> target, std::size_t capacity = 1024,
+                          std::size_t max_bytes = 1024 * 1024,
+                          std::chrono::milliseconds drain_budget = std::chrono::milliseconds{500});
+    ~AsyncLogSink() override;
+    void write(const LogRecord& record) override;
+    Stats stats() const;
+    void close() noexcept;
+private:
+    struct State;
+    std::shared_ptr<State> state_;
+    std::thread worker_;
+    std::chrono::milliseconds drain_budget_;
+};
+
+// Duplicates stderr so a delayed writer never refers to a caller-owned ostream.
+std::shared_ptr<AsyncLogSink> make_async_stderr_sink(bool text_format);
+
 // Structured logger. Every string field passes redact_field before reaching a sink, so
 // tokens, cookies, tickets and signed URL parameters cannot be written by accident.
 // with() returns a child that adds bound fields such as request_id or task_id.
@@ -98,7 +123,7 @@ public:
     [[nodiscard]] bool enabled(LogLevel level) const noexcept { return level >= minimum_; }
 
     void log(LogLevel level, std::string_view event,
-             std::initializer_list<LogField> fields = {}) const;
+             std::initializer_list<LogField> fields = {}) const noexcept;
     void info(std::string_view event, std::initializer_list<LogField> fields = {}) const {
         log(LogLevel::info, event, fields);
     }

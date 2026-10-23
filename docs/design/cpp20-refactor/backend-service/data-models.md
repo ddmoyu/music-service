@@ -6,7 +6,7 @@
 
 | 类型 | 约定 |
 | --- | --- |
-| 平台 `source` | 稳定字符串，格式 `[a-z][a-z0-9_]{0,63}`，如 `kuwo`、`spotify`；不使用封闭平台枚举，显示名称可改变 |
+| 平台 `source` | 稳定字符串，格式 `[a-z][a-z0-9_]{0,63}`，如 `kuwo`、`netease`；不使用封闭平台枚举，显示名称可改变 |
 | 平台 `id` | UTF-8 不透明字符串，长度 1～1024 字节；禁止转成整数后再序列化 |
 | `TrackRef`／`CollectionRef` | `{source, id}`；平台身份不等于服务文件或任务身份 |
 | 服务 ID | 服务生成的不透明随机 ID，带类型前缀，如 `tsk_`、`bat_`、`fil_`、`ast_`、`cre_`、`dst_` |
@@ -30,7 +30,7 @@
 | `search_tracks`、`track_detail` | 单曲搜索与元信息 |
 | `search_playlists`、`playlist_detail`、`playlist_tracks` | 歌单搜索、信息、分页曲目 |
 | `search_albums`、`album_detail`、`album_tracks` | 专辑能力 |
-| `search_artists`、`artist_tracks`、`artist_albums` | 歌手发现与作品 |
+| `search_artists`、`artist_detail`、`artist_tracks`、`artist_albums` | 歌手发现、资料与作品 |
 | `categories`、`category_playlists` | 分类目录与分类歌单 |
 | `charts`、`chart_detail`、`chart_tracks` | 榜单目录、信息与曲目 |
 | `recommend_playlists` | 推荐歌单 |
@@ -66,6 +66,7 @@ AccountBinding 表达稳定的账号选择，不含 token、Cookie、secret_ref 
 | 模型 | 字段 |
 | --- | --- |
 | `Track` | ref、title、artists、album、duration_ms、version、artwork、track_number、track_total、context_ref、links、可选 external_ids（如 isrc，附证据来源） |
+| `Artist` | ref、name、artwork；可选 description、alternate_name、country、birth_date、birthplace、gender、language、height、weight、constellation；可选非负计数 track_count、album_count、mv_count；未知字段为 null |
 | `ArtistSummary` | name，ref 可为 null；多个艺术家保留数组，不只拼成展示字符串 |
 | `AlbumSummary` | title、ref，可为空；保留与歌单不同的语义 |
 | `VersionInfo` | kind：studio／live／remix／cover／instrumental／unknown，label、evidence |
@@ -95,7 +96,7 @@ AccountBinding 表达稳定的账号选择，不含 token、Cookie、secret_ref 
 
 `ResolvedAsset` 内部保存带类型的传输计划（首版 HttpAsset；新增传输形态由服务自己实现）、必需请求条件、处理计划、实际来源、有效期和资源指纹。HttpAsset 包含 URL 与秘密请求头；处理计划通过 processor_id、版本和私有上下文绑定。公开 `AssetDescriptor` 只返回 asset_id、原曲／实际曲目、品质属性、access_state、completeness、expires_at、warnings 与匹配／资源证据摘要，不返回命令或私有处理参数。
 
-目录源与音频源可以不同，例如 original_track.source=spotify、actual_track.source=youtube；实现工具不作为 source。外部提取／传输不会改变实际音频来源或凭空提升品质。缺少可直接转发的 HttpAsset 时不提供在线代理或直链，可在下载完成后访问 file_id。
+目录源与音频源可以不同，例如模拟组合 original_track.source=mock_catalog、actual_track.source=mock_audio；实现工具不作为 source。外部提取／传输不会改变实际音频来源或凭空提升品质。缺少可直接转发的 HttpAsset 时不提供在线代理或直链，可在下载完成后访问 file_id。
 
 内部另保存平台可验证的传输条件：是否允许外发直链、必需请求头、是否需解密／处理、资源身份校验信息。条件未知不视为可直连；MediaAccessService 只读这些条件并叠加部署策略，不在访问接口中重新实现平台解析。
 
@@ -216,7 +217,6 @@ T05 的实现约定：表使用 STRICT 模式；库内时间存为 UTC 毫秒整
 文件被移走时将 asset 标为 missing，读取返回 410，历史保留。文件与 DB 不一致、取消与发布竞争按上述流程协调。
 
 文件路径由资产的 destination_id 对应的持久根绑定与相对路径解析，不能使用当前“默认下载目录”替换根。根目录变更被启动校验拒绝；历史资产、工作区和发布意图沿用原位置，改用新目录时新建 destination_id。
-
 
 ## 0.1.6 本地产物集合扩展
 

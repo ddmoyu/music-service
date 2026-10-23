@@ -74,6 +74,7 @@ public:
         std::uint32_t running{0};
         bool paused{false};
         std::uint64_t claimed{0};
+        std::uint64_t errors{0}; // dispatch, cleanup or observer exceptions
     };
     [[nodiscard]] Stats stats() const;
 
@@ -102,6 +103,7 @@ private:
     std::string last_owner_; // fairness: the next turn starts after this principal
     std::map<std::string, std::shared_ptr<ExecutionControl>> running_;
     std::uint64_t claimed_{0};
+    std::atomic<std::uint64_t> errors_{0};
     std::condition_variable idle_;
     std::jthread dispatcher_;
 };

@@ -97,9 +97,9 @@ TEST_CASE("each dimension limits independently", "[runtime][admission]") {
         auto a = granted(ledger.try_acquire(f.request("kuwo", "http://a.example")));
         auto b = granted(ledger.try_acquire(f.request("qq", "http://b.example")));
         auto c = granted(ledger.try_acquire(f.request("migu", "http://c.example")));
-        CHECK(deferred(ledger.try_acquire(f.request("joox", "http://d.example"))).blocked_dimension == "principal");
+        CHECK(deferred(ledger.try_acquire(f.request("mock_source", "http://d.example"))).blocked_dimension == "principal");
         // Another principal is not limited by the first one's usage.
-        auto d = granted(ledger.try_acquire(f.request("joox", "http://d.example", "prn_b")));
+        auto d = granted(ledger.try_acquire(f.request("mock_source", "http://d.example", "prn_b")));
         CHECK(deferred(ledger.try_acquire(f.request("bilibili", "http://e.example", "prn_b"))).blocked_dimension == "total");
     }
     SECTION("traffic class") {
@@ -208,12 +208,12 @@ TEST_CASE("Retry-After cools down the source or its quota group", "[runtime][adm
     CHECK(ledger.usage().cooldowns.empty());
 
     // A45 groundwork: two sources sharing an application quota group cool down together.
-    auto spotify = f.request("spotify", "https://api.spotify.com");
-    spotify.rate_limit_group = "spotify_app";
-    auto spotify_other = f.request("spotify_alt", "https://api2.spotify.com");
-    spotify_other.rate_limit_group = "spotify_app";
-    ledger.feedback(spotify, f.clock->steady_now() + std::chrono::seconds{10});
-    CHECK(deferred(ledger.try_acquire(spotify_other)).blocked_dimension == "cooldown");
+    auto shared_source = f.request("mock_catalog", "https://api.example.test");
+    shared_source.rate_limit_group = "shared_app";
+    auto shared_source_other = f.request("mock_catalog_alt", "https://api2.example.test");
+    shared_source_other.rate_limit_group = "shared_app";
+    ledger.feedback(shared_source, f.clock->steady_now() + std::chrono::seconds{10});
+    CHECK(deferred(ledger.try_acquire(shared_source_other)).blocked_dimension == "cooldown");
 
     // Retry-After is capped.
     ledger.feedback(f.request("migu", "https://m.music.migu.cn"),

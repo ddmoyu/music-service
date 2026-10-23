@@ -1,10 +1,13 @@
 #include "audio_processing/verifying_processor.hpp"
 #include "audio_processing/ncm.hpp"
+#include "audio_processing/kuwo_flac.hpp"
+#include "audio_processing/migu_z3d.hpp"
 
 #include "audio_processing/format/byte_reader.hpp"
 #include "audio_processing/format/flac.hpp"
 #include "audio_processing/format/mp3.hpp"
 #include "audio_processing/format/mp4.hpp"
+#include "audio_processing/format/wav.hpp"
 #include "audio_processing/tags/tag_writer.hpp"
 #include "domain/assets/container.hpp"
 
@@ -97,10 +100,12 @@ struct Measured {
     std::int64_t audio_bytes{0};
     std::uint64_t frames{0};
     std::int64_t skipped_bytes{0};
+    std::optional<std::string> payload_sha256;
 
     // Tags may move the audio but never change it: the same frames, bytes and length.
     [[nodiscard]] bool same_payload(const Measured& other) const {
-        return frames == other.frames && audio_bytes == other.audio_bytes && duration_ms == other.duration_ms;
+        return frames == other.frames && audio_bytes == other.audio_bytes && duration_ms == other.duration_ms &&
+               payload_sha256 == other.payload_sha256;
     }
 };
 
@@ -115,6 +120,20 @@ domain::Result<Measured> measure(format::ByteReader& reader, domain::Container c
                                  const ports::OperationContext& context) {
     Measured m;
     switch (container) {
+    case domain::Container::wav: {
+        auto wav = format::scan_wav(reader, context);
+        if (!wav) return std::move(wav).error();
+        m.codec = wav->codec;
+        m.bits_per_sample = wav->bits_per_sample;
+        m.sample_rate_hz = wav->sample_rate_hz;
+        m.channels = wav->channels;
+        m.bitrate_bps = wav->bitrate_bps;
+        m.duration_ms = wav->duration_ms;
+        m.audio_bytes = wav->audio_bytes;
+        m.frames = wav->samples;
+        m.payload_sha256 = std::move(wav->payload_sha256);
+        return m;
+    }
     case domain::Container::mp3: {
         auto mp3 = format::scan_mp3(reader, context);
         if (!mp3) {
@@ -232,12 +251,6 @@ domain::Result<Tagged> tag_copy(const ports::ProcessingRequest& request, domain:
 
 domain::Result<ports::ProcessingReport> VerifyingProcessor::process(const ports::ProcessingRequest& request,
                                                                     const ports::OperationContext& context) {
-    const bool wants_tags = request.metadata_policy != domain::MetadataPolicy::skip;
-    const bool can_tag = request.metadata && has_items(*request.metadata);
-    // Nothing trusted to write: the requirement cannot be met by this file.
-    if (request.metadata_policy == domain::MetadataPolicy::required && !can_tag) {
-        return metadata_failed("no_metadata", "no trusted metadata is available to write the required tags");
-    }
     auto reader = format::ByteReader::open(request.input);
     if (!reader) {
         return std::move(reader).error();
@@ -246,6 +259,18 @@ domain::Result<ports::ProcessingReport> VerifyingProcessor::process(const ports:
     auto head = reader->read(0, domain::sniff_bytes);
     if (!head) {
         return std::move(head).error();
+    }
+
+    // A download may contain NCM even when the provider declares MP3/FLAC. The native
+    // processor checks the encrypted size and decrypts in this same processing worker;
+    // only its plaintext is sent back through verification (and required-tag checks).
+    if (head->starts_with("CTENFDAM")) {
+        return NcmProcessor{}.process(request, context);
+    }
+    const bool wants_tags = request.metadata_policy != domain::MetadataPolicy::skip;
+    const bool can_tag = request.metadata && has_items(*request.metadata);
+    if (request.metadata_policy == domain::MetadataPolicy::required && !can_tag) {
+        return metadata_failed("no_metadata", "no trusted metadata is available to write the required tags");
     }
 
     // An upstream error page or JSON body is not audio and may be transient.
@@ -265,7 +290,7 @@ domain::Result<ports::ProcessingReport> VerifyingProcessor::process(const ports:
     }
     const auto container = *sniffed.container;
     if (container != domain::Container::mp3 && container != domain::Container::flac &&
-        container != domain::Container::mp4) {
+        container != domain::Container::mp4 && container != domain::Container::wav) {
         return invalid("unsupported_container:" + std::string{domain::to_string(container)},
                        "this container cannot be validated yet", false);
     }
@@ -428,6 +453,8 @@ ProcessorCatalog ProcessorCatalog::builtin() {
     ProcessorCatalog catalog;
     catalog.processors_.push_back(std::make_shared<VerifyingProcessor>());
     catalog.processors_.push_back(std::make_shared<NcmProcessor>());
+    catalog.processors_.push_back(std::make_shared<KuwoFlacProcessor>());
+    catalog.processors_.push_back(std::make_shared<MiguZ3dProcessor>());
     return catalog;
 }
 

@@ -116,6 +116,10 @@ domain::Result<FlacStructure> scan_flac(ByteReader& reader, const application::p
                 return std::move(info).error();
             }
             max_block_samples = (std::uint32_t{byte_at(*info, 2)} << 8) | std::uint32_t{byte_at(*info, 3)};
+            flac.min_block_samples = (std::uint32_t{byte_at(*info, 0)} << 8) | std::uint32_t{byte_at(*info, 1)};
+            flac.max_block_samples = max_block_samples;
+            for (std::size_t i = 0; i < flac.pcm_md5.size(); ++i)
+                flac.pcm_md5[i] = static_cast<unsigned char>((*info)[18 + i]);
             min_frame_bytes = be24(*info, 4);
             // 20 bits sample rate, 3 bits channels - 1, 5 bits bits per sample - 1, 36 bits samples.
             const auto packed = (std::uint64_t{be24(*info, 10)} << 40) | (std::uint64_t{be24(*info, 13)} << 16) |

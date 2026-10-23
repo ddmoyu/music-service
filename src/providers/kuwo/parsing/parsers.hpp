@@ -26,10 +26,6 @@ struct SearchPage {
 // searchMusicBykeyWord JSON.
 domain::Result<SearchPage> parse_search(std::string_view body);
 
-// The play_detail page of rid. A page without song information is NOT_FOUND; a page
-// about another song is a protocol error. Unknown fields stay empty.
-domain::Result<domain::Track> parse_track_page(std::string_view html, std::string_view rid);
-
 // What mobi.s says about the audio for the requested rid.
 struct AudioEvidence {
     std::string url;      // always https on a kuwo.cn host

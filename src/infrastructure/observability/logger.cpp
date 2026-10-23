@@ -8,6 +8,18 @@
 #include <ctime>
 #include <type_traits>
 #include <utility>
+#include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <sstream>
+#include <stdexcept>
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#include <pthread.h>
+#include <signal.h>
+#endif
 
 namespace music_service::infrastructure::observability {
 
@@ -170,16 +182,178 @@ Logger Logger::with(std::initializer_list<LogField> fields) const {
 }
 
 void Logger::log(LogLevel level, std::string_view event,
-                 std::initializer_list<LogField> fields) const {
+                 std::initializer_list<LogField> fields) const noexcept {
     if (!enabled(level) || !sink_) {
         return;
     }
-    LogRecord record{clock_->now(), level, std::string{event}, bound_};
-    record.fields.reserve(bound_.size() + fields.size());
-    for (const auto& field : fields) {
-        record.fields.push_back(redact(field));
+    try {
+        LogRecord record{clock_->now(), level, std::string{event}, bound_};
+        record.fields.reserve(bound_.size() + fields.size());
+        for (const auto& field : fields) record.fields.push_back(redact(field));
+        sink_->write(record);
+    } catch (...) {} // logging failures must never change a business operation's outcome
+}
+
+namespace {
+// Even a permanently blocked OS output cannot cause unbounded writer threads.
+std::atomic<unsigned> log_workers{0};
+constexpr unsigned max_log_workers = 4;
+
+class OwnedStderrSink final : public LogSink {
+public:
+    explicit OwnedStderrSink(bool text_format) : text_(text_format) {
+#ifdef _WIN32
+        const auto original = _fileno(stderr);
+        if (original >= 0) fd_ = _dup(original);
+#else
+        fd_ = dup(STDERR_FILENO);
+#endif
     }
-    sink_->write(record);
+    ~OwnedStderrSink() override {
+        if (fd_ >= 0) {
+#ifdef _WIN32
+            _close(fd_);
+#else
+            ::close(fd_);
+#endif
+        }
+    }
+    void write(const LogRecord& record) override {
+        if (fd_ < 0) throw std::runtime_error("stderr is unavailable");
+        std::ostringstream buffer;
+        if (text_) TextSink{buffer}.write(record);
+        else JsonLineSink{buffer}.write(record);
+        auto line = buffer.str();
+        std::size_t offset = 0;
+        while (offset < line.size()) {
+#ifdef _WIN32
+            const auto count = _write(fd_, line.data() + offset, static_cast<unsigned>(line.size() - offset));
+#else
+            const auto count = ::write(fd_, line.data() + offset, line.size() - offset);
+#endif
+            if (count <= 0) throw std::runtime_error("stderr write failed");
+            offset += static_cast<std::size_t>(count);
+        }
+    }
+private:
+    int fd_{-1};
+    bool text_;
+};
+
+std::size_t record_bytes(const LogRecord& record) {
+    auto bytes = sizeof(record) + record.event.size() + 1 + record.fields.size() * sizeof(LogField);
+    for (const auto& field : record.fields) {
+        bytes += field.key.size() + 1;
+        if (const auto* value = std::get_if<std::string>(&field.value)) bytes += value->size() + 1;
+    }
+    return bytes;
+}
+} // namespace
+
+struct AsyncLogSink::State {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::deque<std::pair<LogRecord, std::size_t>> queue;
+    std::shared_ptr<LogSink> target;
+    Stats stats;
+    std::size_t capacity, max_bytes;
+    bool closing{false}, done{false};
+};
+
+AsyncLogSink::AsyncLogSink(std::shared_ptr<LogSink> target, std::size_t capacity, std::size_t max_bytes,
+                           std::chrono::milliseconds drain_budget)
+    : state_(std::make_shared<State>()), drain_budget_(drain_budget) {
+    auto state = state_;
+    state->target = std::move(target);
+    state->capacity = capacity;
+    state->max_bytes = max_bytes;
+    if (!state->target || log_workers.fetch_add(1) >= max_log_workers) {
+        if (state->target) --log_workers;
+        state->closing = state->done = true;
+        return;
+    }
+    try {
+        worker_ = std::thread{[state] {
+#ifndef _WIN32
+            // A closed pipe is an output error, not a process-wide SIGPIPE.
+            sigset_t mask;
+            sigemptyset(&mask);
+            sigaddset(&mask, SIGPIPE);
+            pthread_sigmask(SIG_BLOCK, &mask, nullptr);
+#endif
+            for (;;) {
+                std::pair<LogRecord, std::size_t> item;
+                {
+                    std::unique_lock lock{state->mutex};
+                    state->changed.wait(lock, [&] { return state->closing || !state->queue.empty(); });
+                    if (state->queue.empty()) break;
+                    item = std::move(state->queue.front());
+                    state->queue.pop_front();
+                    --state->stats.queued;
+                    // Retain the byte charge while the output owns the record.
+                }
+                bool failed = false;
+                try { state->target->write(item.first); } catch (...) { failed = true; }
+                {
+                    const std::lock_guard lock{state->mutex};
+                    state->stats.bytes -= item.second;
+                    if (failed) ++state->stats.failures;
+                    else ++state->stats.written;
+                }
+            }
+            {
+                const std::lock_guard lock{state->mutex};
+                state->done = true;
+            }
+            --log_workers;
+            state->changed.notify_all();
+        }};
+    } catch (...) { --log_workers; throw; }
+}
+
+AsyncLogSink::~AsyncLogSink() { close(); }
+
+void AsyncLogSink::write(const LogRecord& record) {
+    const auto bytes = record_bytes(record);
+    const std::lock_guard lock{state_->mutex};
+    if (state_->closing || state_->queue.size() >= state_->capacity || bytes > state_->max_bytes - state_->stats.bytes) {
+        ++state_->stats.dropped;
+        return;
+    }
+    try {
+        state_->queue.emplace_back(record, bytes);
+        ++state_->stats.queued;
+        state_->stats.bytes += bytes;
+    } catch (...) { ++state_->stats.dropped; }
+    state_->changed.notify_one();
+}
+
+AsyncLogSink::Stats AsyncLogSink::stats() const {
+    const std::lock_guard lock{state_->mutex};
+    return state_->stats;
+}
+
+void AsyncLogSink::close() noexcept {
+    if (!worker_.joinable()) return;
+    bool done;
+    {
+        std::unique_lock lock{state_->mutex};
+        state_->closing = true;
+        state_->changed.notify_all();
+        done = state_->changed.wait_for(lock, drain_budget_, [&] { return state_->done; });
+        if (!done) {
+            for (const auto& item : state_->queue) state_->stats.bytes -= item.second;
+            state_->stats.dropped += state_->queue.size();
+            state_->stats.queued = 0;
+            state_->queue.clear();
+        }
+    }
+    if (done) worker_.join();
+    else worker_.detach(); // shared State and owned fd outlive this facade; bounded by max_log_workers
+}
+
+std::shared_ptr<AsyncLogSink> make_async_stderr_sink(bool text_format) {
+    return std::make_shared<AsyncLogSink>(std::make_shared<OwnedStderrSink>(text_format));
 }
 
 } // namespace music_service::infrastructure::observability

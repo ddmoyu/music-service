@@ -38,10 +38,6 @@ domain::Result<void> check_label(const std::string& label) {
 // Cookie secrets become a request header: no control characters, so nothing can be
 // smuggled into another header line.
 domain::Result<void> check_secret(ports::CredentialKind kind, const ports::SecretBytes& secret) {
-    if (kind != ports::CredentialKind::cookie) {
-        return Error{ErrorCode::capability_unsupported,
-                     "only cookie credentials are supported by this build", false, {}};
-    }
     if (secret.empty()) {
         return Error::validation("secret", "must not be empty");
     }
@@ -53,7 +49,7 @@ domain::Result<void> check_secret(ports::CredentialKind kind, const ports::Secre
         const auto u = static_cast<unsigned char>(c);
         return u < 0x20 || u == 0x7F;
     });
-    if (control) {
+    if (control && kind == ports::CredentialKind::cookie) {
         return Error::validation("secret", "must not contain control characters");
     }
     return domain::ok();
@@ -118,6 +114,8 @@ domain::Result<ports::CredentialRecord> CredentialService::create(NewCredentialR
     if (auto valid = check_secret(request.kind, request.secret); !valid) {
         return valid.error();
     }
+    if (auto valid = providers_->validate_secret(request.source, request.auth_profile, request.kind, request.secret); !valid)
+        return valid.error();
     if (auto valid = check_label(request.label); !valid) {
         return valid.error();
     }
@@ -174,6 +172,8 @@ domain::Result<ports::CredentialRecord> CredentialService::update(const std::str
         if (auto valid = check_secret(*kind, *update.secret); !valid) {
             return valid.error();
         }
+        if (auto valid = providers_->validate_secret(current->source, current->auth_profile, *kind, *update.secret); !valid)
+            return valid.error();
         auto ref = secrets_->put(*update.secret);
         if (!ref) {
             return std::move(ref).error();

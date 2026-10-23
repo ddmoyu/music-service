@@ -1,0 +1,158 @@
+[
+  {
+    "id": 5,
+    "name": "pop",
+    "category": "genre",
+    "idstr": "pop"
+  },
+  {
+    "id": 1777,
+    "name": "happy",
+    "category": "mood",
+    "idstr": "happy"
+  },
+  {
+    "id": 23,
+    "name": "rock",
+    "category": "genre",
+    "idstr": "rock"
+  },
+  {
+    "id": 2754,
+    "name": "emotional",
+    "category": "mood",
+    "idstr": "emotional"
+  },
+  {
+    "id": 327,
+    "name": "electronic",
+    "category": "genre",
+    "idstr": "electronic"
+  },
+  {
+    "id": 3138,
+    "name": "party",
+    "category": "theme",
+    "idstr": "party"
+  },
+  {
+    "id": 39,
+    "name": "hiphop",
+    "category": "genre",
+    "idstr": "hiphop"
+  },
+  {
+    "id": 22,
+    "name": "jazz",
+    "category": "genre",
+    "idstr": "jazz"
+  },
+  {
+    "id": 444,
+    "name": "indie",
+    "category": "genre",
+    "idstr": "indie"
+  },
+  {
+    "id": 1954332,
+    "name": "filmscore",
+    "category": "genre",
+    "idstr": "filmscore"
+  },
+  {
+    "id": 2777,
+    "name": "classical",
+    "category": "genre",
+    "idstr": "classical"
+  },
+  {
+    "id": 335,
+    "name": "dark",
+    "category": "mood",
+    "idstr": "dark"
+  },
+  {
+    "id": 100,
+    "name": "dance",
+    "category": "genre",
+    "idstr": "dance"
+  },
+  {
+    "id": 1834,
+    "name": "chillout",
+    "category": "genre",
+    "idstr": "chillout"
+  },
+  {
+    "id": 362,
+    "name": "ambient",
+    "category": "genre",
+    "idstr": "ambient"
+  },
+  {
+    "id": 69,
+    "name": "folk",
+    "category": "genre",
+    "idstr": "folk"
+  },
+  {
+    "id": 25,
+    "name": "metal",
+    "category": "genre",
+    "idstr": "metal"
+  },
+  {
+    "id": 1925,
+    "name": "latin",
+    "category": "genre",
+    "idstr": "latin"
+  },
+  {
+    "id": 65,
+    "name": "rnb",
+    "category": "genre",
+    "idstr": "rnb"
+  },
+  {
+    "id": 9,
+    "name": "reggae",
+    "category": "genre",
+    "idstr": "reggae"
+  },
+  {
+    "id": 33,
+    "name": "punk",
+    "category": "genre",
+    "idstr": "punk"
+  },
+  {
+    "id": 1953,
+    "name": "country",
+    "category": "genre",
+    "idstr": "country"
+  },
+  {
+    "id": 414,
+    "name": "house",
+    "category": "genre",
+    "idstr": "house"
+  },
+  {
+    "id": 180,
+    "name": "blues",
+    "category": "genre",
+    "idstr": "blues"
+  },
+  {
+    "id": 5942,
+    "name": "energetic",
+    "category": "mood",
+    "idstr": "energetic"
+  },
+  {
+    "id": 3496,
+    "name": "sad",
+    "category": "mood",
+    "idstr": "sad"
+  }
+]

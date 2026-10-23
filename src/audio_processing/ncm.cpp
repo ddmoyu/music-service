@@ -193,17 +193,42 @@ domain::Result<void> NcmDecryptor::decrypt(const std::filesystem::path& input, c
 ports::ProcessingPlan NcmProcessor::plan() const { return {"audio.ncm", 1, "netease.ncm"}; }
 domain::Result<ports::ProcessingReport> NcmProcessor::process(const ports::ProcessingRequest& request,
                                                             const ports::OperationContext& context) {
+    if (auto check = active(context); !check) return check.error();
+    if (request.expected.size_bytes) {
+        auto encrypted = format::ByteReader::open(request.input);
+        if (!encrypted) return encrypted.error();
+        if (encrypted->size() != *request.expected.size_bytes) {
+            return domain::Error{domain::ErrorCode::audio_invalid, "NCM transfer size mismatch", true,
+                {{"audio", encrypted->size() < *request.expected.size_bytes ? "truncated" : "size_mismatch"}}};
+        }
+    }
     const auto output = request.input.parent_path() / "ncm-decoded.part";
+    // A crash or a publication retry can leave this private working copy behind.
+    // Always decode again from the encrypted input; never trust the leftover bytes.
+    std::error_code ec;
+    if (output == request.input) return bad("working_path_collision");
+    if (std::filesystem::exists(output, ec)) {
+        const auto same = std::filesystem::equivalent(request.input, output, ec);
+        if (ec || same || !std::filesystem::is_regular_file(std::filesystem::symlink_status(output, ec)) || ec)
+            return bad("working_path_collision");
+        std::filesystem::remove(output, ec);
+    }
+    if (ec) return domain::Error{domain::ErrorCode::file_system, "cannot reset the NCM working copy", true, {}};
     auto metadata = NcmDecryptor{}.decode(request.input, output, context);
     if (!metadata) return metadata.error();
     auto plain = request;
     plain.input = output;
     plain.expected.size_bytes.reset(); // encrypted size is not audio size
-    if (!plain.metadata) plain.metadata = *metadata;
+    if (!plain.metadata) plain.metadata = ports::TrackMetadata{};
+    if (plain.metadata->title.empty()) plain.metadata->title = metadata->title;
+    if (plain.metadata->artists.empty()) plain.metadata->artists = metadata->artists;
+    if (!plain.metadata->album || plain.metadata->album->empty()) plain.metadata->album = metadata->album;
+    if (!plain.metadata->lyrics || plain.metadata->lyrics->empty()) plain.metadata->lyrics = metadata->lyrics;
+    if (!plain.metadata->cover) plain.metadata->cover = metadata->cover;
     if (!request.embed_cover) plain.metadata->cover.reset();
     if (!request.embed_lyrics) plain.metadata->lyrics.reset();
     auto report = VerifyingProcessor{}.process(plain, context);
-    if (!report) { std::error_code ec; std::filesystem::remove(output, ec); return report.error(); }
+    if (!report) { std::error_code ignored; std::filesystem::remove(output, ignored); return report.error(); }
     report->processor_id = plan().processor_id;
     report->processor_version = plan().processor_version;
     for (auto& stage : report->stages) if (stage.stage == "decrypt") stage.outcome = ports::StageOutcome::done;

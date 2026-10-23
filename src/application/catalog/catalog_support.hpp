@@ -68,7 +68,11 @@ inline std::size_t item_bytes(const domain::Album& a) {
     return bytes;
 }
 inline std::size_t item_bytes(const domain::Artist& a) {
-    return 192 + a.name.size() + a.ref.id.value().size() + a.artwork.value_or("").size();
+    return sizeof(domain::Artist) + 128 + a.name.size() + a.ref.id.value().size() + a.artwork.value_or("").size() +
+        a.description.value_or("").size() + a.alternate_name.value_or("").size() + a.country.value_or("").size() +
+        a.birth_date.value_or("").size() + a.birthplace.value_or("").size() + a.gender.value_or("").size() +
+        a.language.value_or("").size() + a.height.value_or("").size() + a.weight.value_or("").size() +
+        a.constellation.value_or("").size();
 }
 inline std::size_t item_bytes(const domain::Category& c) {
     return 128 + c.id.size() + c.name.size() + c.group.value_or("").size();

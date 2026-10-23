@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <functional>
+#include <exception>
 #include <list>
 #include <map>
 #include <memory>
@@ -56,7 +57,8 @@ public:
             erase(it);
         }
         order_.push_front(Item{key, std::move(value), bytes, now});
-        index_[key] = order_.begin();
+        try { index_.emplace(key, order_.begin()); }
+        catch (...) { order_.pop_front(); throw; }
         bytes_ += bytes;
         while (order_.size() > max_entries_ || bytes_ > max_bytes_) {
             erase(index_.find(order_.back().key));
@@ -107,29 +109,38 @@ public:
         bool leader = false;
         {
             const std::lock_guard lock{mutex_};
-            auto& slot = flights_[key];
-            if (!slot) {
-                slot = std::make_shared<Flight>();
+            const auto existing = flights_.find(key);
+            if (existing == flights_.end()) {
+                flight = std::make_shared<Flight>();
+                flights_.emplace(key, flight);
                 leader = true;
             } else {
                 ++merged_;
+                flight = existing->second;
             }
-            flight = slot;
         }
         if (leader) {
-            auto result = run();
+            // Publish completion even when provider code or result allocation throws.
+            // Keep the exception alive for existing waiters; new calls may retry.
+            try {
+                flight->result = std::make_shared<Result>(run());
+            } catch (...) {
+                flight->failure = std::current_exception();
+            }
             {
                 const std::lock_guard lock{mutex_};
                 flights_.erase(key);
-                flight->result = std::make_shared<Result>(std::move(result));
+                flight->complete = true;
             }
             flight->done.notify_all();
+            if (flight->failure) std::rethrow_exception(flight->failure);
             return *flight->result;
         }
         std::unique_lock lock{mutex_};
-        if (!flight->done.wait_until(lock, deadline, [&] { return flight->result != nullptr; })) {
+        if (!flight->done.wait_until(lock, deadline, [&] { return flight->complete; })) {
             return domain::Error{domain::ErrorCode::deadline_exceeded, "the request deadline passed", true, {}};
         }
+        if (flight->failure) std::rethrow_exception(flight->failure);
         return *flight->result;
     }
 
@@ -143,6 +154,8 @@ private:
     struct Flight {
         std::condition_variable done;
         std::shared_ptr<Result> result;
+        std::exception_ptr failure;
+        bool complete{false};
     };
 
     mutable std::mutex mutex_;

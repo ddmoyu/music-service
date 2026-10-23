@@ -115,6 +115,8 @@ struct AuthProfileSpec {
     std::vector<AuthField> input_fields{};
     std::vector<std::string> scopes{};
     ProviderFactory<ICredentialVerifier> verifier{}; // empty: this profile cannot verify
+    // 只校验秘密结构，不联网。未绑定时仍只允许传统 Cookie 输入。
+    std::function<domain::Result<void>(const SecretBytes&)> validate_secret{};
 };
 
 // Type-erased capability factory that remembers the interface it produces, so a factory

@@ -77,6 +77,30 @@ TEST_CASE("covers reject error bodies and truncated structures", "[output]") {
     CHECK_FALSE(downloads::picture_mime(std::string{"\xff\xd8\xff\xd9", 4}));
 }
 
+TEST_CASE("static WebP cover structures reject truncated animated and oversized chunks", "[output][migu]") {
+    const auto le32 = [](std::uint32_t value) {
+        std::string out;
+        for (int i = 0; i < 4; ++i) out += static_cast<char>((value >> (i*8)) & 255U);
+        return out;
+    };
+    const auto wrap = [&](const std::string& chunks) { return "RIFF" + le32(static_cast<std::uint32_t>(chunks.size()+4)) + "WEBP" + chunks; };
+    const auto vp8 = std::string{"\x10\0\0\x9d\x01\x2a\x01\0\x01\0\x01\0",12};
+    const auto chunk = "VP8 " + le32(12) + vp8;
+    const auto picture = wrap(chunk);
+    REQUIRE(downloads::picture_mime(picture) == "image/webp");
+    CHECK_FALSE(downloads::picture_mime(picture.substr(0,picture.size()-1)));
+    CHECK_FALSE(downloads::picture_mime(picture + "extra"));
+    CHECK_FALSE(downloads::picture_mime(wrap("VP8 " + le32(9999) + vp8)));
+    CHECK_FALSE(downloads::picture_mime(wrap(chunk + chunk)));
+    CHECK_FALSE(downloads::picture_mime(wrap("ANIM" + le32(0) + chunk)));
+    auto zero_width = picture; zero_width[26] = 0; CHECK_FALSE(downloads::picture_mime(zero_width));
+    auto animated = wrap("VP8X" + le32(10) + std::string(10,'\0') + chunk);
+    REQUIRE(downloads::picture_mime(animated) == "image/webp");
+    animated[20] = 2; CHECK_FALSE(downloads::picture_mime(animated));
+    const auto vp8l = std::string{"\x2f\0\0\0\0\x01",6};
+    CHECK(downloads::picture_mime(wrap("VP8L" + le32(6) + vp8l)) == "image/webp");
+}
+
 TEST_CASE("translated lyrics preserve both time lines and absent lyrics stay empty", "[output]") {
     domain::TrackLyrics l;
     l.lrc = "[00:01.00]original";

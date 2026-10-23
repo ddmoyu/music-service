@@ -1,4 +1,5 @@
 #include "downloads/scheduler.hpp"
+#include "application/ports/runtime/scope_exit.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -21,6 +22,7 @@ DownloadScheduler::DownloadScheduler(SchedulerOptions options, std::shared_ptr<p
     : options_(options), tasks_(std::move(tasks)), admission_(std::move(admission)), runner_(std::move(runner)),
       executor_(std::move(executor)), clock_(std::move(clock)), observer_(std::move(observer)) {
     options_.workers = std::max<std::uint32_t>(1, options_.workers);
+    options_.scan_interval = std::max(options_.scan_interval, milliseconds{10});
 }
 
 DownloadScheduler::~DownloadScheduler() {
@@ -88,13 +90,18 @@ void DownloadScheduler::join() {
 
 DownloadScheduler::Stats DownloadScheduler::stats() const {
     const std::lock_guard lock{mutex_};
-    return Stats{options_.workers, static_cast<std::uint32_t>(running_.size()), paused_, claimed_};
+    return Stats{options_.workers, static_cast<std::uint32_t>(running_.size()), paused_, claimed_, errors_.load()};
 }
 
 void DownloadScheduler::dispatch(std::stop_token stop) {
     while (!stop.stop_requested()) {
-        const auto delay = std::clamp(fill() - clock_->steady_now(), Steady::duration{milliseconds{10}},
-                                      Steady::duration{options_.scan_interval});
+        Steady::duration delay = options_.scan_interval;
+        try {
+            delay = std::clamp(fill() - clock_->steady_now(), Steady::duration{milliseconds{10}},
+                               Steady::duration{options_.scan_interval});
+        } catch (...) {
+            ++errors_; // a provider/repository/allocation failure cannot kill the dispatcher
+        }
         std::unique_lock lock{mutex_};
         changed_.wait_for(lock, stop, delay, [this] { return woken_; });
         woken_ = false;
@@ -120,38 +127,54 @@ Steady::time_point DownloadScheduler::fill() {
         if (!pick) {
             return retry_at;
         }
+        // The queue owns this cleanup too: dropping unstarted work returns its
+        // claim and releases its slot. It also runs if submission/observation throws.
+        // Allocate all cleanup state BEFORE claiming, so allocation failure cannot
+        // strand a durable claim. The task snapshot is moved once, not copied into
+        // each callback along with its potentially large checkpoint.
+        struct Claim {
+            std::optional<ports::TaskRecord> task;
+            std::shared_ptr<ExecutionControl> control = std::make_shared<ExecutionControl>();
+            std::atomic<bool> started{false};
+        };
+        auto claim = std::make_shared<Claim>();
+        auto cleanup = [this, claim]() noexcept {
+            if (!claim->task) return;
+            const auto& task = *claim->task;
+            try {
+                if (!claim->started.load()) {
+                    ports::DeferCommand back;
+                    back.task_id = task.task_id;
+                    back.execution_id = task.execution_id.value_or("");
+                    back.expected_version = task.version;
+                    back.next_retry_at = clock_->now() + options_.scan_interval;
+                    back.resume_stage = task.status == domain::TaskStatus::processing
+                                            ? domain::TaskStatus::downloading : task.status;
+                    back.attempt_used = task.attempt_used;
+                    if (!tasks_->defer(back)) ++errors_;
+                }
+            } catch (...) { ++errors_; }
+            finished(task.task_id);
+        };
+        auto completion = std::make_shared<ports::ScopeExit<decltype(cleanup)>>(std::move(cleanup));
         auto claimed = tasks_->claim(pick->task_id, clock_->now());
-        if (!claimed || !claimed.value()) {
-            continue; // canceled or claimed meanwhile
-        }
-        auto task = std::move(*claimed.value());
-        auto control = std::make_shared<ExecutionControl>();
+        if (!claimed || !claimed.value()) continue;
+        claim->task = std::move(*claimed.value());
         {
             const std::lock_guard lock{mutex_};
-            running_[task.task_id] = control;
+            running_[claim->task->task_id] = claim->control;
             ++claimed_;
         }
-        auto submitted = executor_->submit([this, task, control](std::stop_token pool_stop) {
+        auto submitted = executor_->submit([this, claim, completion](std::stop_token pool_stop) {
+            claim->started.store(true);
             // The pool stops only at shutdown: the execution pauses, it is not canceled.
-            const std::stop_callback on_pool_stop{pool_stop, [&control] { control->request(StopReason::shutdown); }};
-            const auto report = runner_->run(task, *control);
+            const std::stop_callback on_pool_stop{pool_stop, [&claim] { claim->control->request(StopReason::shutdown); }};
+            const auto report = runner_->run(*claim->task, *claim->control);
             if (observer_) {
-                observer_(task, report);
+                try { observer_(*claim->task, report); } catch (...) { ++errors_; }
             }
-            finished(task.task_id);
         });
         if (!submitted) {
-            finished(task.task_id);
-            // Nobody runs it: give the claim back without counting anything.
-            ports::DeferCommand back;
-            back.task_id = task.task_id;
-            back.execution_id = task.execution_id.value_or("");
-            back.expected_version = task.version;
-            back.next_retry_at = clock_->now() + options_.scan_interval;
-            back.resume_stage =
-                task.status == domain::TaskStatus::processing ? domain::TaskStatus::downloading : task.status;
-            back.attempt_used = task.attempt_used;
-            (void)tasks_->defer(back);
             return rescan;
         }
     }

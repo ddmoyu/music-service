@@ -2,6 +2,7 @@
 
 #include "application/ports/identity/access_tokens.hpp"
 #include "application/ports/runtime/clock.hpp"
+#include "application/catalog/handle_table.hpp"
 #include "domain/result.hpp"
 
 #include <chrono>
@@ -43,7 +44,7 @@ struct IssuedTicket {
 class MediaTicketService {
 public:
     MediaTicketService(std::shared_ptr<ports::AccessTokenCodec> codec, std::shared_ptr<const ports::Clock> clock,
-                       std::size_t capacity, std::size_t per_owner);
+                       std::size_t capacity, std::size_t per_owner, std::shared_ptr<ports::MemoryBudget> budget = {});
 
     domain::Result<IssuedTicket> issue(TicketGrant grant);
 
@@ -52,19 +53,12 @@ public:
     domain::Result<TicketGrant> authorize(std::string_view token) const;
 
     [[nodiscard]] std::size_t size() const;
+    void collect_expired() { tickets_.collect_expired(clock_->now()); }
 
 private:
-    void purge(std::chrono::system_clock::time_point now);
-
     std::shared_ptr<ports::AccessTokenCodec> codec_;
     std::shared_ptr<const ports::Clock> clock_;
-    std::size_t capacity_;
-    std::size_t per_owner_;
-    mutable std::mutex mutex_;
-    std::map<std::string, TicketGrant> live_; // by token hash
-    std::map<std::string, std::size_t> owned_;
-    std::deque<std::string> expired_order_;
-    std::set<std::string> expired_; // hashes of expired tickets, at most capacity_
+    catalog::HandleTable<TicketGrant> tickets_;
 };
 
 } // namespace music_service::application::media

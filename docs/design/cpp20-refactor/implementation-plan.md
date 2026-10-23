@@ -6,7 +6,7 @@
 
 平台优先顺序只在[平台路线图](platform-roadmap.md)维护。酷我先完成产品闭环，第二个真实平台经 T41 验证扩展机制后再推进海外目录；单个来源受阻不改变其他来源的技术可行性。
 
-S0／S1 完成[平台扩展基线](backend-service/provider-extensibility.md)：开放 source 标识、能力组合、ProviderBundle 注册与酷我；模拟契约覆盖目录型来源。S2 用第二个平台和 Spotify 验证复用边界，后续平台同样原生接入。目录跨源下载归 S4 的匹配与显式策略，不能在平台内部隐藏换源。
+S0／S1 完成[平台扩展基线](backend-service/provider-extensibility.md)：开放 source 标识、能力组合、ProviderBundle 注册与酷我；模拟契约覆盖目录型来源。S2 用第二个真实平台和模拟目录源验证复用边界，后续平台同样原生接入。目录跨源下载归 S4 的匹配与显式策略，不能在平台内部隐藏换源。
 
 实现前以[已补齐的模块审查](backend-service/module-boundary-review.md#本轮模块与功能拆分审查)为基线：下载按 NormalizedDownloadIntent 去重，账号以 AccountBinding／AuthIdentityKey 分别表达稳定选择和授权快照，平台授权协议随 bundle 注册，runtime/admission 统一分配上游额度。验收编号 A35～A46 及其分期以[流程与验收](backend-service/flows-and-acceptance.md#8-验证层次与实施关口)为准；这些是设计和验收要求，当前没有对应实现。
 

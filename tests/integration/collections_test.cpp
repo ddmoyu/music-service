@@ -201,6 +201,10 @@ TEST_CASE("details, catalogs and lyrics route by capability", "[catalog][collect
     CHECK(playlist.value.name == "detail:pl1");
     CHECK(playlist.value.track_count == 120); // the platform's claim, not a page size
     CHECK(unwrap(c.catalog->album_detail(c.owner, "alpha", "al1")).value.release_date == "2003-07");
+    CHECK(unwrap(c.catalog->artist_detail(c.owner, "alpha", "ar1")).value.name == "detail:ar1");
+    CHECK(unwrap(c.catalog->artist_detail(c.owner, "alpha", "ar1")).cache.hit);
+    CHECK(c.catalog->artist_detail(c.owner, "plain", "ar1").error().code == ErrorCode::capability_unsupported);
+    CHECK(c.catalog->artist_detail(c.owner, "alpha", "gone").error().code == ErrorCode::not_found);
     CHECK(unwrap(c.catalog->chart_detail(c.owner, "alpha", "top")).value.update_hint == "daily");
     CHECK(c.catalog->album_detail(c.owner, "alpha", "gone").error().code == ErrorCode::not_found);
 
@@ -255,6 +259,11 @@ TEST_CASE("collection routes over HTTP", "[catalog][collections][server]") {
     CHECK(searched["data"]["items"][0]["track_count"] == 120);
     CHECK(searched["meta"]["partial"] == true);
     CHECK(searched["meta"]["source_results"][1]["status"] == "unsupported");
+    CHECK(searched["meta"]["source_results"][0]["page"]["listed_total"] == 6);
+    CHECK(searched["meta"]["source_results"][0]["page"]["unavailable_count"] == 0);
+    const auto cached_search = body(api.Get("/api/v1/search/playlists?q=night&sources=cat,plain&limit=5"));
+    CHECK(cached_search["meta"]["source_results"][0]["cache"]["hit"] == true);
+    CHECK(cached_search["meta"]["source_results"][0]["page"]["listed_total"] == 6);
     CHECK(api.Get("/api/v1/search/albums?q=x&sources=cat")->status == 200);
     CHECK(body(api.Get("/api/v1/search/artists?q=x&sources=cat"))["data"]["items"][0]["name"] == "x#0");
     CHECK(api.Get("/api/v1/search/playlists?q=x&sources=plain")->status == 422);
@@ -276,6 +285,11 @@ TEST_CASE("collection routes over HTTP", "[catalog][collections][server]") {
 
     CHECK(body(api.Get("/api/v1/playlists/detail?source=cat&id=pl1"))["data"]["name"] == "detail:pl1");
     CHECK(body(api.Get("/api/v1/albums/detail?source=cat&id=al1"))["data"]["artists"][0]["name"] == "singer");
+    CHECK(body(api.Get("/api/v1/artists/detail?source=cat&id=ar1"))["data"]["name"] == "detail:ar1");
+    CHECK(body(api.Get("/api/v1/artists/detail?source=cat&id=ar1"))["data"]["description"].is_null());
+    CHECK(api.Get("/api/v1/artists/detail?source=cat&id=gone")->status == 404);
+    CHECK(error_code(api.Get("/api/v1/artists/detail?source=plain&id=ar1")) == "CAPABILITY_UNSUPPORTED");
+    CHECK(api.Get("/api/v1/artists/detail?source=cat")->status == 400);
     CHECK(body(api.Get("/api/v1/charts/detail?source=cat&id=top"))["data"]["lists"] == "track");
     CHECK(api.Get("/api/v1/albums/detail?source=cat&id=gone")->status == 404);
     const auto unsupported = api.Get("/api/v1/playlists/detail?source=plain&id=pl1");
@@ -286,6 +300,17 @@ TEST_CASE("collection routes over HTTP", "[catalog][collections][server]") {
     CHECK(body(api.Get("/api/v1/charts/tracks?source=cat&id=top&limit=3"))["data"]["items"].size() == 2);
     CHECK(body(api.Get("/api/v1/categories/playlists?source=cat&category_id=pop"))["data"]["items"][0]["name"] ==
           "pop#0");
+    const auto category_tracks = body(api.Get("/api/v1/categories/tracks?source=cat&category_id=rock&limit=2"))["data"];
+    CHECK(category_tracks["items"][0]["title"] == "rock#0");
+    const auto category_cursor = category_tracks["page"]["next_cursor"].get<std::string>();
+    CHECK(body(api.Get("/api/v1/categories/tracks?source=cat&category_id=rock&limit=2&cursor=" + category_cursor))
+          ["data"]["items"][0]["title"] == "rock#1");
+    CHECK(error_code(api.Get("/api/v1/categories/tracks?source=cat&category_id=pop&limit=2&cursor=" + category_cursor)) == "CURSOR_MISMATCH");
+    CHECK(error_code(api.Get("/api/v1/charts/tracks?source=cat&id=rock&limit=2&cursor=" + category_cursor)) == "CURSOR_MISMATCH");
+    CHECK(api.Get("/api/v1/categories/tracks?source=cat&category_id=rock&limit=51")->status == 400);
+    CHECK(api.Get("/api/v1/categories/tracks?source=cat")->status == 400);
+    CHECK(error_code(api.Get("/api/v1/categories/tracks?source=plain&category_id=rock")) == "CAPABILITY_UNSUPPORTED");
+    CHECK(service.client().Get("/api/v1/categories/tracks?source=cat&category_id=rock")->status == 401);
     CHECK(body(api.Get("/api/v1/recommendations/playlists?source=cat&limit=4"))["data"]["items"][0]["name"] ==
           "recommended#0");
 

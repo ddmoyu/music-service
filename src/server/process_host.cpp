@@ -93,6 +93,7 @@ struct ProcessHost::State {
     // with it the database and the lock) last.
     std::unique_ptr<Instance> instance;
     observability::Logger log;
+    std::shared_ptr<observability::AsyncLogSink> async_log;
     std::shared_ptr<infrastructure::secrets::FileSecretStore> secrets;
     std::shared_ptr<infrastructure::auth::MbedTlsTokenCodec> codec;
     std::shared_ptr<application::accounts::AccessTokenAuthenticator> authenticator;
@@ -113,6 +114,7 @@ struct ProcessHost::State {
     std::shared_ptr<downloads::DownloadScheduler> scheduler;
     std::shared_ptr<downloads::Maintenance> maintenance;
     std::chrono::steady_clock::time_point next_maintenance;
+    std::chrono::steady_clock::time_point next_handle_collection;
     std::unique_ptr<event_server::EventServer> events;
     std::shared_ptr<application::media::FileAccessService> file_access;
     std::shared_ptr<application::media::MediaTicketService> tickets;
@@ -152,6 +154,13 @@ struct ProcessHost::State {
             s.downloads_running = d.running;
             s.downloads_paused = d.paused;
             s.downloads_claimed = d.claimed;
+            s.scheduler_errors = d.errors;
+        }
+        if (async_log) {
+            const auto logging = async_log->stats();
+            s.log_dropped = logging.dropped;
+            s.log_failures = logging.failures;
+            s.log_queued_bytes = logging.bytes;
         }
         if (media) {
             s.media_listening = true;
@@ -285,6 +294,7 @@ struct ProcessHost::State {
                 log.info("shutdown.lock_released");
                 instance.reset();
             }
+            if (async_log) async_log->close();
         });
     }
 };
@@ -304,6 +314,14 @@ void ProcessHost::stop() {
 void ProcessHost::run_until(const std::function<bool()>& should_stop) {
     while (!should_stop()) {
         std::this_thread::sleep_for(100ms);
+        if (state_ && std::chrono::steady_clock::now() >= state_->next_handle_collection) {
+            state_->next_handle_collection = std::chrono::steady_clock::now() + 1s;
+            try {
+                if (state_->catalog) state_->catalog->collect_expired();
+                if (state_->assets) state_->assets->collect_expired();
+                if (state_->tickets) state_->tickets->collect_expired();
+            } catch (...) { state_->log.warn("handles.collection_failed"); }
+        }
         if (state_ && state_->maintenance && std::chrono::steady_clock::now() >= state_->next_maintenance) {
             state_->maintain();
         }
@@ -316,15 +334,12 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
     auto clock = std::make_shared<infrastructure::SystemClock>();
     std::shared_ptr<observability::LogSink> sink = options.log_sink;
     if (!sink) {
-        if (config.logging.format == "text") {
-            sink = std::make_shared<observability::TextSink>(std::cerr);
-        } else {
-            sink = std::make_shared<observability::JsonLineSink>(std::cerr);
-        }
+        sink = observability::make_async_stderr_sink(config.logging.format == "text");
     }
     auto level = observability::parse_log_level(config.logging.level);
     auto state = std::make_unique<State>(
         observability::Logger{sink, level ? level.value() : observability::LogLevel::info, clock});
+    state->async_log = std::dynamic_pointer_cast<observability::AsyncLogSink>(sink);
     // On any early return the partially built state is torn down in reverse order.
     struct Undo {
         State* state;
@@ -436,7 +451,9 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
         }
         state->transport = std::move(transport).value();
     }
-    state->upstream = std::make_shared<application::transport::UpstreamClient>(state->admission, state->transport, clock);
+    state->upstream = std::make_shared<application::transport::UpstreamClient>(state->admission, state->transport, clock,
+        application::transport::TrafficTimeouts{config.download_timeouts.connect, config.download_timeouts.read_idle,
+                                               config.media_stream.connect_timeout, config.media_stream.idle});
 
     auto registry = providers::ProviderRegistry::build(
         options.bundles ? std::move(*options.bundles) : providers::builtin_bundles(), config.providers,
@@ -459,12 +476,14 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
     state->catalog_executor = std::make_shared<runtime::BoundedExecutor>(
         "catalog", std::max<std::uint32_t>(1, config.upstream.short_workers), config.upstream.queue);
     application::catalog::CatalogLimits catalog_limits{config.catalog, config.cache, config.handles, config.lifetimes, 4};
+    auto handle_budget = std::make_shared<application::ports::MemoryBudget>(config.handles.total_bytes);
+    catalog_limits.handle_budget = handle_budget;
     state->catalog = std::make_shared<application::catalog::CatalogService>(
         catalog_limits, state->registry, state->credentials, state->catalog_executor, clock,
         [ids = inst.ids] { return ids->next("cur_"); });
     state->assets = std::make_shared<application::catalog::AssetService>(
         config.lifetimes, config.handles, 4, state->registry, state->credentials, state->upstream, clock,
-        [ids = inst.ids] { return ids->next("ast_"); }, config.catalog.total_budget);
+        [ids = inst.ids] { return ids->next("ast_"); }, config.catalog.total_budget, handle_budget);
 
     // With SSE enabled, every committed task version is published to the owner's streams.
     std::shared_ptr<application::ports::TaskRepository> tasks = inst.tasks;
@@ -585,7 +604,7 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
         });
     const auto per_owner_share = std::max<std::uint32_t>(1, config.handles.media_tickets / 4);
     state->tickets = std::make_shared<application::media::MediaTicketService>(state->codec, clock,
-                                                                              config.handles.media_tickets, per_owner_share);
+                                                                              config.handles.media_tickets, per_owner_share, handle_budget);
     const bool media_proxy = config.media.enabled && config.features.media_proxy;
     if (media_proxy) {
         state->media_upstream_executor = std::make_shared<runtime::BoundedExecutor>(
@@ -635,6 +654,7 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
     api::ControlApiOptions api_options{config.control, config.http, config.cors, config.catalog,
                                        config.download_limits, config.media_limits, {}};
     api_options.info.version = std::string{service_version};
+    api_options.admission = config.admission;
     api_options.info.instance_id = state->report.instance_id;
     // Search (T13), task queries (T14), SSE (T18), download execution (T17) and published
     // files (T19) are served; the online media proxy and direct URLs are declared once delivered.

@@ -142,7 +142,7 @@ domain::Result<ListResult<Item>> CatalogService::list_of(const ListRequest& requ
             return Error{ErrorCode::cursor_expired, "the cursor has expired", false, {}};
         }
         cursor = std::move(found->first);
-        if (cursor->kind != key || cursor->source != request.source || cursor->entity != request.id ||
+        if (cursor->kind != key || cursor->source != request.source || cursor->subject != request.id ||
             cursor->limit != limit) {
             return Error{ErrorCode::cursor_mismatch, "the cursor belongs to another list", false, {}};
         }
@@ -234,6 +234,12 @@ CatalogService::album_detail(const std::string& owner_id, const std::string& sou
                                     through<ports::AlbumDetail>(*providers_, source, &ports::AlbumDetail::detail));
 }
 
+domain::Result<EntityResult<domain::Artist>>
+CatalogService::artist_detail(const std::string& owner_id, const std::string& source, const std::string& id) {
+    return detail_of<domain::Artist>(owner_id, source, id, ports::capability::artist_detail,
+        through<ports::ArtistDetail>(*providers_, source, &ports::ArtistDetail::detail));
+}
+
 domain::Result<EntityResult<domain::Chart>>
 CatalogService::chart_detail(const std::string& owner_id, const std::string& source, const std::string& id) {
     return detail_of<domain::Chart>(owner_id, source, id, ports::capability::chart_detail,
@@ -258,6 +264,11 @@ domain::Result<ListResult<domain::Track>> CatalogService::artist_tracks(const Li
 domain::Result<ListResult<domain::Track>> CatalogService::chart_tracks(const ListRequest& request) {
     return list_of<domain::Track>(request, ports::capability::chart_tracks, 100, 50, true,
                                   through<ports::ChartTracks>(*providers_, request.source, &ports::ChartTracks::list));
+}
+
+domain::Result<ListResult<domain::Track>> CatalogService::category_tracks(const ListRequest& request) {
+    return list_of<domain::Track>(request, ports::capability::category_tracks, 50, 20, true,
+        through<ports::CategoryTracks>(*providers_, request.source, &ports::CategoryTracks::list));
 }
 
 domain::Result<ListResult<domain::Album>> CatalogService::artist_albums(const ListRequest& request) {

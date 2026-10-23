@@ -469,7 +469,7 @@ RunReport Execution::expired() {
 }
 
 RunReport Execution::on_error(const Error& e, TaskStatus resume) {
-    if (stop_requested() || e.code == ErrorCode::canceled) {
+    if (stop_requested()) {
         return stopped(resume);
     }
     if (admission_deferred(e)) {
@@ -478,6 +478,7 @@ RunReport Execution::on_error(const Error& e, TaskStatus resume) {
     if (e.code == ErrorCode::deadline_exceeded || s_.clock->steady_now() >= deadline_) {
         return expired();
     }
+    if (e.code == ErrorCode::canceled) return stopped(resume);
     if (e.retryable) {
         return retry_later(e);
     }
@@ -1074,32 +1075,71 @@ std::optional<RunReport> Execution::process() {
          audio_->completeness},
         intent_->metadata_policy(),
         metadata_};
-    if (request.metadata && intent_->product().output) {
-        if (!intent_->product().output->embed_cover) request.metadata->cover.reset();
-        if (!intent_->product().output->embed_lyrics) request.metadata->lyrics.reset();
+    request.decryption_key = audio_->decryption_key;
+    if (intent_->product().output) {
+        request.embed_cover = intent_->product().output->embed_cover;
+        request.embed_lyrics = intent_->product().output->embed_lyrics;
+        if (request.metadata) {
+            if (!request.embed_cover) request.metadata->cover.reset();
+            if (!request.embed_lyrics) request.metadata->lyrics.reset();
+        }
     }
     const auto ctx = context();
 
     domain::Result<ports::ProcessingReport> report{
         error(ErrorCode::service_busy, "processing did not run", true, "admission", "processing")};
     if (s_.processing) {
-        auto promise = std::make_shared<std::promise<domain::Result<ports::ProcessingReport>>>();
-        auto future = promise->get_future();
-        auto submitted = s_.processing->submit([promise, worker = processor.value(), request, ctx](std::stop_token) {
-            promise->set_value(worker->process(request, ctx));
-        });
+        // A queued operation can be abandoned without ever touching its file. Once
+        // started, retain ownership until the cooperative processor has stopped;
+        // publishing a retry/cancel earlier would race with its file writes.
+        enum class Phase { queued, running, abandoned };
+        auto phase = std::make_shared<std::atomic<Phase>>(Phase::queued);
+        auto processing_stop = std::make_shared<std::stop_source>();
+        const std::stop_callback on_cancel{ctx.stop, [processing_stop] { processing_stop->request_stop(); }};
+        using Processing = std::packaged_task<domain::Result<ports::ProcessingReport>(std::stop_token)>;
+        auto operation = std::make_shared<Processing>(
+            [phase, processing_stop, worker = processor.value(), request, ctx](std::stop_token pool_stop)
+                -> domain::Result<ports::ProcessingReport> {
+                auto queued = Phase::queued;
+                if (!phase->compare_exchange_strong(queued, Phase::running)) {
+                    return error(ErrorCode::canceled, "processing was canceled before starting", false);
+                }
+                const std::stop_callback on_shutdown{pool_stop, [processing_stop] { processing_stop->request_stop(); }};
+                return worker->process(request, {ctx.deadline, processing_stop->get_token()});
+            });
+        auto future = operation->get_future();
+        auto submitted = s_.processing->submit([operation](std::stop_token pool_stop) { (*operation)(pool_stop); });
+        // Only the queue owns the promise: dropping the work completes the future
+        // with broken_promise; packaged_task also transports every exception.
+        operation.reset();
         if (!submitted) {
             // The pool is full: pause; the transfer-complete file is processed after the claim.
             return pause(TaskStatus::downloading, s_.clock->now() + o_.admission_retry);
         }
         try {
+            while (future.wait_for(milliseconds{20}) != std::future_status::ready) {
+                if (stop_requested() || s_.clock->steady_now() >= deadline_) {
+                    processing_stop->request_stop();
+                    auto queued = Phase::queued;
+                    if (phase->compare_exchange_strong(queued, Phase::abandoned)) {
+                        return stop_requested() ? stopped(TaskStatus::downloading) : expired();
+                    }
+                }
+            }
             report = future.get();
-        } catch (const std::future_error&) {
-            return stopped(TaskStatus::downloading); // the pool dropped it while stopping
+        } catch (const std::future_error& failure) {
+            if (failure.code() == std::make_error_code(std::future_errc::broken_promise)) {
+                return stopped(TaskStatus::downloading);
+            }
+            return fail(error(ErrorCode::internal, "audio processing failed unexpectedly", false));
+        } catch (...) {
+            return fail(error(ErrorCode::internal, "audio processing failed unexpectedly", false));
         }
     } else {
         report = processor.value()->process(request, ctx);
     }
+    if (stop_requested()) return stopped(TaskStatus::downloading);
+    if (s_.clock->steady_now() >= deadline_) return expired();
     if (!report) {
         const auto& e = report.error();
         if (e.code == ErrorCode::audio_invalid) {
@@ -1125,7 +1165,22 @@ std::optional<RunReport> Execution::process() {
             report->warnings.push_back(warning);
         }
     }
-    for (const auto& field : metadata_fields_) report->metadata_fields.push_back(field);
+    // Container metadata can fill missing sidecars even when embedding is disabled.
+    if (report->source_metadata) {
+        if (!metadata_) metadata_ = ports::TrackMetadata{};
+        const auto& extracted = *report->source_metadata;
+        if (metadata_->title.empty()) metadata_->title = extracted.title;
+        if (metadata_->artists.empty()) metadata_->artists = extracted.artists;
+        if (!metadata_->album || metadata_->album->empty()) metadata_->album = extracted.album;
+        if (!metadata_->cover) metadata_->cover = extracted.cover;
+        if (!metadata_->lyrics || metadata_->lyrics->empty()) metadata_->lyrics = extracted.lyrics;
+    }
+    for (const auto& field : metadata_fields_) {
+        const bool recovered = report->source_metadata && metadata_ &&
+            ((field.first == "cover" && metadata_->cover) ||
+             (field.first == "lyrics" && metadata_->lyrics && !metadata_->lyrics->empty()));
+        if (!recovered || field.second == "disabled") report->metadata_fields.push_back(field);
+    }
     report_ = std::move(report).value();
     return std::nullopt;
 }
@@ -1238,7 +1293,36 @@ DownloadRunner::DownloadRunner(RunnerOptions options, RunnerServices services)
     : options_(options), services_(std::move(services)) {}
 
 RunReport DownloadRunner::run(const ports::TaskRecord& claimed, ExecutionControl& control) {
-    return Execution{options_, services_, claimed, control}.run();
+    try {
+        return Execution{options_, services_, claimed, control}.run();
+    } catch (...) {
+        // Execution has unwound: all local I/O is closed before changing its
+        // persistent status. Use the latest version, never an obsolete claim.
+        try {
+            auto current = services_.tasks->get(claimed.owner_id, claimed.task_id);
+            if (!current || current->execution_id != claimed.execution_id) {
+                return {RunOutcome::left, "execution changed"};
+            }
+            const bool canceled = current->status == TaskStatus::canceling;
+            if (!canceled && !domain::is_running(current->status)) {
+                return {RunOutcome::left, "recovery owns execution"};
+            }
+            // A finalizing task may already have published its file; recovery,
+            // never an exception handler, decides that publication's outcome.
+            if (current->status == TaskStatus::finalizing) {
+                return {RunOutcome::left, "publication requires recovery"};
+            }
+            if (canceled) (void)services_.files->remove_workspace(current->destination_id, current->task_id);
+            ports::TransitionCommand command{current->task_id, current->execution_id.value_or(""), current->version,
+                canceled ? TaskStatus::canceled : TaskStatus::failed, {}, {}, {}};
+            if (!canceled) command.error_json = error_json(error(ErrorCode::internal, "download failed unexpectedly", false));
+            auto saved = services_.tasks->transition(command);
+            return saved ? RunReport{canceled ? RunOutcome::canceled : RunOutcome::failed, "INTERNAL_ERROR"}
+                         : RunReport{RunOutcome::left, "exception state could not be saved"};
+        } catch (...) {
+            return {RunOutcome::left, "exception state could not be saved"};
+        }
+    }
 }
 
 } // namespace music_service::downloads

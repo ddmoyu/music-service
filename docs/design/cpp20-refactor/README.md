@@ -22,7 +22,7 @@
 | HTTP 客户端 | 先验证 cpp-httplib Client 与 Server 的组合；TLS 或下载需求必要时独立替换客户端 |
 | TLS | 先验证覆盖 Windows／Linux 与容器的实现；Schannel 仅作为 Windows 可选适配，不成为其他系统的依赖 |
 | 音频处理 | 以直接保存原始音频和写入元数据为主要需求，评估减少 FFmpeg 依赖 |
-| 音乐平台 | 酷我优先；已研究平台由易到难，Spotify／海外来源持续加入，不设固定平台数量上限；见[平台开发计划](platform-roadmap.md) |
+| 音乐平台 | 酷我优先；已研究平台由易到难，其他候选来源按验证结果逐步接入，不设固定平台数量上限；见[平台开发计划](platform-roadmap.md) |
 | 平台扩展 | 能力组合与开放注册；目录源、实际音源和实现工具分开；全部原生实现，不调用外部下载工具或第三方解析服务 |
 | 实施状态 | T01～T03 已完成（固定版本依赖、领域规则与端口、配置／时钟／日志），CMake 工程位于[仓库根目录](../../../README.md)；尚无平台实现与服务程序 |
 
@@ -48,7 +48,7 @@
 | [实施阶段与验证](implementation-plan.md) | 网络验证、平台迁移、任务下载、元数据和发布验证 |
 | [开发任务拆分](development-tasks.md) | S0～S5 任务、直接／可选前置、平台扩展与验收责任 |
 | [音乐平台开发顺序](platform-roadmap.md) | 平台难度、确定的接入顺序、首批范围和完成条件 |
-| [多平台适配与扩展](backend-service/provider-extensibility.md) | 平台包、注册、能力、凭证、原生实现原则、Spotify 路线与扩展验收 |
+| [多平台适配与扩展](backend-service/provider-extensibility.md) | 平台包、注册、能力、凭证、原生实现原则、目录与音源边界及扩展验收 |
 | [Go 参考实现 功能实现拆解](../../research/go-reference/README.md) | 原项目的源码依据、功能细节、平台差异和现有边界 |
 | [Lanyue 多平台音乐功能实现拆解](../../research/lanyue/README.md) | Electron 业务分层、八平台搜索与取流、下载队列、播放和换源策略的补充参考 |
 

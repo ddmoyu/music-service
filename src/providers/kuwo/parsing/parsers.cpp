@@ -112,70 +112,6 @@ std::vector<domain::ArtistSummary> artists_from(std::string_view names, std::str
     return artists;
 }
 
-// The text after `marker`, up to `end`, within [from, html.size()).
-std::optional<std::string_view> between(std::string_view html, std::string_view marker, std::string_view end,
-                                        std::size_t from = 0) {
-    const auto start = html.find(marker, from);
-    if (start == std::string_view::npos) {
-        return std::nullopt;
-    }
-    const auto value = start + marker.size();
-    const auto stop = html.find(end, value);
-    if (stop == std::string_view::npos) {
-        return std::nullopt;
-    }
-    return html.substr(value, stop - value);
-}
-
-std::string strip_tags(std::string_view html) {
-    std::string out;
-    bool in_tag = false;
-    for (const char c : html) {
-        if (c == '<') {
-            in_tag = true;
-        } else if (c == '>') {
-            in_tag = false;
-        } else if (!in_tag) {
-            out.push_back(c);
-        }
-    }
-    return out;
-}
-
-std::optional<std::int64_t> leading_digits(std::string_view text) {
-    std::int64_t value = 0;
-    const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
-    if (ec != std::errc{} || end == text.data()) {
-        return std::nullopt;
-    }
-    return value;
-}
-
-// Seconds from the page state's songinfo: duration:<n>, or songTimeMinutes:"mm:ss".
-// A duration that the minified state refers to by variable stays unknown.
-std::optional<std::int64_t> page_duration(std::string_view html) {
-    const auto info = html.find("songinfo:{");
-    if (info == std::string_view::npos) {
-        return std::nullopt;
-    }
-    if (auto value = between(html, "duration:", ",", info)) {
-        if (auto seconds = leading_digits(*value); seconds && *seconds > 0) {
-            return seconds;
-        }
-    }
-    if (auto value = between(html, "songTimeMinutes:\"", "\"", info)) {
-        const auto colon = value->find(':');
-        if (colon != std::string_view::npos) {
-            const auto minutes = leading_digits(value->substr(0, colon));
-            const auto seconds = leading_digits(value->substr(colon + 1));
-            if (minutes && seconds && (*minutes > 0 || *seconds > 0)) {
-                return *minutes * 60 + *seconds;
-            }
-        }
-    }
-    return std::nullopt;
-}
-
 } // namespace
 
 bool is_valid_rid(std::string_view rid) noexcept {
@@ -278,47 +214,6 @@ domain::Result<SearchPage> parse_search(std::string_view body) {
     return result;
 }
 
-domain::Result<domain::Track> parse_track_page(std::string_view html, std::string_view rid) {
-    const auto name = between(html, "id=\"songinfo-name\" type=\"hidden\" value=\"", "\"");
-    if (!name) {
-        return domain::Error{domain::ErrorCode::not_found, "kuwo has no such song", false, {}};
-    }
-    // The page must be about the requested song.
-    const auto canonical = between(html, "rel=\"canonical\" href=\"", "\"");
-    const auto expected = "/play_detail/" + std::string{rid};
-    if (!canonical || canonical->size() < expected.size() ||
-        canonical->substr(canonical->size() - expected.size()) != expected) {
-        return protocol_error("song page does not belong to the requested rid");
-    }
-    auto title = decode_text(*name);
-    if (title.empty()) {
-        return protocol_error("song page has an empty title");
-    }
-    auto ref = ref_for(rid);
-    if (!ref) {
-        return domain::Error::validation("rid", "is not a kuwo song id");
-    }
-    domain::Track track{std::move(*ref), std::move(title), {}, std::nullopt, std::nullopt, {}};
-
-    if (const auto artist_block = html.find("class=\"artist_name"); artist_block != std::string_view::npos) {
-        if (auto artist = between(html, "<span class=\"name\"", "</span>", artist_block)) {
-            const auto text = artist->substr(std::min(artist->find('>') + 1, artist->size()));
-            track.artists = artists_from(strip_tags(text), "");
-        }
-    }
-    if (const auto album_block = html.find("class=\"tip album_name\""); album_block != std::string_view::npos) {
-        if (auto album = between(html, ">", "</span>", album_block)) {
-            if (auto text = decode_text(strip_tags(*album)); !text.empty()) {
-                track.album = domain::AlbumSummary{std::move(text), std::nullopt};
-            }
-        }
-    }
-    if (const auto seconds = page_duration(html)) {
-        track.duration_ms = *seconds * 1000;
-    }
-    return track;
-}
-
 domain::Result<AudioEvidence> parse_audio(std::string_view body, std::string_view requested_rid) {
     auto document = json::parse(body, nullptr, false);
     if (document.is_discarded() || !document.is_object()) {
@@ -406,6 +301,15 @@ domain::Result<Link> parse_link(std::string_view link) {
         const auto prefix = "/" + std::string{kind} + "_detail/";
         if (path.starts_with(prefix) && is_valid_rid(path.substr(prefix.size())))
             return Link{kind, std::string{path.substr(prefix.size())}};
+    }
+    constexpr std::string_view artist_prefix = "/singer_detail/";
+    if (path.starts_with(artist_prefix)) {
+        auto suffix = path.substr(artist_prefix.size());
+        const auto slash = suffix.find('/');
+        const auto id = suffix.substr(0, slash);
+        const auto tab = slash == suffix.npos ? std::string_view{} : suffix.substr(slash);
+        if (is_valid_rid(id) && (tab.empty() || tab == "/info" || tab == "/album" || tab == "/mv"))
+            return Link{"artist", std::string{id}};
     }
     return domain::Error::validation("link", "is not a supported kuwo collection link");
 }

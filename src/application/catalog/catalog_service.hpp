@@ -27,6 +27,7 @@ struct CatalogLimits {
     config::Handles handles;
     config::Lifetimes lifetimes;
     std::size_t per_owner_handle_share{4}; // a principal may hold 1/share of each handle table
+    std::shared_ptr<ports::MemoryBudget> handle_budget{};
 };
 
 struct SearchRequest {
@@ -150,6 +151,8 @@ public:
     domain::Result<BasicSearchResult<domain::Playlist>> search_playlists(const SearchRequest& request);
     domain::Result<BasicSearchResult<domain::Album>> search_albums(const SearchRequest& request);
     domain::Result<BasicSearchResult<domain::Artist>> search_artists(const SearchRequest& request);
+    domain::Result<EntityResult<domain::Artist>> artist_detail(const std::string& owner_id,
+        const std::string& source, const std::string& id);
 
     domain::Result<EntityResult<domain::Playlist>> playlist_detail(const std::string& owner_id,
                                                                    const std::string& source, const std::string& id);
@@ -163,6 +166,7 @@ public:
     domain::Result<ListResult<domain::Track>> album_tracks(const ListRequest& request);
     domain::Result<ListResult<domain::Track>> artist_tracks(const ListRequest& request);
     domain::Result<ListResult<domain::Track>> chart_tracks(const ListRequest& request);
+    domain::Result<ListResult<domain::Track>> category_tracks(const ListRequest& request);
     // limit 1..50, default 20.
     domain::Result<ListResult<domain::Album>> artist_albums(const ListRequest& request);
     domain::Result<ListResult<domain::Playlist>> category_playlists(const ListRequest& request);
@@ -181,20 +185,25 @@ public:
     // A track without lyrics is unavailable=true, not an error.
     domain::Result<EntityResult<domain::TrackLyrics>> lyrics(const std::string& owner_id, const std::string& source,
                                                              const std::string& id);
+    void collect_expired() { cursors_->collect_expired(clock_->now()); }
 
 private:
-    struct CursorState;
     // A list page's continuation, bound to everything that produced it.
-    struct ListCursor {
+    struct CursorState {
         std::string kind; // capability key
         std::string source;
-        std::string entity;
+        std::string subject; // search query or collection entity id
         std::uint32_t limit{0};
         std::string identity;
         std::optional<std::uint64_t> selection_version;
         std::string implementation;
         std::string provider_cursor;
+        std::size_t bytes() const {
+            return sizeof(*this) + kind.capacity() + source.capacity() + subject.capacity() +
+                   identity.capacity() + implementation.capacity() + provider_cursor.capacity() + 6;
+        }
     };
+    using ListCursor = CursorState;
     struct Bound {
         std::string source;
         domain::AuthIdentityKey identity;

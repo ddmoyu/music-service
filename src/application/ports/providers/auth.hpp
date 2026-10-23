@@ -13,8 +13,8 @@ namespace music_service::application::ports {
 
 // Authorization protocol ports, bound per source + auth_profile + kind by a provider
 // bundle. They receive a read-only snapshot and return evidence or candidates; they
-// never get a repository or a writable SecretStore. Refresh and application token
-// ports are added with T24, so no bundle can claim them yet.
+// never get a repository or a writable SecretStore. OAuth refresh, application token
+// exchange and authorization sessions remain future work, added when a provider needs them.
 
 enum class CredentialKind { cookie, oauth2, api_key };
 

@@ -39,11 +39,13 @@ struct Script {
     std::atomic<int> resolves{0};
     std::atomic<int> delay_ms{0};
     std::atomic<bool> fail{false};
+    std::atomic<bool> throws{false};
     std::atomic<bool> timeout{false};
     std::atomic<bool> pages{true};
     std::atomic<bool> preview{false};
     std::atomic<bool> low_quality{false};
     std::atomic<bool> stale_address{false};
+    std::atomic<std::size_t> cursor_padding{0};
 };
 
 // Who served the call: "anonymous" or the credential id.
@@ -91,7 +93,7 @@ public:
         result.page.items.push_back(std::move(track));
         result.page.page = {query.limit, 1, 10, script_->pages.load()};
         if (script_->pages) {
-            result.next_cursor = std::to_string(page + 1);
+            result.next_cursor = std::to_string(page + 1) + std::string(script_->cursor_padding.load(), ' ');
         }
         return result;
     }
@@ -139,6 +141,7 @@ public:
 
 private:
     std::optional<domain::Error> behave(const ports::ProviderContext& context) const {
+        if (script_->throws) throw std::runtime_error("injected source failure");
         if (const auto delay = script_->delay_ms.load(); delay > 0) {
             const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds{delay};
             while (std::chrono::steady_clock::now() < until && !context.operation.stop.stop_requested()) {
@@ -328,6 +331,31 @@ const SourceResult& source_result(const SearchResult& result, std::string_view s
 
 } // namespace
 
+TEST_CASE("a source exception finishes promptly and the same query can retry", "[stability][catalog]") {
+    Catalog c{"source-exception"};
+    const auto owner = c.principal();
+    c.alpha->throws = true;
+    const auto start = std::chrono::steady_clock::now();
+    const auto failed = c.search(owner, {"alpha"}, "retry");
+    CHECK(std::chrono::steady_clock::now() - start < 1s);
+    REQUIRE(failed.failure);
+    CHECK(failed.sources[0].error->code == ErrorCode::internal);
+    c.alpha->throws = false;
+    CHECK_FALSE(c.search(owner, {"alpha"}, "retry").failure);
+    CHECK(c.alpha->searches == 2);
+}
+
+TEST_CASE("large cursor payloads consume the configured handle byte budget", "[stability][catalog]") {
+    auto limits = Catalog::defaults();
+    limits.handles.total_bytes = 4096;
+    Catalog c{"cursor-bytes", limits};
+    const auto owner = c.principal();
+    c.alpha->cursor_padding = 5000;
+    const auto result = c.search(owner, {"alpha"}, "large");
+    REQUIRE(result.failure);
+    CHECK(result.failure->code == ErrorCode::service_busy);
+}
+
 TEST_CASE("search reports every source and combines the outcome", "[catalog]") {
     Catalog c{"sources"};
     const auto owner = c.principal();
@@ -485,6 +513,20 @@ TEST_CASE("expired handles stay expired after they are purged", "[catalog]") {
     (void)unwrap(table.put("carol", 5, after + 60s, after)); // purges a and bob's; old falls out
     CHECK(table.get("alice", a, after).error().code == ErrorCode::resource_expired);
     CHECK(table.get("alice", old, after).error().code == ErrorCode::not_found);
+}
+
+TEST_CASE("search continuation payloads count toward the catalog cache byte budget", "[catalog]") {
+    auto limits = Catalog::defaults();
+    limits.cache.catalog_bytes = 4096;
+    Catalog c{"cursor-bytes", limits};
+    const auto owner = c.principal("owner");
+    c.alpha->cursor_padding = 4096;
+    const auto first = c.search(owner, {"alpha"}, "bounded");
+    REQUIRE(first.sources[0].page->next_cursor);
+    CHECK_FALSE(first.sources[0].cache->hit);
+    const auto second = c.search(owner, {"alpha"}, "bounded");
+    CHECK_FALSE(second.sources[0].cache->hit);
+    CHECK(c.alpha->searches == 2);
 }
 
 TEST_CASE("results are cached per identity and identical calls merge", "[catalog]") {

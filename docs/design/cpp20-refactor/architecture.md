@@ -83,7 +83,7 @@ flowchart TB
 
 图中的数据框不是独立数据库服务；Docker 需要持久化 data_dir 与 destination。客户端本机保存是从媒体入口获取文件的第二段传输。更多内部关系见[图 2～图 7](architecture-details.md)，各图均明确箭头语义与实现状态。
 
-平台范围持续扩展，酷我先完成闭环。ProviderBundle 组合独立能力，目录源与实际音频源分开；Spotify 可先接目录，再通过显式匹配使用其他已验证音源。所有平台原生实现并共用端口及公共下载队列，不调用外部下载工具，不把平台名称分支扩散到业务层。注册、凭证、规模和兼容策略见[多平台扩展](backend-service/provider-extensibility.md)。
+平台范围持续扩展，酷我先完成闭环。ProviderBundle 组合独立能力，目录源与实际音频源分开；目录型能力通过模拟来源验证，具体跨源组合按 S4 显式匹配并独立验收。所有平台原生实现并共用端口及公共下载队列，不调用外部下载工具，不把平台名称分支扩散到业务层。注册、凭证、规模和兼容策略见[多平台扩展](backend-service/provider-extensibility.md)。
 
 ## 原实现映射
 

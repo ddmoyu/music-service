@@ -48,6 +48,12 @@ struct HttpRequest {
     std::vector<PlaintextEndpoint> plaintext_endpoints{}; // the platform's registrations
     std::size_t max_response_bytes{0};   // request(): 0 uses upstream.max_response
     std::uint32_t redirects_followed{0}; // hops taken by earlier legs of this call
+    // Opt in to encoded wire bytes. The caller must decode with its own output limit;
+    // Content-Encoding and Content-Length retain their original wire meaning.
+    bool preserve_content_encoding{false};
+    // Set by the service's traffic-class policy; redirects retain these limits.
+    std::optional<std::chrono::milliseconds> connect_timeout{};
+    std::optional<std::chrono::milliseconds> idle_timeout{};
 };
 
 struct HttpResponseHead {

@@ -1,0 +1,47 @@
+[
+  {
+    "file": "verify-24-96-lpc.flac",
+    "bits_per_sample": 24,
+    "sample_rate_hz": 96000,
+    "channels": 2,
+    "total_samples": 16384,
+    "pcm_md5": "fac17907e292449c8d79b263241c34e5",
+    "file_sha256": "edae8a8dca6eaf3f0e12c3257c1c26d379878cab40b1bb6c10f3dd67e846b50a"
+  },
+  {
+    "file": "verify-16-44-fixed.flac",
+    "bits_per_sample": 16,
+    "sample_rate_hz": 44100,
+    "channels": 1,
+    "total_samples": 8193,
+    "pcm_md5": "f3ee1c04a63078549ae8e28689f19a5c",
+    "file_sha256": "7b7cf0189ffdc8469fb70b3ac228c9d2fdb8bdc03daa298aef18a1798b289623"
+  },
+  {
+    "file": "verify-24-48-verbatim.flac",
+    "bits_per_sample": 24,
+    "sample_rate_hz": 48000,
+    "channels": 2,
+    "total_samples": 2048,
+    "pcm_md5": "0733c8acce6ea62f324b00833faacf47",
+    "file_sha256": "71f8c01805283188b16cb18c5e9da82113bc3af8e15fb5c3f019fc0a9c49c354"
+  },
+  {
+    "file": "verify-32-48.flac",
+    "bits_per_sample": 32,
+    "sample_rate_hz": 48000,
+    "channels": 2,
+    "total_samples": 8192,
+    "pcm_md5": "e452ed553e81f2d02c79e07e49ca1578",
+    "file_sha256": "30f7826398f27445cfcb98061bb4f1c90a47c2717087f0219e8a94eba09e30b4"
+  },
+  {
+    "file": "verify-24-96-constant.flac",
+    "bits_per_sample": 24,
+    "sample_rate_hz": 96000,
+    "channels": 2,
+    "total_samples": 128,
+    "pcm_md5": "9fff66457da6910eea2e9b4da59e2914",
+    "file_sha256": "dbeb22d78032968b3d6c9b4e56d8138b7b8dcba20738e6470e600a123d33e4da"
+  }
+]

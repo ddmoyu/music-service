@@ -69,6 +69,12 @@ public:
         } else {
             audio.shareable = true;
         }
+        // 模拟地址过期后，权限或音源处理方式发生变化，但 CDN 字节和校验器不变。
+        if (seen > 1) {
+            if (id == "expiring-preview") audio.completeness = domain::Completeness::preview;
+            if (id == "expiring-unknown") audio.completeness = domain::Completeness::unknown;
+            if (id == "expiring-encrypted") audio.processing.decryption = "test.cipher";
+        }
         return audio;
     }
 
@@ -437,6 +443,28 @@ TEST_CASE("an expired address is renewed for the same audio; other audio ends th
                                         "application/json"))["data"];
     const auto described = body(p.access(asset["asset_id"].get<std::string>(), R"(,"mode":"proxy","ttl_seconds":300)"))["data"];
     CHECK(described["expires_at"].get<std::string>() <= asset["expires_at"].get<std::string>());
+}
+
+TEST_CASE("renewal cannot retain a full plain asset after preview or encryption changes",
+          "[media][proxy]") {
+    ProxyDeployment p{"proxy-renewal-permission"};
+    auto media = p.media();
+    for (const auto id : {"expiring-preview", "expiring-unknown", "expiring-encrypted"}) {
+        INFO(id);
+        const auto asset = p.resolve(id);
+        const auto ticket = p.ticket(asset);
+        const auto first = media.Get(ticket, httplib::Headers{{"Range", "bytes=0-9"}});
+        REQUIRE(first);
+        REQUIRE(first->status == 206);
+        const auto requests = p.cdn->requests().size();
+        const auto renewed = media.Get(ticket);
+        REQUIRE(renewed);
+        CHECK(renewed->status == 410);
+        CHECK(error_code(renewed) == "RESOURCE_EXPIRED");
+        // 只允许访问已失效的旧地址；重新解析后的音源不得送到 CDN 或客户端。
+        CHECK(p.cdn->requests().size() == requests + 1);
+        CHECK(error_code(p.access(asset)) == "RESOURCE_EXPIRED");
+    }
 }
 
 TEST_CASE("a stalled client slows the upstream, a departed one cancels it, clients do not share (A24, A30)",

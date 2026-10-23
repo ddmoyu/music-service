@@ -194,14 +194,17 @@ domain::Result<ports::HttpResponseHead> HttplibTransport::perform(const ports::H
         client.set_follow_location(false);
         client.set_keep_alive(false);
         client.set_path_encode(false); // the target is already encoded and checked
+        client.set_decompress(!current.preserve_content_encoding);
         client.enable_server_certificate_verification(true);
         client.enable_server_hostname_verification(true);
         if (!ca_pem_.empty()) {
             client.set_ca_cert_store(httplib::tls::create_ca_store(ca_pem_.c_str(), ca_pem_.size()));
         }
-        client.set_connection_timeout(std::min<std::chrono::milliseconds>(options_.connect_timeout, remaining));
-        client.set_read_timeout(std::min<std::chrono::milliseconds>(options_.idle_timeout, remaining));
-        client.set_write_timeout(std::min<std::chrono::milliseconds>(options_.idle_timeout, remaining));
+        const auto connect_timeout = request.connect_timeout.value_or(options_.connect_timeout);
+        const auto idle_timeout = request.idle_timeout.value_or(options_.idle_timeout);
+        client.set_connection_timeout(std::min(connect_timeout, remaining));
+        client.set_read_timeout(std::min(idle_timeout, remaining));
+        client.set_write_timeout(std::min(idle_timeout, remaining));
         client.set_max_timeout(remaining);
 
         HopState state;
@@ -307,7 +310,7 @@ domain::Result<ports::HttpResponseHead> HttplibTransport::perform(const ports::H
             }
             // A socket timeout the deadline capped may fire up to a timer tick early
             // (about 16 ms on Windows); within that slack it is still the deadline.
-            const bool capped = remaining < options_.idle_timeout || remaining < options_.connect_timeout;
+            const bool capped = remaining < idle_timeout || remaining < connect_timeout;
             const bool timed_out = result.error() == httplib::Error::Read || result.error() == httplib::Error::Timeout ||
                                    result.error() == httplib::Error::ConnectionTimeout;
             if (state.deadline || context.expired(Clock::now()) ||

@@ -5,6 +5,7 @@
 #include "domain/result.hpp"
 
 #include <cstdint>
+#include <array>
 #include <optional>
 
 namespace music_service::audio_processing::format {
@@ -20,6 +21,9 @@ struct FlacStructure {
     std::optional<std::int64_t> duration_ms;
     std::int64_t audio_offset{0}; // the first audio frame
     std::int64_t audio_bytes{0};  // from there to the end, without a trailing ID3v1 tag
+    std::uint32_t min_block_samples{0};
+    std::uint32_t max_block_samples{0};
+    std::array<unsigned char, 16> pcm_md5{};
 };
 
 // Fails with AUDIO_INVALID and details {"audio", reason}: "truncated" (a cut metadata

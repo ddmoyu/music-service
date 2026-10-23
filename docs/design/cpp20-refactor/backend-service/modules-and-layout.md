@@ -76,7 +76,6 @@ music-service/
       accounts/                    # 账号选择、身份键、刷新合并和条件提交
     providers/
       registry/                    # 构建清单生成工厂绑定，运行时冻结
-      common/                      # 平台共用编码／OAuth 协议工具，不存账号或业务状态
       kuwo/                        # 首个闭环平台
         CMakeLists.txt             # 独立平台 target 与注册项
         descriptor.cpp
@@ -98,7 +97,6 @@ music-service/
       recovery.cpp
     audio_processing/
       format/
-      decrypt/
       tags/
     infrastructure/
       config/                      # 配置加载与校验

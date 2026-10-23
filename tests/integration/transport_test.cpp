@@ -268,6 +268,33 @@ ports::HttpRequest get(std::string url) {
 
 } // namespace
 
+TEST_CASE("download and media idle budgets override the shared transport default through redirects", "[stability][transport]") {
+    TestServer server{TestServer::Kind::trusted_tls};
+    server.routes().Get("/redirect", [](const auto&, auto& response) { response.set_redirect("/slow"); });
+    server.routes().Get("/slow", [](const auto&, auto& response) {
+        std::this_thread::sleep_for(900ms);
+        response.set_content("audio", "audio/mpeg");
+    });
+    server.start();
+    Harness h;
+    UpstreamClient client{h.ledger, h.transport, h.clock, {3s, 80ms, 3s, 160ms}};
+    for (const auto traffic : {ports::TrafficClass::download, ports::TrafficClass::media}) {
+        auto base = h.base();
+        base.traffic_class = traffic;
+        const auto started = std::chrono::steady_clock::now();
+        auto result = client.fetch(get(server.url("/redirect")), base, Harness::context(3s));
+        REQUIRE_FALSE(result);
+        // This httplib version reports some TLS read-idle expirations as Read
+        // (connection_lost). Either mapping is retryable; elapsed time proves the
+        // configured 80/160 ms limit won over the 30 s transport default.
+        CHECK((result.error().code == domain::ErrorCode::upstream_timeout ||
+               result.error().code == domain::ErrorCode::upstream_failed));
+        CHECK(result.error().retryable);
+        CHECK(std::chrono::steady_clock::now() - started < 700ms);
+        CHECK(h.ledger->usage().total == 0);
+    }
+}
+
 TEST_CASE("HTTPS GET and POST reach a trusted upstream and return the lease", "[transport]") {
     TestServer server{TestServer::Kind::trusted_tls};
     server.routes().Get("/hello", [](const httplib::Request&, httplib::Response& res) {
@@ -298,6 +325,47 @@ TEST_CASE("HTTPS GET and POST reach a trusted upstream and return the lease", "[
     const auto missing = h.fetched(get(server.url("/nope")));
     CHECK(missing.head.status == 404);
 
+    CHECK(h.ledger->usage().total == 0);
+}
+
+TEST_CASE("encoded HTTP bodies require explicit wire preservation and remain bounded", "[transport]") {
+    // gzip("hello"), generated independently with Python gzip and a fixed timestamp.
+    const std::string wire{"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x02\xff\xcb\x48\xcd\xc9\xc9\x07\x00\x86\xa6\x10\x36\x05\x00\x00\x00", 25};
+    TestServer server{TestServer::Kind::trusted_tls};
+    server.routes().Get("/gzip", [&](const httplib::Request&, httplib::Response& response) {
+        response.set_header("Content-Encoding", "gzip");
+        response.set_content(wire, "application/json");
+    });
+    server.routes().Get("/redirect", [&](const httplib::Request&, httplib::Response& response) {
+        response.set_redirect(server.url("/gzip"));
+    });
+    server.start();
+    Harness h;
+    auto request = get(server.url("/gzip"));
+    SECTION("default never returns encoded wire bytes") {
+        const auto result = h.fetch(request);
+        if (result) CHECK(std::get<ports::HttpResponse>(*result).body == "hello");
+        else CHECK(result.error().code == domain::ErrorCode::upstream_failed);
+    }
+    SECTION("opt-in preserves bytes and encoding headers") {
+        request.preserve_content_encoding = true;
+        const auto result = h.fetched(request);
+        CHECK(result.body == wire);
+        CHECK(result.head.header("Content-Encoding") == "gzip");
+        CHECK(result.head.header("Content-Length") == "25");
+    }
+    SECTION("wire length is still bounded") {
+        request.preserve_content_encoding = true;
+        request.max_response_bytes = 10;
+        const auto result = h.fetch(request);
+        REQUIRE_FALSE(result);
+        CHECK(category(result.error()) == "response_too_large");
+    }
+    SECTION("redirects preserve the explicit decode contract") {
+        request.url = server.url("/redirect");
+        request.preserve_content_encoding = true;
+        CHECK(h.fetched(request).body == wire);
+    }
     CHECK(h.ledger->usage().total == 0);
 }
 

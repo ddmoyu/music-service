@@ -19,6 +19,8 @@ target_include_directories(music_service_third_party_taglib SYSTEM INTERFACE
     "${music_service_taglib_root}/flac"
     "${music_service_taglib_root}/ogg/vorbis"
     "${music_service_taglib_root}/mp4"
+    "${music_service_taglib_root}/riff"
+    "${music_service_taglib_root}/riff/wav"
     "${music_service_taglib_BINARY_DIR}"
 )
 # Its sources are UTF-8; without this MSVC reads them in the build machine's code page.

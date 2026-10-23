@@ -41,13 +41,22 @@
 | `media_stream` | `bridge_buffer_bytes`、`connect_timeout_seconds`、`idle_seconds`、`max_stream_seconds` |
 | `lifetimes` | `asset_seconds`、`cursor_seconds`、`match_seconds`、`media_access_seconds` |
 | `storage` | `writer_queue`、`read_connections`、`wait_budget_ms` |
-| `cache` | `catalog_entries`、`catalog_bytes`、`catalog_ttl_seconds`、`failure_suppress_seconds`、`app_token_entries` |
+| `cache` | `catalog_entries`、`catalog_bytes`、`catalog_ttl_seconds` |
 | `handles` | `contexts`、`cursors`、`assets`、`matches`、`media_tickets`、`total_bytes` |
 | `shutdown` | `soft_seconds` |
 | `filesystem` | `failed_work_retention_hours` |
 | `features` | `file_access`（未设置时跟随 media.enabled）、`media_proxy`、`direct_media_urls`、`automatic_fallback`、`transcoding` |
 | `logging` | `format`（json／text）、`level`（trace／debug／info／warn／error） |
 | `destinations[]` | `id`、`name`、`root`、`principals`、`accept_new_tasks` |
+
+## 容量与超时的实际行为
+
+- `admission` 控制搜索、详情、解析、探测、凭证验证和媒体访问描述等上游请求；每 principal 超额返回 429，全局超额返回 503，均带 `Retry-After: 1`。实际全局额度取 `min(admission.global, control.workers - 1)`，`control.workers` 至少为 2；`GET /api/v1/limits` 返回实际额度。上游请求完成或拒绝后关闭该 HTTP 连接，防止空闲 keep-alive 占住保留线程。
+- 默认单次最多选择 16 个来源，覆盖当前 9 个内置平台；同时执行的来源仍由 `catalog.fanout`（默认 4）限制。
+- 搜索与列表游标共用 `handles.cursors` 数量上限。游标、音源句柄、媒体票据及过期记录共用 `handles.total_bytes` 估算预算，计入字符串／容器容量；每秒清理到期内容，新增句柄遇到容量不足时跨表回收过期内容，仍超限则返回 `SERVICE_BUSY`。它不是整个进程的 RSS 限额。
+- 下载传输与媒体代理分别使用 `download_timeouts.connect_seconds/read_idle_seconds` 和 `media_stream.connect_timeout_seconds/idle_seconds`；每个重定向沿用这些设置，且受操作剩余期限约束。
+- 未实现的 `cache.failure_suppress_seconds`、`cache.app_token_entries` 不再接受；旧配置中若包含它们，请删除后启动。失败结果不缓存。
+- 默认日志异步输出，最多排队 1024 条／1 MiB（含正在输出的记录），超额丢弃并计数；停机最多等待 500 ms 排空。阻塞的输出只保留自己拥有的输出句柄和状态，整个进程最多 4 个日志工作线程。`admin/status.logging` 提供丢弃数、输出失败数与占用字节。
 
 ## 下载文件输出（0.1.1）
 
@@ -90,6 +99,12 @@
 verbatim 生成增强 LRC：`[mm:ss.mmm]<mm:ss.mmm>词…<行结束时间>`。译文按精确毫秒时间匹配到行后，不按行号拼接；不能匹配的译文原样保留在独立 `[translation]` 段。romanized 使用其自身时间轴，译文仍独立。未提供所选变体时返回 `LYRICS_VARIANT_FALLBACK`；原始 LRC、翻译、罗马音和结构化逐字仍可从歌词 API 分别读取。
 
 ## NCM 本地导入与侧文件
+
+普通下载完成后，默认音频处理器会根据文件头自动识别 NCM（不依赖 URL、扩展名或 Content-Type），用本项目 C++ 实现解密为原编码 MP3／FLAC，再校验、写标签和发布。该步骤运行在独立的 `processing` 线程池，默认 2 个工作线程、队列 16；HTTP 控制与搜索使用其他线程，取消通过任务的停止令牌传入，原生解密每 64 KiB 检查一次。处理池忙时任务等待，不能保证无限并发下载立即完成。
+
+下载结果的 `processing.processor` 为 `audio.ncm`，`decrypt` 阶段完成；加密传输长度、明文结构与实际音质分别检查，未知加密格式或损坏内容不会作为成功音频发布。NCM 内嵌元数据补充平台未提供的字段，并遵守标签、封面和歌词开关；仅开启导出时不会因此强制内嵌。重启后重新解密未发布的工作副本。
+
+单文件测试仍可使用以下离线命令；它等待该文件完成并打印结果，不是运行中服务的导入 API。
 
 ```powershell
 # 停止使用同一 data_dir 的服务后执行；输入文件保留。

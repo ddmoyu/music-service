@@ -108,6 +108,9 @@ public:
     require_verifier(std::string_view source, std::string_view auth_profile,
                      ports::CredentialKind kind) const override;
 
+    domain::Result<void> validate_secret(std::string_view source, std::string_view auth_profile,
+                                         ports::CredentialKind kind, const ports::SecretBytes&) const override;
+
     // The plaintext HTTP endpoints the source registered, for its transport requests.
     // Empty for unknown sources.
     [[nodiscard]] std::vector<ports::PlaintextEndpoint> plaintext_endpoints(std::string_view source) const;

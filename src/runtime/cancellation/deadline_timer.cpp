@@ -54,24 +54,19 @@ std::uint64_t DeadlineTimer::failed() const {
 
 // Called without the mutex held.
 void DeadlineTimer::fire(std::function<void()>& callback) noexcept {
-    std::string what;
+    const auto report = [this](std::string_view what) noexcept {
+        { const std::lock_guard lock{mutex_}; ++failed_; }
+        if (on_failure_) {
+            try { on_failure_(what); } catch (...) {}
+        }
+    };
     try {
         callback();
         return;
     } catch (const std::exception& e) {
-        what = e.what();
+        report(e.what());
     } catch (...) {
-        what = "unknown exception";
-    }
-    {
-        const std::lock_guard lock{mutex_};
-        ++failed_;
-    }
-    if (on_failure_) {
-        try {
-            on_failure_(what);
-        } catch (...) { // a failing diagnostic sink must not take the timer down
-        }
+        report("unknown exception");
     }
 }
 

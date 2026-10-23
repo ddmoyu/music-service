@@ -300,9 +300,9 @@ TEST_CASE("kuwo declares the collection capabilities it implements", "[providers
         INFO(key);
         CHECK(view.supports(key));
     }
-    for (const auto* key : {"search_artists", "artist_tracks", "artist_albums"}) {
+    for (const auto* key : {"search_artists", "artist_detail", "artist_tracks", "artist_albums"}) {
         INFO(key);
-        CHECK_FALSE(view.supports(key));
+        CHECK(view.supports(key));
     }
 }
 

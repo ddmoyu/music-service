@@ -51,13 +51,18 @@ FetchContent_Declare(music_service_json
 set(WITH_ZLIB OFF CACHE BOOL "" FORCE)
 set(BUILD_BINDINGS OFF CACHE BOOL "" FORCE)
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-foreach(format APE ASF DSF MATROSKA MOD RIFF SHORTEN TRUEAUDIO)
+foreach(format APE ASF DSF MATROSKA MOD SHORTEN TRUEAUDIO)
     set(WITH_${format} OFF CACHE BOOL "" FORCE)
 endforeach()
 set(WITH_MP4 ON CACHE BOOL "" FORCE)
+set(WITH_RIFF ON CACHE BOOL "" FORCE)
 set(WITH_VORBIS ON CACHE BOOL "" FORCE)
 set(CMAKE_DISABLE_FIND_PACKAGE_utf8cpp ON)
-set(utf8cpp_INCLUDE_DIR "${FETCHCONTENT_BASE_DIR}/music_service_taglib-src/3rdparty/utfcpp/source"
+set(_music_service_taglib_source "${FETCHCONTENT_BASE_DIR}/music_service_taglib-src")
+if(FETCHCONTENT_SOURCE_DIR_MUSIC_SERVICE_TAGLIB)
+    set(_music_service_taglib_source "${FETCHCONTENT_SOURCE_DIR_MUSIC_SERVICE_TAGLIB}")
+endif()
+set(utf8cpp_INCLUDE_DIR "${_music_service_taglib_source}/3rdparty/utfcpp/source"
     CACHE PATH "utfcpp headers of the pinned TagLib submodule" FORCE)
 FetchContent_Declare(music_service_taglib
     GIT_REPOSITORY "${MUSIC_SERVICE_TAGLIB_REPOSITORY}"

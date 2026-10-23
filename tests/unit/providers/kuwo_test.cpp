@@ -1,3 +1,4 @@
+#include "providers/kuwo/parsing/artists.hpp"
 // Kuwo protocol package against desensitized responses recorded on 2026-10-20
 // (tests/fixtures/providers/kuwo) and a fake upstream; no network. The opt-in
 // [online-kuwo] case probes the live service.
@@ -196,20 +197,20 @@ TEST_CASE("kuwo high and lossless follow response evidence and refuse substitute
     CHECK(preview.completeness == domain::Completeness::preview);
 }
 
-TEST_CASE("kuwo song pages give details for exactly that song", "[providers][kuwo]") {
-    const auto page = fixture("play-detail-78932517.html");
-    const auto track = unwrap(parsing::parse_track_page(page, "78932517"));
+TEST_CASE("kuwo song JSON gives details for exactly that song", "[providers][kuwo]") {
+    const auto page = fixture("track-info-78932517.json");
+    const auto track = unwrap(parsing::parse_track_info(page, "78932517"));
     CHECK(track.ref.id.value() == "78932517");
     CHECK(track.title == "晴天");
     REQUIRE(track.artists.size() == 1);
     CHECK(track.artists[0].name == "蓝心羽");
-    CHECK_FALSE(track.album); // the page shows 未知 (unknown)
+    CHECK_FALSE(track.album); // the API has no album identity
     CHECK(track.duration_ms == 176000);
 
-    CHECK(parsing::parse_track_page(fixture("play-detail-missing.html"), "999999999999").error().code ==
+    CHECK(parsing::parse_track_info(R"({"code":-1,"data":null})", "999999999999").error().code ==
           ErrorCode::not_found);
-    // A page about another song is not accepted as this one.
-    const auto other = parsing::parse_track_page(page, "1");
+    // A JSON response for another song is not accepted as this one.
+    const auto other = parsing::parse_track_info(page, "1");
     CHECK(other.error().code == ErrorCode::upstream_failed);
 }
 
@@ -317,12 +318,12 @@ TEST_CASE("kuwo search requests go through the upstream client", "[providers][ku
 TEST_CASE("kuwo details and links", "[providers][kuwo]") {
     auto upstream = std::make_shared<FakeUpstream>();
     auto detail = unwrap(providers::kuwo::make_detail(setup(upstream)));
-    upstream->respond(200, fixture("play-detail-78932517.html"));
+    upstream->respond(200, fixture("track-info-78932517.json"));
     const auto track = unwrap(detail->track_detail(context(), test::track("kuwo", "78932517")));
     CHECK(track.title == "晴天");
-    CHECK(upstream->calls[0].request.url == "https://www.kuwo.cn/play_detail/78932517");
+    CHECK(upstream->calls[0].request.url == "https://wapi.kuwo.cn/api/www/music/musicInfo?mid=78932517&httpsStatus=1&plat=web_www");
 
-    upstream->respond(430, fixture("play-detail-missing.html"));
+    upstream->respond(200, R"({"code":-1,"msg":"歌曲不存在","data":null})");
     CHECK(detail->track_detail(context(), test::track("kuwo", "999999999999")).error().code == ErrorCode::not_found);
     CHECK(detail->track_detail(context(), test::track("qq", "1")).error().code == ErrorCode::validation_failed);
     CHECK(detail->track_detail(context(), test::track("kuwo", "../x")).error().code == ErrorCode::validation_failed);
@@ -354,12 +355,14 @@ TEST_CASE("kuwo resolves standard quality and reports substitutes as previews", 
     CHECK(audio.request_headers.size() == 1);
     CHECK(unwrap(domain::evaluate_resource({}, {audio.actual_quality, audio.completeness})).warnings.empty());
 
-    // 酷我尚未声明 Hi-Res；strict 在发请求前拒绝。
+    // 黑胶请求返回普通档位时保持真实档位，strict 由统一品质判定拒绝。
     const auto before = upstream->calls.size();
-    CHECK(resolver->resolve_audio(context(), free_song, {domain::Quality::hires, domain::QualityPolicy::strict, false})
-              .error()
-              .code == ErrorCode::quality_unavailable);
-    CHECK(upstream->calls.size() == before);
+    upstream->respond(200, fixture("audio-78932517-standard.json"));
+    auto lower = unwrap(resolver->resolve_audio(context(), free_song, {domain::Quality::hires}));
+    CHECK(lower.actual_quality == domain::Quality::standard);
+    CHECK(domain::evaluate_resource({domain::Quality::hires}, {lower.actual_quality, lower.completeness})
+              .error().code == ErrorCode::quality_unavailable);
+    CHECK(upstream->calls.size() == before + 1);
     upstream->respond(200, fixture("audio-78932517-standard.json"));
     CHECK(resolver->resolve_audio(context(), free_song, {domain::Quality::high, domain::QualityPolicy::allow_lower, false})
               .has_value());
@@ -394,6 +397,64 @@ TEST_CASE("kuwo resolves standard quality and reports substitutes as previews", 
     const auto limited = resolver->resolve_audio(context(), free_song, {});
     CHECK(limited.error().code == ErrorCode::upstream_rate_limited);
     CHECK(limited.error().retryable);
+}
+
+TEST_CASE("kuwo vinyl maps to hires and requires native full FLAC verification", "[providers][kuwo][kuwo-vinyl]") {
+    auto upstream = std::make_shared<FakeUpstream>();
+    auto resolver = unwrap(providers::kuwo::make_resolver(setup(upstream)));
+    const auto song = test::track("kuwo", "492445332");
+    upstream->respond(200, R"({"code":200,"data":{"url":"https://kw-lv.kuwo.cn/vinyl.flac","rid":492445332,"type":0,"format":"flac","bitrate":23000,"duration":296}})");
+    const auto audio = unwrap(resolver->resolve_audio(context(), song, {domain::Quality::hires}));
+    CHECK(audio.actual_quality == domain::Quality::hires);
+    CHECK(audio.completeness == domain::Completeness::full);
+    CHECK_FALSE(audio.bitrate_bps); // 23000 是档位，不是码率。
+    CHECK(audio.processing == ports::ProcessingPlan{"audio.kuwo-flac", 1, {}});
+    CHECK(upstream->calls.front().request.url.find("&br=23000kflac&rid=492445332&") != std::string::npos);
+    const auto bundle = providers::kuwo::make_bundle();
+    CHECK(std::find(bundle.quality_hints.begin(), bundle.quality_hints.end(), domain::Quality::hires) != bundle.quality_hints.end());
+}
+
+TEST_CASE("kuwo vinyl downgrade is explicit bounded and never hides network failures", "[providers][kuwo][kuwo-vinyl]") {
+    const auto missing = R"({"code":200,"data":{"url":"None"}})";
+    const auto flac = R"({"code":200,"data":{"url":"https://kw-lv.kuwo.cn/normal.flac","rid":492445332,"type":0,"format":"flac","bitrate":2000,"duration":296}})";
+    const auto opaque = R"({"code":200,"data":{"url":"https://kw-lv.kuwo.cn/opaque.mflac","rid":492445332,"type":0,"format":"mflac","bitrate":23000,"duration":296}})";
+    const auto song = test::track("kuwo", "492445332");
+    for (const auto* unavailable : {missing, opaque}) {
+        auto upstream = std::make_shared<FakeUpstream>();
+        auto resolver = unwrap(providers::kuwo::make_resolver(setup(upstream)));
+        upstream->respond(200, unavailable);
+        CHECK(resolver->resolve_audio(context(), song, {domain::Quality::hires}).error().code == ErrorCode::quality_unavailable);
+        CHECK(upstream->calls.size() == 1);
+        upstream->respond(200, unavailable); upstream->respond(200, flac);
+        const auto lower = unwrap(resolver->resolve_audio(context(), song, {domain::Quality::hires, domain::QualityPolicy::allow_lower}));
+        CHECK(lower.actual_quality == domain::Quality::lossless);
+        CHECK(lower.processing == ports::ProcessingPlan{});
+        CHECK_FALSE(lower.bitrate_bps);
+        CHECK(upstream->calls.size() == 3);
+        CHECK(upstream->calls.back().request.url.find("&br=2000kflac&") != std::string::npos);
+        CHECK(unwrap(domain::evaluate_resource({domain::Quality::hires, domain::QualityPolicy::allow_lower},
+              {lower.actual_quality, lower.completeness})).warnings == std::vector{domain::ResourceWarning::quality_lowered});
+    }
+    for (const int status : {200, 429, 503}) {
+        auto upstream = std::make_shared<FakeUpstream>();
+        auto resolver = unwrap(providers::kuwo::make_resolver(setup(upstream)));
+        upstream->respond(status, "malformed response");
+        CHECK_FALSE(resolver->resolve_audio(context(), song, {domain::Quality::hires, domain::QualityPolicy::allow_lower}));
+        CHECK(upstream->calls.size() == 1);
+    }
+    // 上游黑胶回落到标准音源、而中间档不存在时，仍保留已得到的同曲标准资源。
+    auto upstream = std::make_shared<FakeUpstream>();
+    auto resolver = unwrap(providers::kuwo::make_resolver(setup(upstream)));
+    upstream->respond(200, R"({"code":200,"data":{"url":"https://kw-lv.kuwo.cn/a.mp3","rid":492445332,"type":0,"format":"mp3","bitrate":128,"duration":296}})");
+    upstream->respond(200, missing); upstream->respond(200, missing);
+    const auto standard = unwrap(resolver->resolve_audio(context(), song, {domain::Quality::hires, domain::QualityPolicy::allow_lower}));
+    CHECK(standard.actual_quality == domain::Quality::standard);
+    CHECK(upstream->calls.size() == 3);
+    upstream->respond(200, R"({"code":500,"data":null})");
+    const auto failed = resolver->resolve_audio(context(), song, {domain::Quality::hires, domain::QualityPolicy::allow_lower});
+    REQUIRE_FALSE(failed);
+    CHECK(failed.error().code == ErrorCode::upstream_failed);
+    CHECK(upstream->calls.size() == 4);
 }
 
 // Live probe of the real service, opt-in: MUSIC_SERVICE_KUWO_ONLINE=1. Kuwo may limit

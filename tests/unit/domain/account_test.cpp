@@ -26,9 +26,9 @@ TEST_CASE("account bindings enforce the mode rules", "[domain][identity]") {
                                      std::string{"not-a-credential"}, std::nullopt));
 
     CHECK(AccountBinding::make("prn_a", kuwo, AccountMode::application, "app",
-                               std::nullopt, std::string{"spotify_app"}));
+                               std::nullopt, std::string{"shared_app"}));
     CHECK_FALSE(AccountBinding::make("prn_a", kuwo, AccountMode::application, "app",
-                                     std::string{"cre_1"}, std::string{"spotify_app"}));
+                                     std::string{"cre_1"}, std::string{"shared_app"}));
 
     CHECK_FALSE(AccountBinding::make("alice", kuwo, AccountMode::anonymous, "anonymous",
                                      std::nullopt, std::nullopt));

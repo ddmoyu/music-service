@@ -53,6 +53,16 @@ BuildCapabilities full_build() {
 
 } // namespace
 
+TEST_CASE("unsupported cache knobs and invalid control admission are rejected", "[stability][config]") {
+    CHECK_FALSE(load(R"({"cache":{"failure_suppress_seconds":5}})"));
+    CHECK_FALSE(load(R"({"cache":{"app_token_entries":128}})"));
+    CHECK_FALSE(load(R"({"control":{"workers":1}})"));
+    CHECK_FALSE(load(R"({"admission":{"global":1,"per_principal":2}})"));
+    auto defaults = load("{}");
+    REQUIRE(defaults);
+    CHECK(defaults->catalog.max_sources_per_request == 16);
+}
+
 TEST_CASE("output settings have bounded validated defaults", "[config][output]") {
     const auto defaults = load("{}");
     REQUIRE(defaults);
@@ -167,7 +177,7 @@ TEST_CASE("features the build lacks cannot be enabled", "[config]") {
         "features": {"media_proxy": true, "transcoding": true},
         "external_adapters": {"enabled": true},
         "providers": {"kuwo": {"implementation": "external"}},
-        "app_profiles": {"spotify_app": {}}
+        "app_profiles": {"shared_app": {}}
     })");
     REQUIRE_FALSE(config);
     const auto& error = config.error();

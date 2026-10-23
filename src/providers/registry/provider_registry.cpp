@@ -29,6 +29,7 @@ const std::map<std::string_view, std::type_index>& capability_ports() {
         {ports::capability_traits<ports::ArtistSearch>::key, typeid(ports::ArtistSearch)},
         {ports::capability_traits<ports::PlaylistDetail>::key, typeid(ports::PlaylistDetail)},
         {ports::capability_traits<ports::AlbumDetail>::key, typeid(ports::AlbumDetail)},
+        {ports::capability_traits<ports::ArtistDetail>::key, typeid(ports::ArtistDetail)},
         {ports::capability_traits<ports::ChartDetail>::key, typeid(ports::ChartDetail)},
         {ports::capability_traits<ports::PlaylistTracks>::key, typeid(ports::PlaylistTracks)},
         {ports::capability_traits<ports::AlbumTracks>::key, typeid(ports::AlbumTracks)},
@@ -36,6 +37,7 @@ const std::map<std::string_view, std::type_index>& capability_ports() {
         {ports::capability_traits<ports::ChartTracks>::key, typeid(ports::ChartTracks)},
         {ports::capability_traits<ports::ArtistAlbums>::key, typeid(ports::ArtistAlbums)},
         {ports::capability_traits<ports::CategoryPlaylists>::key, typeid(ports::CategoryPlaylists)},
+        {ports::capability_traits<ports::CategoryTracks>::key, typeid(ports::CategoryTracks)},
         {ports::capability_traits<ports::ICategories>::key, typeid(ports::ICategories)},
         {ports::capability_traits<ports::ICharts>::key, typeid(ports::ICharts)},
         {ports::capability_traits<ports::IRecommendedPlaylists>::key, typeid(ports::IRecommendedPlaylists)},
@@ -549,6 +551,16 @@ domain::Result<ports::CapabilitySpec> ProviderRegistry::describe_capability(std:
 }
 
 std::size_t ProviderRegistry::instantiated() const noexcept { return instantiated_.load(); }
+
+domain::Result<void> ProviderRegistry::validate_secret(std::string_view source, std::string_view auth_profile,
+    ports::CredentialKind kind, const ports::SecretBytes& secret) const {
+    auto info = describe_auth_profile(source, auth_profile);
+    if (!info) return std::move(info).error();
+    if (info->kind != kind) return Error::validation("kind", "does not match the auth profile");
+    const auto& spec = entries_.find(source)->second->profiles.find(auth_profile)->second.spec;
+    if (spec.validate_secret) return spec.validate_secret(secret);
+    return ports::ProviderDirectory::validate_secret(source, auth_profile, kind, secret);
+}
 
 std::uint64_t ProviderRegistry::generation() const noexcept { return generation_; }
 

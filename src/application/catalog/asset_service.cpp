@@ -55,18 +55,39 @@ struct AssetService::Asset {
     domain::ResourceRequirement requirement;  // to resolve the same resource again
     bool secret_used{false};                  // the address came from an account secret
     std::optional<ResourceEvidence> evidence; // fixed by the first proxied answer
+
+    std::size_t bytes() const {
+        const auto text = [](const std::string& s) { return s.capacity() + 1; };
+        const auto optional = [&](const std::optional<std::string>& s) { return s ? text(*s) : 0; };
+        const auto ref = [&](const domain::TrackRef& r) { return text(r.source.value()) + text(r.id.value()); };
+        std::size_t size = sizeof(*this) + text(identity) + text(binding.principal_id()) + text(binding.source().value()) +
+            text(binding.auth_profile()) + optional(binding.credential_id()) + optional(binding.app_profile_id()) +
+            ref(original_track) + ref(audio.actual_track) + optional(audio.container) + text(audio.url) +
+            text(audio.processing.processor_id) + optional(audio.processing.decryption) +
+            audio.request_headers.capacity() * sizeof(std::pair<std::string, std::string>) +
+            text(descriptor.asset_id) + ref(descriptor.original_track) + ref(descriptor.actual_track) +
+            optional(descriptor.container) + descriptor.warnings.capacity() * sizeof(domain::ResourceWarning);
+        for (const auto& [key, value] : audio.request_headers) size += text(key) + text(value);
+        if (audio.decryption_key) size += audio.decryption_key->reveal().size();
+        if (evidence) size += optional(evidence->etag) + optional(evidence->last_modified);
+        return size;
+    }
 };
 
 AssetService::AssetService(config::Lifetimes lifetimes, config::Handles handles, std::size_t per_owner_share,
                            std::shared_ptr<const ports::ProviderDirectory> providers,
                            std::shared_ptr<accounts::CredentialService> credentials,
                            std::shared_ptr<ports::UpstreamHttp> upstream, std::shared_ptr<const ports::Clock> clock,
-                           std::function<std::string()> new_asset_id, std::chrono::milliseconds budget)
+                           std::function<std::string()> new_asset_id, std::chrono::milliseconds budget,
+                           std::shared_ptr<ports::MemoryBudget> handle_budget)
     : providers_(std::move(providers)), credentials_(std::move(credentials)), upstream_(std::move(upstream)),
       clock_(std::move(clock)), lifetimes_(lifetimes), budget_(budget),
       assets_(std::make_shared<HandleTable<Asset>>(
           handles.assets, std::max<std::size_t>(1, handles.assets / std::max<std::size_t>(1, per_owner_share)),
-          std::move(new_asset_id))) {}
+          std::move(new_asset_id), handle_budget ? std::move(handle_budget) : std::make_shared<ports::MemoryBudget>(handles.total_bytes),
+          [](const Asset& value) { return value.bytes(); })) {}
+
+void AssetService::collect_expired() { assets_->collect_expired(clock_->now()); }
 
 domain::Result<AssetDescriptor> AssetService::resolve(const ResolveRequest& request) {
     if (request.match_selection) {
@@ -452,9 +473,11 @@ domain::Result<void> AssetService::refresh(const std::string& owner_id, const st
         }
         return end("the audio can no longer be resolved");
     }
+    // 刷新仅续期同一资源；权限或加密状态变化时，旧描述和票据不能继续沿用。
     if (audio->actual_track != asset.audio.actual_track || audio->actual_quality != asset.audio.actual_quality ||
-        audio->container != asset.audio.container) {
-        return end("the platform now returns another recording or quality; resolve again");
+        audio->container != asset.audio.container || audio->completeness != asset.audio.completeness ||
+        audio->processing != asset.audio.processing) {
+        return end("the platform now returns another recording, quality, completeness or processing plan; resolve again");
     }
     auto updated = assets_->update(owner_id, asset_id, clock_->now(), [&](Asset& a) {
         a.audio.url = audio->url;

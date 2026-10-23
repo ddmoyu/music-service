@@ -34,6 +34,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <mutex>
 #include <thread>
 
@@ -270,7 +271,8 @@ downloads::RunnerOptions quick_options() {
 
 struct Runs {
     explicit Runs(std::string_view name, downloads::RunnerOptions options = quick_options(),
-                  runtime::AdmissionLimits limits = {})
+                  runtime::AdmissionLimits limits = {}, std::shared_ptr<ports::AudioProcessor> processor = {},
+                  std::size_t processing_workers = 1)
         : dir(fs::temp_directory_path() /
               infrastructure::filesystem::path_from_utf8("music-service-执行-" + std::string{name})) {
         fs::remove_all(dir);
@@ -296,7 +298,7 @@ struct Runs {
         transport->answer = [this](const ports::HttpRequest& request) { return serve_range(request, audio); };
         files = std::make_shared<infrastructure::filesystem::LocalDestinationFiles>(
             std::map<std::string, fs::path>{{"dst_main", root}});
-        processing = std::make_shared<runtime::BoundedExecutor>("processing", 1, 4);
+        processing = std::make_shared<runtime::BoundedExecutor>("processing", processing_workers, 4);
         auto processors =
             std::make_shared<audio_processing::ProcessorCatalog>(audio_processing::ProcessorCatalog::builtin());
 
@@ -309,6 +311,10 @@ struct Runs {
         services.files = files;
         services.finalizer = std::make_shared<downloads::Finalizer>(publications, files);
         services.processors = [processors](const ports::ProcessingPlan& plan) { return processors->find(plan); };
+        if (processor) {
+            services.processors = [processor](const ports::ProcessingPlan&)
+                -> domain::Result<std::shared_ptr<ports::AudioProcessor>> { return processor; };
+        }
         services.processing = processing;
         services.clock = clock;
         services.file_name = [](std::string_view text) { return infrastructure::filesystem::sanitize_file_name(text); };
@@ -332,7 +338,7 @@ struct Runs {
                                           track(source, id),
                                           domain::SameSource{},
                                           {anonymous(who, source)},
-                                          {domain::Quality::standard, domain::QualityPolicy::strict, false},
+                                          requirement,
                                           domain::MetadataPolicy::best_effort,
                                           {"dst_main", "d1", "n1", "m1"}};
         draft.product.output = output;
@@ -378,6 +384,7 @@ struct Runs {
     std::string audio = mp3();
     std::optional<domain::OutputOptions> output;
     domain::MetadataPolicy metadata_policy{domain::MetadataPolicy::best_effort};
+    domain::ResourceRequirement requirement{};
 };
 
 template <class Predicate> bool eventually(Predicate&& done, std::chrono::milliseconds budget = 10s) {
@@ -1082,6 +1089,141 @@ TEST_CASE("byte evidence downgrade obeys strict and allow_lower before publicati
     }
 }
 
+TEST_CASE("native Kuwo FLAC publication uses decoded quality and rejects corrupted audio", "[downloads][runner][kuwo-vinyl]") {
+    for (const auto mode : {0, 1, 2, 3}) {
+        CAPTURE(mode);
+        Runs r{"vinyl-publish-" + std::to_string(mode)};
+        const auto original = read_bytes(fs::path{MUSIC_SERVICE_TEST_FIXTURES} / "audio" /
+            (mode == 1 || mode == 2 ? "verify-16-44-fixed.flac" : "verify-24-96-lpc.flac"));
+        r.audio = original;
+        if (mode == 3) r.audio[r.audio.size() - 8] ^= 2;
+        r.audio += std::string{"\xf0\x00\xff\x0f", 4} + std::string(22, 'k') + std::string{"\x0e\x55\xff\xf0", 4};
+        r.requirement = {domain::Quality::hires, mode == 2 ? domain::QualityPolicy::allow_lower : domain::QualityPolicy::strict};
+        r.metadata_policy = domain::MetadataPolicy::skip;
+        r.script->answer = [](const domain::TrackRef& t) -> domain::Result<ports::ResolvedAudio> {
+            return ports::ResolvedAudio{t, domain::Quality::hires, domain::Completeness::full, "flac", {},
+                "https://cdn.test/vinyl.flac", {}, {}, {}, {"audio.kuwo-flac", 1, {}}};
+        };
+        const auto id = r.create();
+        const auto run = r.run_next();
+        const auto task = r.get(id);
+        if (mode == 1 || mode == 3) {
+            CHECK(run.outcome == RunOutcome::failed);
+            REQUIRE(task.error_json);
+            CHECK(json::parse(*task.error_json)["code"] == (mode == 1 ? "QUALITY_UNAVAILABLE" : "AUDIO_INVALID"));
+            CHECK_FALSE(fs::exists(r.root / "detail.flac"));
+            CHECK_FALSE(task.result_json);
+        } else {
+            CHECK(run.outcome == RunOutcome::completed);
+            REQUIRE(task.result_json);
+            const auto result = json::parse(*task.result_json);
+            CHECK(result["processing"]["processor"] == "audio.kuwo-flac");
+            CHECK(std::find(result["warnings"].begin(), result["warnings"].end(), "KUWO_TRAILER_REMOVED") != result["warnings"].end());
+            const auto execution = json::parse(*task.execution_json);
+            CHECK(execution["actual_quality"] == (mode == 2 ? "lossless" : "hires"));
+            if (mode == 2) CHECK(std::find(execution["warnings"].begin(), execution["warnings"].end(), "QUALITY_LOWERED") != execution["warnings"].end());
+            CHECK(read_bytes(r.root / "detail.flac") == original);
+        }
+    }
+}
+
+TEST_CASE("ordinary downloads automatically decrypt NCM and reject corrupt or lower-quality payloads", "[downloads][runner][ncm]") {
+    for (const auto mode : {0, 1, 2, 3}) {
+        CAPTURE(mode);
+        Runs r{"auto-ncm-" + std::to_string(mode)};
+        const auto fixtures = fs::path{MUSIC_SERVICE_TEST_FIXTURES} / "audio";
+        r.audio = read_bytes(fixtures / (mode == 1 ? "synthetic-flac.ncm" : "synthetic-mp3.ncm"));
+        if (mode == 2) r.audio[14] ^= 0x51;
+        r.metadata_policy = domain::MetadataPolicy::skip;
+        if (mode == 3) r.requirement = {domain::Quality::hires, domain::QualityPolicy::strict};
+        r.script->answer = [mode](const domain::TrackRef& t) -> domain::Result<ports::ResolvedAudio> {
+            return ports::ResolvedAudio{t, mode == 3 ? domain::Quality::hires : domain::Quality::standard,
+                domain::Completeness::full, "mp3", {}, "https://cdn.test/audio.mp3", {}, {}, {}, {}};
+        };
+        const auto id = r.create();
+        const auto run = r.run_next();
+        const auto task = r.get(id);
+        if (mode >= 2) {
+            CHECK(run.outcome == RunOutcome::failed);
+            REQUIRE(task.error_json);
+            CHECK(json::parse(*task.error_json)["code"] == (mode == 2 ? "AUDIO_INVALID" : "QUALITY_UNAVAILABLE"));
+            CHECK_FALSE(task.result_json);
+            CHECK_FALSE(fs::exists(r.root / "detail.mp3"));
+        } else {
+            CHECK(run.outcome == RunOutcome::completed);
+            REQUIRE(task.result_json);
+            CHECK(json::parse(*task.result_json)["processing"]["processor"] == "audio.ncm");
+            CHECK(read_bytes(r.root / (mode == 1 ? "detail.flac" : "detail.mp3")) ==
+                read_bytes(fixtures / (mode == 1 ? "sine-3s.flac" : "ncm-plain.mp3")));
+        }
+    }
+}
+
+TEST_CASE("NCM processing runs off the caller while queries other downloads and cancel remain usable", "[downloads][scheduler][ncm]") {
+    class HeldNativeProcessor final : public ports::AudioProcessor {
+    public:
+        ports::ProcessingPlan plan() const override { return {}; }
+        domain::Result<ports::ProcessingReport> process(const ports::ProcessingRequest& request,
+                                                       const ports::OperationContext& context) override {
+            if (calls.fetch_add(1) == 0) {
+                worker = std::this_thread::get_id();
+                entered = true;
+                // A deterministic long operation at the native-processing boundary.
+                // Cancellation still flows into the actual NCM processor below.
+                while (!release && !context.stop.stop_requested() && !context.expired(std::chrono::steady_clock::now()))
+                    std::this_thread::sleep_for(5ms);
+            }
+            return audio_processing::VerifyingProcessor{}.process(request, context);
+        }
+        std::atomic<int> calls{0};
+        std::atomic<bool> entered{false}, release{false};
+        std::thread::id worker;
+    };
+    for (const bool cancel : {false, true}) {
+        CAPTURE(cancel);
+        auto processor = std::make_shared<HeldNativeProcessor>();
+        Runs r{"ncm-background", quick_options(), {}, processor, 2};
+        r.audio = read_bytes(fs::path{MUSIC_SERVICE_TEST_FIXTURES} / "audio" / "synthetic-mp3.ncm");
+        r.script->answer = [](const domain::TrackRef& t) -> domain::Result<ports::ResolvedAudio> {
+            return ports::ResolvedAudio{t, domain::Quality::standard, domain::Completeness::full,
+                "mp3", {}, "https://cdn.test/audio.mp3", {}, {}, {}, {}};
+        };
+        auto executor = std::make_shared<runtime::BoundedExecutor>("downloads", 2, 2);
+        downloads::DownloadScheduler scheduler{{2, 10ms}, r.tasks, r.ledger, r.runner, executor, r.clock};
+        struct StopWorkers {
+            downloads::DownloadScheduler& scheduler;
+            runtime::BoundedExecutor& executor;
+            HeldNativeProcessor& processor;
+            ~StopWorkers() {
+                processor.release = true;
+                scheduler.stop_claiming();
+                executor.stop_accepting();
+                executor.request_stop();
+                executor.join();
+                scheduler.join();
+            }
+        } cleanup{scheduler, *executor, *processor};
+        const auto first = r.create("src", "first");
+        scheduler.start();
+        REQUIRE(eventually([&] { return processor->entered.load(); }));
+        CHECK(processor->worker != std::this_thread::get_id());
+        CHECK(r.get(first).status == TaskStatus::processing);
+        // A second task must finish before the first processing worker is released.
+        const auto second = r.create("src", "second");
+        REQUIRE(eventually([&] { return r.get(second).status == TaskStatus::completed; }));
+        CHECK(r.get(first).status == TaskStatus::processing);
+        if (cancel) {
+            CHECK(unwrap(r.tasks->request_cancel(r.owner, first)).status == TaskStatus::canceling);
+            scheduler.request_stop(first);
+        } else processor->release = true;
+        CHECK(eventually([&] { return r.get(first).status == (cancel ? TaskStatus::canceled : TaskStatus::completed); }));
+        if (cancel) {
+            CHECK_FALSE(r.get(first).result_json);
+            CHECK_FALSE(fs::exists(r.root / ".music-service-work" / infrastructure::filesystem::path_from_utf8(first)));
+        }
+    }
+}
+
 TEST_CASE("Retry-After moves the next attempt later, within its cap", "[downloads][runner]") {
     auto options = quick_options();
     options.max_retry_after = 120s;
@@ -1120,6 +1262,123 @@ TEST_CASE("a cut-off or non-audio body is never published", "[downloads][runner]
     CHECK((report.outcome == RunOutcome::waiting_retry || report.outcome == RunOutcome::failed));
     CHECK(r.get(id).status != TaskStatus::completed);
     CHECK_FALSE(fs::exists(r.root / "detail.mp3"));
+}
+
+TEST_CASE("processing and observer exceptions release slots and save a terminal error", "[stability][downloads]") {
+    class ThrowOnce final : public ports::AudioProcessor {
+    public:
+        ports::ProcessingPlan plan() const override { return {}; }
+        std::atomic<int> calls{0};
+        domain::Result<ports::ProcessingReport> process(const ports::ProcessingRequest& request,
+                                                        const ports::OperationContext& context) override {
+            if (++calls == 1) throw std::runtime_error("injected processor failure");
+            return audio_processing::VerifyingProcessor{}.process(request, context);
+        }
+    };
+    auto processor = std::make_shared<ThrowOnce>();
+    Runs r{"throwing-processing", quick_options(), {}, processor};
+    const auto first = r.create("src", "one"), second = r.create("src", "two");
+    auto executor = std::make_shared<runtime::BoundedExecutor>("downloads", 1, 4);
+    downloads::DownloadScheduler scheduler{{1, 10ms}, r.tasks, r.ledger, r.runner, executor, r.clock,
+        [](const auto&, const auto&) { throw std::runtime_error("observer failed"); }};
+    scheduler.start();
+    const bool done = eventually([&] {
+        return r.get(first).status == TaskStatus::failed && r.get(second).status == TaskStatus::completed &&
+               scheduler.stats().running == 0;
+    });
+    scheduler.stop_claiming();
+    scheduler.stop_running();
+    executor->request_stop();
+    executor->join();
+    scheduler.join();
+    REQUIRE(done);
+    CHECK(json::parse(*r.get(first).error_json)["code"] == "INTERNAL_ERROR");
+    CHECK(scheduler.stats().errors == 2);
+    CHECK(scheduler.stats().running == 0);
+}
+
+TEST_CASE("queued processing can be canceled expired or dropped without leaving a waiter", "[stability][downloads]") {
+    auto options = quick_options();
+    options.attempt_budget = 1s;
+    Runs r{"queued-processing", options, {}, {}, 0};
+    const auto id = r.create();
+    auto claimed = unwrap(r.tasks->claim(id, r.clock->now()));
+    REQUIRE(claimed);
+    downloads::ExecutionControl control;
+    auto result = std::async(std::launch::async, [&] { return r.runner->run(*claimed, control); });
+    const bool queued = eventually([&] { return r.processing->stats().queued == 1; });
+    CHECK(queued);
+    auto expected = RunOutcome::waiting_admission;
+    SECTION("dropped queue publishes broken promise") { r.processing->request_stop(); }
+    SECTION("cancel does not wait for a processing worker") {
+        REQUIRE(r.tasks->request_cancel(r.owner, id));
+        control.request(downloads::StopReason::canceled);
+        expected = RunOutcome::canceled;
+    }
+    SECTION("deadline stops waiting for an unstarted operation") { expected = RunOutcome::waiting_retry; }
+    const bool ready = result.wait_for(3s) == std::future_status::ready;
+    r.processing->request_stop();
+    REQUIRE(ready);
+    CHECK(result.get().outcome == expected);
+    CHECK_FALSE(domain::is_running(r.get(id).status));
+}
+
+TEST_CASE("a provider exception becomes a persisted failure", "[stability][downloads]") {
+    Runs r{"throwing-resolve"};
+    r.script->answer = [](const auto&) -> domain::Result<ports::ResolvedAudio> { throw std::runtime_error("secret"); };
+    const auto id = r.create();
+    CHECK(r.run_next().outcome == RunOutcome::failed);
+    CHECK(r.get(id).status == TaskStatus::failed);
+    CHECK(r.get(id).error_json->find("secret") == std::string::npos);
+}
+
+TEST_CASE("the dispatcher survives a readiness exception and resumes claiming", "[stability][scheduler]") {
+    class ThrowOnceAdmission final : public ports::UpstreamAdmissionPort {
+    public:
+        explicit ThrowOnceAdmission(std::shared_ptr<ports::UpstreamAdmissionPort> next) : next_(std::move(next)) {}
+        domain::Result<ports::AdmissionOutcome> try_acquire(const ports::AdmissionRequest& request) override {
+            return next_->try_acquire(request);
+        }
+        std::optional<ports::Deferred> readiness(const ports::AdmissionRequest& request) const override {
+            if (!thrown_.exchange(true)) throw std::runtime_error("injected readiness failure");
+            return next_->readiness(request);
+        }
+        void feedback(const ports::AdmissionRequest& request,
+                      std::optional<std::chrono::steady_clock::time_point> retry) override { next_->feedback(request, retry); }
+    private:
+        std::shared_ptr<ports::UpstreamAdmissionPort> next_;
+        mutable std::atomic<bool> thrown_{false};
+    };
+    Runs r{"dispatch-exception"};
+    const auto id = r.create();
+    auto executor = std::make_shared<runtime::BoundedExecutor>("downloads", 1, 4);
+    auto admission = std::make_shared<ThrowOnceAdmission>(r.ledger);
+    downloads::DownloadScheduler scheduler{{1, 10ms}, r.tasks, admission, r.runner, executor, r.clock};
+    scheduler.start();
+    const bool done = eventually([&] { return r.get(id).status == TaskStatus::completed; });
+    scheduler.stop_claiming();
+    scheduler.stop_running();
+    executor->request_stop();
+    executor->join();
+    scheduler.join();
+    CHECK(done);
+    CHECK(scheduler.stats().errors == 1);
+    CHECK(scheduler.stats().running == 0);
+}
+
+TEST_CASE("dropping queued downloads returns their claim and scheduler slot", "[stability][scheduler]") {
+    Runs r{"dropped-download"};
+    const auto id = r.create();
+    auto executor = std::make_shared<runtime::BoundedExecutor>("downloads", 0, 4);
+    downloads::DownloadScheduler scheduler{{1, 10ms}, r.tasks, r.ledger, r.runner, executor, r.clock};
+    scheduler.start();
+    CHECK(eventually([&] { return executor->stats().queued == 1; }));
+    scheduler.stop_claiming();
+    scheduler.join();
+    executor->request_stop();
+    CHECK(scheduler.wait_idle(1s));
+    CHECK(scheduler.stats().running == 0);
+    CHECK(r.get(id).status == TaskStatus::waiting_retry);
 }
 
 TEST_CASE("the scheduler shares slots fairly and skips blocked sources (A43)", "[downloads][scheduler]") {

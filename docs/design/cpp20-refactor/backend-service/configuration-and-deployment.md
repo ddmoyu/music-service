@@ -25,9 +25,9 @@
 | `public_urls` | 对外 api_base、media_base 与 events_base；远程部署显式配置，不信任任意 Host／Forwarded 头拼 URL |
 | `security` | allow_insecure_remote=false。任一 public URL 为非 loopback 地址且使用 http 时，check-config 与启动失败，必须改用入站 TLS 或前置 HTTPS 反向代理；仅内网测试可显式设为 true，启动时持续记录警告，因为 Bearer token 与媒体票据会以明文传输 |
 | `http` | body_limit=256 KiB，控制读写空闲各 10 秒，keep_alive_timeout=3 秒，单连接请求数上限 50 |
-| `admission` | 昂贵控制请求全局 8／每 principal 2；调用者超出 429，整体不足 503 |
+| `admission` | 昂贵控制请求全局默认 8／每 principal 2；实际全局上限不超过 control.workers - 1，保留控制容量；调用者超出 429，整体不足 503，均带 Retry-After: 1 |
 | `upstream` | short_workers=8，queue=64，per_source_short=2，per_principal=8（单个 principal 同时进行的上游操作），per_origin=4（单个 origin 同时进行的操作），max_total_connections=16，max_response=2 MiB，redirect_max=5；普通连接默认 3 秒 |
-| `catalog` | 总查询预算 10 秒／上限 15 秒，每来源 5 秒，单请求 fanout=4、max_sources_per_request=8；default_sources 随发行 preset 生成，S1 为 [kuwo] |
+| `catalog` | 总查询预算 10 秒／上限 15 秒，每来源 5 秒，单请求 fanout=4、max_sources_per_request=16；default_sources 随发行 preset 生成，S1 为 [kuwo] |
 | `providers` | 按 source 配置 enabled、implementation、options、app_profile_id 和稳定配额组；app profile 包含版本及 app_secret_ref，按 bundle 的授权 schema 校验，不预设平台总数上限 |
 | `app_profiles` | 默认空；按稳定 ID 配置允许的 source／auth_profile、version、公开应用参数、app_secret_ref、scope 范围和 rate_limit_group；只由管理配置建立，秘密不直接写入配置 |
 | `downloads` | workers=3 为 Runner 执行槽；per_source=2 为实际音源传输上限，由统一入场管理；max_attempts=3，transport_retries=2，文件最大 2 GiB。只启用一个来源时（S1）实际传输并发为 2，调度器依据入场就绪提示不领取已知受限来源的任务，避免第三个执行槽反复领取后延后 |
@@ -41,7 +41,7 @@
 | `media_stream` | bridge_buffer=256 KiB，connect_timeout=5 秒，read/write idle=30 秒，单流最长 30 分钟 |
 | `lifetimes` | 解析描述 5 分钟，游标 10 分钟，匹配上下文 5 分钟，媒体访问／票据默认 60 秒；不设播放会话寿命 |
 | `storage` | SQLite WAL，单 writer、队列 128、读取连接最多 2、数据库等待预算 500 ms |
-| `cache` | catalog 128 项／总估算 16 MiB／60 秒，失败抑制最多 5 秒；应用 token 最多 128 条，计入下文短期句柄的 32 MiB 预算；其他短期句柄另有总量限制 |
+| `cache` | catalog 128 项／总估算 16 MiB／60 秒，失败不缓存；未实现的失败抑制和应用 token 缓存配置拒绝加载；其他短期句柄另有总量限制 |
 | `shutdown` | 在途工作软收尾预算 15 秒，之后保存检查点并请求停止 |
 | `filesystem` | 失败任务工作文件默认最多保留 24 小时；用户取消清理未发布工作文件，活动恢复文件不按终态 TTL 删除 |
 
@@ -57,7 +57,7 @@ app_profile 的 version 是管理配置中的正整数，应用身份或授权�
 
 短期内存句柄另设实例上限：context 10000、cursor 5000、asset 1000、match 1000、media_ticket 2000，总估算额外 32 MiB；每 principal 不超过实例上限的可配置份额。到期优先清理，正在传输的请求持有独立资源引用直到结束；无法接收新句柄时返回 SERVICE_BUSY。媒体访问描述不另建句柄表，不保存播放器状态。
 
-平台注册数量与每次查询来源数分开。default_sources 必须是已注册且启用的来源，数量不超过 max_sources_per_request；S0 无平台时可以为空，搜索返回明确的能力不可用。新增平台不会自动加入默认搜索，不为每个平台创建专属线程池。provider options 按各实现声明校验，未知 source／配置键失败；可选工具缺失只使依赖它的能力不可用，其他平台正常启动。扩展规则见[多平台适配](provider-extensibility.md)。
+平台注册数量与每次查询来源数分开。default_sources 必须是已注册且启用的来源，数量不超过 max_sources_per_request；S0 无平台时可以为空，搜索返回明确的能力不可用。新增平台不会自动加入默认搜索，不为每个平台创建专属线程池。provider options 按各实现声明校验，未知 source／配置键失败；项目不接入外部独立工具；新增依赖库须先经用户评审。扩展规则见[多平台适配](provider-extensibility.md)。
 
 ## 监听地址与端口冲突
 
@@ -86,7 +86,7 @@ app_profile 的 version 是管理配置中的正整数，应用身份或授权�
   "cors": {"allowed_origins": ["http://127.0.0.1:5173"]},
   "destinations": [{"id": "dst_default", "name": "默认下载", "root": "./downloads", "principals": ["prn_local"]}],
   "upstream": {"short_workers": 8, "queue": 64, "per_source_short": 2, "max_total_connections": 16},
-  "catalog": {"default_sources": ["kuwo"], "max_sources_per_request": 8},
+  "catalog": {"default_sources": ["kuwo"], "max_sources_per_request": 16},
   "providers": {"kuwo": {"enabled": true, "implementation": "native"}},
   "downloads": {"workers": 3, "per_source": 2, "max_attempts": 3, "transport_retries": 2,
     "output": {"name_format": "artist_title", "folder_layout": "flat",
@@ -142,7 +142,7 @@ events.enabled=true 同样要求构建包含 SSE 功能，且 event_limits 全�
 
 ## 凭证与 TLS
 
-SQLite 统一保存 token 哈希、principal 和 scopes。init 通过受权限保护的 bootstrap-token.txt 一次性交付明文 token，取走后删除；该文件不参与运行时认证。日志只打印文件位置。平台 Cookie、OAuth token、API key 放 SecretStore，DB 保存 kind、auth_profile、secret_ref 和版本；应用级 client_secret 由 app_profile 管理配置引用，不能混入普通用户账号。app_profile_id 与用户 credential_id 稳定且不可回收复用，配置及授权变化推进相应版本；应用 token 使用受限内存缓存，上限见配置表 cache，重启后重新获取。
+SQLite 统一保存 token 哈希、principal 和 scopes。init 通过受权限保护的 bootstrap-token.txt 一次性交付明文 token，取走后删除；该文件不参与运行时认证。日志只打印文件位置。平台 Cookie、OAuth token、API key 放 SecretStore，DB 保存 kind、auth_profile、secret_ref 和版本。应用级身份及 token 缓存属于后续能力：当前 app_profiles 仅接受空对象，cache.app_token_entries 不接受配置。未来应用秘密与用户账号必须分开，稳定身份标识不可回收复用，授权变化推进版本。
 
 平台注册的授权工厂负责协议，CredentialService 负责租约与刷新合并；配置只有应用秘密不会自动开启未实现的刷新／登录能力。身份键与提交规则见[账号模型](data-models.md#账号绑定与授权身份)和[内部契约](internal-contracts.md#62-凭证和秘密提交)。
 

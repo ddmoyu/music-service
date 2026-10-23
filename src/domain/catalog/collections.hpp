@@ -43,6 +43,19 @@ struct Artist {
     ArtistRef ref;
     std::string name{};
     Artwork artwork{};
+    std::optional<std::string> description{};
+    std::optional<std::string> alternate_name{};
+    std::optional<std::string> country{};
+    std::optional<std::string> birth_date{};
+    std::optional<std::string> birthplace{};
+    std::optional<std::string> gender{};
+    std::optional<std::string> language{};
+    std::optional<std::string> height{};
+    std::optional<std::string> weight{};
+    std::optional<std::string> constellation{};
+    std::optional<std::uint64_t> track_count{};
+    std::optional<std::uint64_t> album_count{};
+    std::optional<std::uint64_t> mv_count{};
 };
 
 struct Podcast {

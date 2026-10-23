@@ -1,0 +1,77 @@
+[
+  {
+    "id": 6934,
+    "idstr": "lover303",
+    "creatorUserId": 128960,
+    "name": "Lover303",
+    "dateStart": 938901600,
+    "dateJoin": 1181426400,
+    "types": [
+      "www"
+    ],
+    "location": {
+      "country": "DEU",
+      "state": "HE"
+    },
+    "description": {
+      "fr": "",
+      "de": "",
+      "en": "&ldquo;For a finish we were treated to a two and a half Cosmic Late night Fullmoon    party with Lover 303.The techno Guitar Ikon Conny Maly again played with Mani    Neumeier, the master of the drums (as he is lovingly known in Japan), a Techno    Groove Party, as if it were all their own. Accompanied by an impressive Live    Fire performance, as well as a precise lightshow, every fan felt one more time    extreme value and enjoyment from this compact and ecstatic Live Loopings and    this carried on until 4 o clock in the morning.&rdquo;",
+      "pl": "",
+      "es": "",
+      "it": "",
+      "ru": "",
+      "pt": ""
+    },
+    "status": "visible",
+    "tags": [],
+    "cover": {
+      "small": {
+        "size50": "https://usercontent.jamendo.com?cid=1652438404&type=artist&id=6934&width=50",
+        "size75": "https://usercontent.jamendo.com?cid=1652438404&type=artist&id=6934&width=50",
+        "size100": "https://usercontent.jamendo.com?cid=1652438404&type=artist&id=6934&width=300",
+        "size130": "https://usercontent.jamendo.com?cid=1652438404&type=artist&id=6934&width=300",
+        "size150": "https://usercontent.jamendo.com?cid=1652438404&type=artist&id=6934&width=300",
+        "size200": "https://usercontent.jamendo.com?cid=1652438404&type=artist&id=6934&width=300",
+        "size300": "https://usercontent.jamendo.com?cid=1652438404&type=artist&id=6934&width=300",
+        "size600": "https://usercontent.jamendo.com?cid=1652438404&type=artist&id=6934&width=300"
+      },
+      "big": {
+        "size100": "https://usercontent.jamendo.com?cid=1652438404&type=hero-artist&id=6934&width=768",
+        "size200": "https://usercontent.jamendo.com?cid=1652438404&type=hero-artist&id=6934&width=768",
+        "size300": "https://usercontent.jamendo.com?cid=1652438404&type=hero-artist&id=6934&width=768",
+        "size400": "https://usercontent.jamendo.com?cid=1652438404&type=hero-artist&id=6934&width=1920",
+        "size600": "https://usercontent.jamendo.com?cid=1652438404&type=hero-artist&id=6934&width=1920"
+      }
+    },
+    "mostpopular": [
+      {
+        "id": 49295,
+        "popularityScore": 355.28
+      },
+      {
+        "id": 49297,
+        "popularityScore": 314.022
+      },
+      {
+        "id": 49294,
+        "popularityScore": 222.248
+      },
+      {
+        "id": 49289,
+        "popularityScore": 194.719
+      },
+      {
+        "id": 49288,
+        "popularityScore": 192.297
+      }
+    ],
+    "singles": [],
+    "albums": [
+      {
+        "id": 5987,
+        "dateCreated": 1181501824
+      }
+    ]
+  }
+]

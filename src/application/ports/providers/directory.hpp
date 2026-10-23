@@ -40,7 +40,7 @@ struct AuthMethodView {
     std::vector<std::string> scopes;
     bool supports_verify{false};
     bool supports_refresh{false};           // refresh ports arrive with T24
-    bool supports_application_token{false}; // application tokens arrive with T24
+    bool supports_application_token{false}; // application token ports arrive with T24
 };
 
 struct ProviderView {
@@ -125,6 +125,13 @@ public:
     virtual domain::Result<std::shared_ptr<ICredentialVerifier>>
     require_verifier(std::string_view source, std::string_view auth_profile,
                      CredentialKind kind) const = 0;
+
+    virtual domain::Result<void> validate_secret(std::string_view, std::string_view, CredentialKind kind,
+                                                 const SecretBytes&) const {
+        if (kind == CredentialKind::cookie) return domain::ok();
+        return domain::Error{domain::ErrorCode::capability_unsupported,
+                             "this auth profile does not accept structured credentials", false, {}};
+    }
 };
 
 } // namespace music_service::application::ports

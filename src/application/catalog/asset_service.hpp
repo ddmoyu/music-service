@@ -113,9 +113,10 @@ public:
                  std::shared_ptr<const ports::ProviderDirectory> providers,
                  std::shared_ptr<accounts::CredentialService> credentials, std::shared_ptr<ports::UpstreamHttp> upstream,
                  std::shared_ptr<const ports::Clock> clock, std::function<std::string()> new_asset_id,
-                 std::chrono::milliseconds budget);
+                 std::chrono::milliseconds budget, std::shared_ptr<ports::MemoryBudget> handle_budget = {});
 
     domain::Result<AssetDescriptor> resolve(const ResolveRequest& request);
+    void collect_expired();
 
     // RESOURCE_EXPIRED when the asset expired or its account changed since; NOT_FOUND
     // for unknown or foreign ids. Reads at most probe_bytes of the audio.

@@ -1,0 +1,162 @@
+[
+  {
+    "id": 5987,
+    "name": "Modern Fairytales",
+    "artistId": 6934,
+    "dateCreated": 1181501824,
+    "status": {
+      "available": true,
+      "nonAvailabilityReason": null
+    },
+    "moderation": "publishable",
+    "description": {
+      "fr": "",
+      "de": "",
+      "en": "Modern Fairytales 2001<br /><br />Conni Maly: Groovebox, Samples, E-Guitar, Space Dildo<br /><br />Mani Neumeier Drums, Percussion, Vocals, Sounds",
+      "pl": "",
+      "es": "",
+      "it": "",
+      "ru": "",
+      "pt": ""
+    },
+    "coverUpload": 1,
+    "dateReleased": 993938400,
+    "dateUpdated": 1652438482,
+    "tags": [
+      {
+        "id": 210,
+        "name": "instrumental",
+        "category": "audiodescriptor",
+        "weight": 1,
+        "isOfficial": 0
+      },
+      {
+        "id": 327,
+        "name": "electronic",
+        "category": "genre",
+        "weight": 1,
+        "isOfficial": 0
+      },
+      {
+        "id": 12409,
+        "name": "medium",
+        "category": "audiodescriptor",
+        "weight": 1,
+        "isOfficial": 0
+      },
+      {
+        "id": 5942,
+        "name": "energetic",
+        "category": "mood",
+        "weight": 0.774194,
+        "isOfficial": 0
+      },
+      {
+        "id": 3603,
+        "name": "synthesizer",
+        "category": "instrument",
+        "weight": 0.668903,
+        "isOfficial": 0
+      },
+      {
+        "id": 41,
+        "name": "trance",
+        "category": "genre",
+        "weight": 0.587226,
+        "isOfficial": 0
+      },
+      {
+        "id": 316,
+        "name": "downtempo",
+        "category": "genre",
+        "weight": 0.414968,
+        "isOfficial": 0
+      },
+      {
+        "id": 1498,
+        "name": "groovy",
+        "category": "mood",
+        "weight": 0.348387,
+        "isOfficial": 0
+      }
+    ],
+    "cover": {
+      "small": {
+        "size50": "https://usercontent.jamendo.com?cid=1652438482&type=album&id=5987&width=50",
+        "size75": "https://usercontent.jamendo.com?cid=1652438482&type=album&id=5987&width=50",
+        "size100": "https://usercontent.jamendo.com?cid=1652438482&type=album&id=5987&width=300",
+        "size130": "https://usercontent.jamendo.com?cid=1652438482&type=album&id=5987&width=300",
+        "size150": "https://usercontent.jamendo.com?cid=1652438482&type=album&id=5987&width=300",
+        "size200": "https://usercontent.jamendo.com?cid=1652438482&type=album&id=5987&width=300",
+        "size300": "https://usercontent.jamendo.com?cid=1652438482&type=album&id=5987&width=300",
+        "size600": "https://usercontent.jamendo.com?cid=1652438482&type=album&id=5987&width=600"
+      },
+      "big": {
+        "size200": "https://usercontent.jamendo.com?cid=1652438482&type=album&id=5987&width=300",
+        "size300": "https://usercontent.jamendo.com?cid=1652438482&type=album&id=5987&width=300",
+        "size400": "https://usercontent.jamendo.com?cid=1652438482&type=album&id=5987&width=300",
+        "size600": "https://usercontent.jamendo.com?cid=1652438482&type=album&id=5987&width=600"
+      }
+    },
+    "tracks": [
+      {
+        "position": 1,
+        "id": 49288,
+        "dateCreated": "2007-06-10 20:57:04"
+      },
+      {
+        "position": 2,
+        "id": 49289,
+        "dateCreated": "2007-06-10 20:57:04"
+      },
+      {
+        "position": 3,
+        "id": 49290,
+        "dateCreated": "2007-06-10 20:57:04"
+      },
+      {
+        "position": 4,
+        "id": 49291,
+        "dateCreated": "2007-06-10 20:57:04"
+      },
+      {
+        "position": 5,
+        "id": 49292,
+        "dateCreated": "2007-06-10 20:57:04"
+      },
+      {
+        "position": 6,
+        "id": 49293,
+        "dateCreated": "2007-06-10 20:57:04"
+      },
+      {
+        "position": 7,
+        "id": 49294,
+        "dateCreated": "2007-06-10 20:57:04"
+      },
+      {
+        "position": 8,
+        "id": 49295,
+        "dateCreated": "2007-06-10 20:57:04"
+      },
+      {
+        "position": 9,
+        "id": 49296,
+        "dateCreated": "2007-06-10 20:57:04"
+      },
+      {
+        "position": 10,
+        "id": 49297,
+        "dateCreated": "2007-06-10 20:57:04"
+      }
+    ],
+    "types": [
+      "www"
+    ],
+    "download": {
+      "mp3": "https://storage.jamendo.com/download/a5987/mp32/",
+      "ogg": "https://storage.jamendo.com/download/a5987/ogg/"
+    },
+    "isDownloadable": 1
+  }
+]

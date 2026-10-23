@@ -21,7 +21,7 @@
 | 原曲与音源 | original_track 保存用户目标，actual_track 保存实际音频曲目；不能用目录平台名覆盖真实下载来源 |
 | 跨源匹配证据 | ISRC、艺术家、标题、时长、专辑和版本可作证据；ISRC 可缺失或错误，不直接成为全局主键 |
 
-`spotify`、`youtube`、`soundcloud` 等是来源；`yt-dlp`、`spotDL` 等只是参考项目，既不是平台身份，也不作为运行依赖。YouTube 与 YouTube Music 的同一视频采用 `youtube` 的规范身份，音乐搜索入口作为该适配器的查询策略。
+`kuwo`、`netease`、`qq` 等是来源；`yt-dlp`、`spotDL` 等只是参考项目，既不是平台身份，也不作为运行依赖。YouTube 与 YouTube Music 的同一视频采用 `youtube` 的规范身份，音乐搜索入口作为该适配器的查询策略。
 
 ## 3. 能力接口与注册
 
@@ -53,24 +53,20 @@
 
 首版静态注册原生实现；不加载任意 C++ 动态库，也不承诺跨编译器 C++ ABI 或热卸载。
 
-## 5. Spotify 的接入位置
+## 5. 目录与实际音源的关系
 
-Spotify Web API 的公开用途是目录、歌单和播放控制；这里首先接入目录能力，不把它声明成可返回整曲文件的下载 API。[Spotify Web API](https://developer.spotify.com/documentation/web-api)
-
-[spotDL](https://github.com/spotDL/spotify-downloader) 的公开实现路线是读取 Spotify 信息、匹配 YouTube 并下载；它还包含自己的下载和媒体处理流程。本项目只参考其匹配与元数据映射思路，不使用它或它依赖的下载工具。目录先原生接入，音频来源再通过独立的原生 Provider 接入。
+目录源与实际音频来源通过独立能力表达。目录能力本身不声明可下载音频；具体跨源组合属于 S4，只有通过对应平台的真实验证后才能声明支持。
 
 ```text
-Spotify 链接／搜索 → spotify 目录能力 → 原曲元信息
+链接／搜索 → 目录能力 → 原曲元信息
     → MatchService（用户手动选择，或显式启用的自动策略）
-    → 其他已原生接入并验证的来源的 IAssetResolver
+    → 已原生接入并验证的来源的 IAssetResolver
     → 公共下载 Runner → 处理／发布
 ```
 
 无匹配选择且自动换源关闭时，目录源的同源解析返回 CAPABILITY_UNSUPPORTED；不得偷偷转到另一平台。手动选择先核验匹配上下文，再检查实际目标的音源能力，不能在检查原曲 `resolve_audio=false` 时提前挡住合法选择。自动模式只有在服务开关、请求允许及匹配条件同时满足时才可处理目录源的能力缺失。
 
-任务和资产同时保留 original_track、actual_track、匹配选择／证据摘要与实际品质。以 `spotify:A → youtube:B` 下载的文件不能宣称是 Spotify 原始音频或 Spotify 无损音质。Spotify 歌单按现有分页由客户端选择后分批提交；本次不增加完整后台歌单枚举或目录同步删除功能。
-
-接入前验证应用授权方式、scope、配额模式、地区和当前端点，不能假定所有开发者应用都可访问所有歌单。授权与限流依据：[授权方式](https://developer.spotify.com/documentation/web-api/concepts/authorization)、[配额](https://developer.spotify.com/documentation/web-api/concepts/quota-modes)、[限流](https://developer.spotify.com/documentation/web-api/concepts/rate-limits)。
+任务和资产同时保留 original_track、actual_track、匹配选择／证据摘要与实际品质，不能将另一来源的音频宣称为原平台音频。集合仍由客户端分页选择后分批提交，不增加完整后台枚举或目录同步删除功能。
 
 ## 6. 凭证与账号
 
@@ -104,7 +100,7 @@ S1 可只实现 Cookie 导入与校验；没有刷新工厂时明确要求外部
 
 ## 7. 传输、处理与责任归属
 
-Provider 只产出内部资源计划和证据。资源计划按类型表达 `HttpAsset`（今后新增的传输形态同样由服务自己实现），包含实际来源、请求条件、指纹、有效期及所需处理；API 不返回秘密或可执行命令。文件处理扩展通过受控 processor_id 和版本化私有参数绑定，不在 Runner 中增加 `if source == migu/soda`。
+Provider 只产出内部资源计划和证据。资源计划按类型表达 `HttpAsset`（今后新增的传输形态同样由服务自己实现），包含实际来源、请求条件、指纹、有效期及所需处理；API 不返回秘密或可执行命令。文件处理扩展通过受控 processor_id 和版本化私有参数绑定，不在 Runner 中增加 按 source 分支的处理逻辑。
 
 ResolveService 选择和验证计划，TransferExecutor 按计划类型选择实现，AudioProcessor 按处理能力执行，Finalizer 统一发布。任务、幂等、取消、重试、恢复、SSE、文件归属和大小上限只有公共模块负责。
 
@@ -133,9 +129,9 @@ ResolveService 选择和验证计划，TransferExecutor 按计划类型选择实
 | 凭证隔离 | 跨 principal 及同 principal 同平台两个 version=1 的账号均不串用；刷新、撤销、更新竞争遵守版本条件 |
 | 授权扩展 | 第二个具有不同授权协议的模拟平台仅增加 bundle 工厂与样本；缺少绑定、重复 profile 在启动发现；未实现刷新不对外宣称支持 |
 | 额度归属 | 目录解析、实际音源和重定向使用同一入场账本；共享应用组不随账号 token 版本重置，实际结束后才释放 |
-| 目录换源 | Spotify 原曲与音频目标分别保留；策略关闭不换源，手动选择可用，误匹配不伪装同源下载 |
+| 目录换源 | 原曲与音频目标分别保留；策略关闭不换源，手动选择可用，误匹配不伪装同源下载 |
 | 故障隔离 | 一个来源限流或卡住，其他来源和控制入口仍可处理；取消后实际 I/O 结束 |
 | 恢复与升级 | 私有上下文版本变化和平台禁用均明确处理；已发布文件不依赖 Provider 继续存在 |
 | 目标部署 | 启用的原生／外部组合分别验证 Windows、Linux、容器；缺少可选工具不影响基础包 |
 
-S0／S1 先完成稳定 source、能力注册、酷我和一组模拟契约；S2 用第二个真实平台与 Spotify 目录验证扩展边界；目录跨源下载按现有 S4 匹配能力交付。不会为“未来很多平台”预先建立空实现、热加载框架或独立分布式服务。
+S0／S1 先完成稳定 source、能力注册、酷我和一组模拟契约；S2 用第二个真实平台与模拟目录源验证扩展边界；目录跨源下载按现有 S4 匹配能力交付。不会为“未来很多平台”预先建立空实现、热加载框架或独立分布式服务。

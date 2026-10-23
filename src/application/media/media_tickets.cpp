@@ -20,29 +20,11 @@ std::string_view to_string(TargetKind kind) noexcept {
 
 MediaTicketService::MediaTicketService(std::shared_ptr<ports::AccessTokenCodec> codec,
                                        std::shared_ptr<const ports::Clock> clock, std::size_t capacity,
-                                       std::size_t per_owner)
-    : codec_(std::move(codec)), clock_(std::move(clock)), capacity_(std::max<std::size_t>(1, capacity)),
-      per_owner_(std::max<std::size_t>(1, per_owner)) {}
-
-void MediaTicketService::purge(std::chrono::system_clock::time_point now) {
-    for (auto it = live_.begin(); it != live_.end();) {
-        if (it->second.expires_at > now) {
-            ++it;
-            continue;
-        }
-        if (auto owned = owned_.find(it->second.owner_id); owned != owned_.end() && --owned->second == 0) {
-            owned_.erase(owned);
-        }
-        if (expired_.insert(it->first).second) {
-            expired_order_.push_back(it->first);
-        }
-        it = live_.erase(it);
-    }
-    while (expired_order_.size() > capacity_) {
-        expired_.erase(expired_order_.front());
-        expired_order_.pop_front();
-    }
-}
+                                       std::size_t per_owner, std::shared_ptr<ports::MemoryBudget> budget)
+    : codec_(std::move(codec)), clock_(std::move(clock)),
+      tickets_(capacity, per_owner, {}, std::move(budget), [](const TicketGrant& grant) {
+          return sizeof(grant) + grant.owner_id.capacity() + grant.token_id.capacity() + grant.target_id.capacity() + 3;
+      }) {}
 
 domain::Result<IssuedTicket> MediaTicketService::issue(TicketGrant grant) {
     auto generated = codec_->generate();
@@ -56,14 +38,10 @@ domain::Result<IssuedTicket> MediaTicketService::issue(TicketGrant grant) {
     token += underscore == std::string_view::npos ? random : random.substr(underscore + 1);
     const auto hash = codec_->hash(token);
 
-    const std::lock_guard lock{mutex_};
-    purge(clock_->now());
-    if (live_.size() >= capacity_ || owned_[grant.owner_id] >= per_owner_) {
-        return Error{ErrorCode::service_busy, "too many live media tickets", true, {}};
-    }
     const auto expires_at = grant.expires_at;
-    ++owned_[grant.owner_id];
-    live_.emplace(hash, std::move(grant));
+    const auto owner = grant.owner_id;
+    auto saved = tickets_.put_key(hash, owner, std::move(grant), expires_at, clock_->now());
+    if (!saved) return saved.error();
     return IssuedTicket{std::move(token), expires_at};
 }
 
@@ -72,24 +50,13 @@ domain::Result<TicketGrant> MediaTicketService::authorize(std::string_view token
         return Error{ErrorCode::not_found, "no such media ticket", false, {}};
     }
     const auto hash = codec_->hash(token);
-    const auto now = clock_->now();
-    const std::lock_guard lock{mutex_};
-    const auto it = live_.find(hash);
-    if (it == live_.end()) {
-        if (expired_.count(hash) != 0) {
-            return Error{ErrorCode::media_ticket_expired, "the media ticket has expired", false, {}};
-        }
-        return Error{ErrorCode::not_found, "no such media ticket", false, {}};
-    }
-    if (it->second.expires_at <= now) {
-        return Error{ErrorCode::media_ticket_expired, "the media ticket has expired", false, {}};
-    }
-    return it->second;
+    auto found = tickets_.get_by_key(hash, clock_->now(), ErrorCode::media_ticket_expired);
+    if (!found) return found.error();
+    return std::move(found->first);
 }
 
 std::size_t MediaTicketService::size() const {
-    const std::lock_guard lock{mutex_};
-    return live_.size();
+    return tickets_.size();
 }
 
 } // namespace music_service::application::media

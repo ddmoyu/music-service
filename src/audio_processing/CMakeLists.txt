@@ -4,11 +4,15 @@
 add_library(music_service_audio_processing STATIC
     format/byte_reader.cpp
     format/flac.cpp
+    format/flac_frames.cpp
     format/mp3.cpp
     format/mp4.cpp
+    format/wav.cpp
     tags/tag_writer.cpp
     verifying_processor.cpp
     ncm.cpp
+    kuwo_flac.cpp
+    migu_z3d.cpp
 )
 add_library(music_service::audio_processing ALIAS music_service_audio_processing)
 target_link_libraries(music_service_audio_processing

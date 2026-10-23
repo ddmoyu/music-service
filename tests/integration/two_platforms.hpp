@@ -147,8 +147,8 @@ public:
             }
             return answer(200, fixture("kuwo", "search-qingtian-pn0-rn3.json"), url);
         }
-        if (url == "https://www.kuwo.cn/play_detail/78932517") {
-            return answer(200, fixture("kuwo", "play-detail-78932517.html"), url);
+        if (url.starts_with("https://wapi.kuwo.cn/api/www/music/musicInfo?mid=78932517&")) {
+            return answer(200, fixture("kuwo", "track-info-78932517.json"), url);
         }
         if (url.rfind("https://nplserver.kuwo.cn/pl.svc?op=getlistinfo&pid=2234580349&", 0) == 0) {
             return answer(200, fixture("kuwo", "playlist-2234580349-pn0-rn2.json"), url);

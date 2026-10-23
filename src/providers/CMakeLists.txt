@@ -2,7 +2,7 @@
 # defining music_service_provider_<source> and providers/<source>/bundle.hpp with
 # make_bundle(). The registry references those functions from a generated file, so
 # no registration depends on static constructors surviving the linker.
-set(MUSIC_SERVICE_PROVIDERS "kuwo;fivesing;netease" CACHE STRING "Platform packages to build in (list of sources)")
+set(MUSIC_SERVICE_PROVIDERS "kuwo;fivesing;netease;qq;kugou;qianqian;jamendo;migu;bilibili" CACHE STRING "Platform packages to build in (list of sources)")
 
 set(provider_includes "")
 set(provider_calls "")

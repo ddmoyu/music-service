@@ -1,0 +1,24 @@
+[
+  {
+    "id": 2345165,
+    "name": "Madame art rock 15 sec",
+    "albumId": 646938,
+    "artistId": 508884,
+    "duration": 18,
+    "status": {
+      "available": true,
+      "nonAvailabilityReason": null
+    }
+  },
+  {
+    "id": 2345267,
+    "name": "Точное время (с оркестром)",
+    "albumId": 646972,
+    "artistId": 501374,
+    "duration": 243,
+    "status": {
+      "available": true,
+      "nonAvailabilityReason": null
+    }
+  }
+]

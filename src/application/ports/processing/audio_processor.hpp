@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -15,6 +16,8 @@
 #include <utility>
 
 namespace music_service::application::ports {
+
+class SecretBytes;
 
 // What resolve and the transfer claimed about the file. Every field is optional evidence
 // to compare the bytes with; none of it is trusted on its own.
@@ -28,7 +31,7 @@ struct AudioExpectation {
 
 // An embedded picture: the bytes as the platform delivered them.
 struct Picture {
-    std::string mime_type; // "image/jpeg" or "image/png"
+    std::string mime_type; // "image/jpeg", "image/png" or "image/webp"
     std::string data;
 };
 
@@ -54,6 +57,7 @@ struct ProcessingRequest {
     std::optional<TrackMetadata> metadata; // none: no supplied metadata; container processors may extract it
     bool embed_cover{true};
     bool embed_lyrics{true};
+    std::shared_ptr<const SecretBytes> decryption_key{}; // transient, supplied by resolve
 };
 
 // Facts measured from the bytes. Unknown values stay empty, never estimated.

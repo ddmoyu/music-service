@@ -14,6 +14,9 @@
 
 ## 规则
 
+- 新增依赖必须遵守 [项目开发约定](../../AGENTS.md)：先说明必要性、替代方案、体积与性能影响、跨平台支持、许可证及传递依赖，经用户明确评审同意后再引入；仅含头文件、仅用于测试、内置源码或升级额外带入的新库也适用。
+- 不得引入 ytdl、yt-dlp、Chrome 等外部独立工具实现项目能力；不以脚本包装、自动下载或用户自行安装规避该限制。
+- 体积以实际 Release 程序及发行包评估，合理精简，不追求极限压缩，不以牺牲稳定性和性能换取体积减少。
 - Git 依赖使用 `GIT_SHALLOW`、发布 tag，并在每次配置时校验：实际 HEAD 等于期望提交（tag 解引用后的 commit），工作区没有修改、暂存或未跟踪文件，子模块均已初始化且位于记录的提交、内部无修改。任一不符即配置失败。`FETCHCONTENT_SOURCE_DIR_<NAME>` 离线覆盖与复用的构建目录同样适用。
 - SQLite 官方不提供 Git 发布 tag，使用官方 amalgamation 归档：下载时由 FetchContent 校验站点公布的归档 SHA3-256；此外每次配置都校验 `sqlite3.c`、`sqlite3.h` 的固定 SHA3-256（[Versions.cmake](Versions.cmake)），因此源码覆盖不能绕过版本校验。解压使用当前时间而非归档内时间，升级后的源码总比旧目标文件新，Ninja 会重新编译。
 - cpp-httplib 不使用其自带 CMakeLists（会搜索系统 OpenSSL、zlib、brotli），由 [adapters/httplib.cmake](../adapters/httplib.cmake) 提供头文件目标并显式启用 Mbed TLS；压缩暂不启用。SQLite 由 [adapters/sqlite.cmake](../adapters/sqlite.cmake) 编译为静态库。

@@ -27,6 +27,8 @@ install(FILES "${music_service_taglib_SOURCE_DIR}/COPYING.MPL" DESTINATION ${_sh
 install(FILES "${music_service_taglib_SOURCE_DIR}/3rdparty/utfcpp/LICENSE" DESTINATION ${_share}/licenses
         RENAME utfcpp-LICENSE.txt)
 install(FILES "${PROJECT_SOURCE_DIR}/packaging/package/THIRD-PARTY.md" DESTINATION ${_share}/licenses)
+install(FILES "${PROJECT_SOURCE_DIR}/packaging/package/licenses/unlock-music-LICENSE.txt"
+        DESTINATION ${_share}/licenses)
 
 if(WIN32)
     install(FILES

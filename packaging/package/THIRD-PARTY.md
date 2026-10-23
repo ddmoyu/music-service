@@ -13,5 +13,11 @@ in this directory. Versions are pinned in `cmake/dependencies/Versions.cmake` of
 | zlib | lyric decompression | zlib | `zlib-LICENSE.txt` |
 | SQLite | database | Public domain | none needed |
 
+The native MG3D key-recovery algorithm in `audio_processing/migu_z3d.cpp` adapts
+Unlock Music's MIT-licensed approach (Copyright 2019-2023 MengYX). Its notice is
+included as `unlock-music-LICENSE.txt`. Reference source:
+[mg3d.ts, revision f27bc0478555d8de4b068205f6d15d17edd4e0ca](https://github.com/DHJComical/unlock-music-web-mirror/blob/f27bc0478555d8de4b068205f6d15d17edd4e0ca/src/decrypt/mg3d.ts).
+This is compiled C++ code; the JavaScript application is not bundled or invoked.
+
 The Windows program also contains the Microsoft C/C++ runtime, linked statically under the
 Visual Studio license terms for redistributable code.

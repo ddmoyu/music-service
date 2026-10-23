@@ -36,10 +36,12 @@ inline constexpr std::string_view search_albums = "search_albums";
 inline constexpr std::string_view album_detail = "album_detail";
 inline constexpr std::string_view album_tracks = "album_tracks";
 inline constexpr std::string_view search_artists = "search_artists";
+inline constexpr std::string_view artist_detail = "artist_detail";
 inline constexpr std::string_view artist_tracks = "artist_tracks";
 inline constexpr std::string_view artist_albums = "artist_albums";
 inline constexpr std::string_view categories = "categories";
 inline constexpr std::string_view category_playlists = "category_playlists";
+inline constexpr std::string_view category_tracks = "category_tracks";
 inline constexpr std::string_view charts = "charts";
 inline constexpr std::string_view chart_detail = "chart_detail";
 inline constexpr std::string_view chart_tracks = "chart_tracks";
@@ -137,6 +139,8 @@ struct ResolvedAudio {
     // The platform allows handing url to clients as is (direct media URLs). Never set for
     // addresses that need request_headers, decryption or account secrets in the URL.
     bool shareable{false};
+    // Per-file processing secret: memory only, never part of an asset or task snapshot.
+    std::shared_ptr<const SecretBytes> decryption_key{};
 };
 
 class IAssetResolver {
@@ -196,6 +200,10 @@ struct AlbumDetail {
     using Item = domain::Album;
     static constexpr std::string_view key = capability::album_detail;
 };
+struct ArtistDetail {
+    using Item = domain::Artist;
+    static constexpr std::string_view key = capability::artist_detail;
+};
 struct ChartDetail {
     using Item = domain::Chart;
     static constexpr std::string_view key = capability::chart_detail;
@@ -223,6 +231,10 @@ struct ArtistAlbums {
 struct CategoryPlaylists {
     using Item = domain::Playlist;
     static constexpr std::string_view key = capability::category_playlists;
+};
+struct CategoryTracks {
+    using Item = domain::Track;
+    static constexpr std::string_view key = capability::category_tracks;
 };
 } // namespace catalog_tag
 
@@ -295,6 +307,7 @@ using AlbumSearch = ICatalogSearch<catalog_tag::SearchAlbums>;
 using ArtistSearch = ICatalogSearch<catalog_tag::SearchArtists>;
 using PlaylistDetail = IEntityDetail<catalog_tag::PlaylistDetail>;
 using AlbumDetail = IEntityDetail<catalog_tag::AlbumDetail>;
+using ArtistDetail = IEntityDetail<catalog_tag::ArtistDetail>;
 using ChartDetail = IEntityDetail<catalog_tag::ChartDetail>;
 using PlaylistTracks = IEntityList<catalog_tag::PlaylistTracks>;
 using AlbumTracks = IEntityList<catalog_tag::AlbumTracks>;
@@ -302,6 +315,7 @@ using ArtistTracks = IEntityList<catalog_tag::ArtistTracks>;
 using ChartTracks = IEntityList<catalog_tag::ChartTracks>;
 using ArtistAlbums = IEntityList<catalog_tag::ArtistAlbums>;
 using CategoryPlaylists = IEntityList<catalog_tag::CategoryPlaylists>;
+using CategoryTracks = IEntityList<catalog_tag::CategoryTracks>;
 using PodcastDetail = IEntityDetail<catalog_tag::PodcastDetail>;
 using EpisodeDetail = IEntityDetail<catalog_tag::EpisodeDetail>;
 using PodcastEpisodes = IEntityList<catalog_tag::PodcastEpisodes>;

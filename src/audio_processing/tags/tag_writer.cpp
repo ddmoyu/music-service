@@ -3,6 +3,7 @@
 #include <flacfile.h>
 #include <mp4file.h>
 #include <mpegfile.h>
+#include <wavfile.h>
 #include <tpropertymap.h>
 #include <tvariant.h>
 
@@ -79,6 +80,8 @@ std::unique_ptr<TagLib::File> open(const std::filesystem::path& file, domain::Co
         return std::make_unique<TagLib::FLAC::File>(file.c_str(), false);
     case domain::Container::mp4:
         return std::make_unique<TagLib::MP4::File>(file.c_str(), false);
+    case domain::Container::wav:
+        return std::make_unique<TagLib::RIFF::WAV::File>(file.c_str(), false);
     default:
         return nullptr;
     }

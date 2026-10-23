@@ -31,6 +31,8 @@ catch_discover_tests(music_service_dependency_tests DISCOVERY_MODE PRE_TEST)
 add_executable(music_service_unit_tests
     unit/audio_processing/tagging_test.cpp
     unit/audio_processing/ncm_test.cpp
+    unit/audio_processing/kuwo_flac_test.cpp
+    unit/audio_processing/migu_z3d_test.cpp
     unit/audio_processing/verifying_processor_test.cpp
     unit/downloads/resume_policy_test.cpp
     unit/downloads/output_test.cpp
@@ -51,9 +53,11 @@ add_executable(music_service_unit_tests
     unit/infrastructure/secret_store_test.cpp
     unit/providers/kuwo_collections_test.cpp
     unit/providers/kuwo_test.cpp
+    unit/providers/kuwo_artists_test.cpp
     unit/providers/registry_test.cpp
     unit/runtime/admission_ledger_test.cpp
     unit/runtime/executor_test.cpp
+    unit/runtime/stability_test.cpp
 )
 # Platform packages left out of the build have no tests to run.
 if("fivesing" IN_LIST MUSIC_SERVICE_PROVIDERS)
@@ -62,6 +66,22 @@ endif()
 if("netease" IN_LIST MUSIC_SERVICE_PROVIDERS)
     target_sources(music_service_unit_tests PRIVATE unit/providers/netease_test.cpp)
 endif()
+if("qq" IN_LIST MUSIC_SERVICE_PROVIDERS)
+    target_sources(music_service_unit_tests PRIVATE unit/providers/qq_test.cpp)
+endif()
+if("migu" IN_LIST MUSIC_SERVICE_PROVIDERS)
+    target_sources(music_service_unit_tests PRIVATE unit/providers/migu_test.cpp)
+endif()
+if("jamendo" IN_LIST MUSIC_SERVICE_PROVIDERS)
+    target_sources(music_service_unit_tests PRIVATE unit/providers/jamendo_test.cpp)
+endif()
+if("kugou" IN_LIST MUSIC_SERVICE_PROVIDERS)
+    target_sources(music_service_unit_tests PRIVATE unit/providers/kugou_test.cpp)
+endif()
+if("qianqian" IN_LIST MUSIC_SERVICE_PROVIDERS)
+    target_sources(music_service_unit_tests PRIVATE unit/providers/qianqian_test.cpp)
+endif()
+
 target_link_libraries(music_service_unit_tests PRIVATE
     music_service::application
     music_service::audio_processing
@@ -102,6 +122,7 @@ add_executable(music_service_integration_tests
     integration/kuwo_gate_test.cpp
     integration/media_proxy_test.cpp
     integration/media_test.cpp
+    integration/ncm_download_test.cpp
     integration/publication_test.cpp
     integration/runner_test.cpp
     integration/s3_gate_test.cpp
@@ -112,6 +133,9 @@ add_executable(music_service_integration_tests
 if("fivesing" IN_LIST MUSIC_SERVICE_PROVIDERS)
     target_sources(music_service_integration_tests PRIVATE integration/fivesing_gate_test.cpp
                                                            integration/s2_gate_test.cpp)
+endif()
+if("migu" IN_LIST MUSIC_SERVICE_PROVIDERS)
+    target_sources(music_service_integration_tests PRIVATE integration/migu_z3d_download_test.cpp)
 endif()
 target_link_libraries(music_service_integration_tests PRIVATE
     music_service::application
@@ -131,3 +155,7 @@ target_compile_definitions(music_service_integration_tests PRIVATE
     MUSIC_SERVICE_TEST_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
 )
 catch_discover_tests(music_service_integration_tests DISCOVERY_MODE PRE_TEST)
+
+if("bilibili" IN_LIST MUSIC_SERVICE_PROVIDERS)
+    target_sources(music_service_unit_tests PRIVATE unit/providers/bilibili_test.cpp)
+endif()

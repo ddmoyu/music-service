@@ -19,6 +19,7 @@
 #include <charconv>
 #include <ctime>
 #include <exception>
+#include "application/ports/runtime/scope_exit.hpp"
 #include <mutex>
 #include <set>
 #include <thread>
@@ -366,7 +367,14 @@ json album_json(const domain::Album& a) {
 }
 
 json artist_json(const domain::Artist& a) {
-    return json{{"ref", ref_json(a.ref)}, {"name", a.name}, {"artwork", optional_string(a.artwork)}};
+    return json{{"ref", ref_json(a.ref)}, {"name", a.name}, {"artwork", optional_string(a.artwork)},
+        {"description", optional_string(a.description)}, {"alternate_name", optional_string(a.alternate_name)},
+        {"country", optional_string(a.country)}, {"birth_date", optional_string(a.birth_date)},
+        {"birthplace", optional_string(a.birthplace)}, {"gender", optional_string(a.gender)},
+        {"language", optional_string(a.language)}, {"height", optional_string(a.height)},
+        {"weight", optional_string(a.weight)}, {"constellation", optional_string(a.constellation)},
+        {"track_count", optional_uint(a.track_count)}, {"album_count", optional_uint(a.album_count)},
+        {"mv_count", optional_uint(a.mv_count)}};
 }
 
 json chart_json(const domain::Chart& c) {
@@ -803,6 +811,24 @@ bool read_cookie(const Call& call, const json& body, std::optional<std::string>&
     return true;
 }
 
+// Cookie 保留原始头格式；其他 profile 的结构化输入交由注册的平台校验。
+bool read_credential_secret(const Call& call, const json& body, std::string_view kind,
+                            std::optional<std::string>& value) {
+    if (kind == "cookie") return read_cookie(call, body, value);
+    if (body.contains("cookie")) {
+        call.fail(bad_request("cookie", "is only available for cookie credentials"));
+        return false;
+    }
+    if (auto it = body.find("secret"); it != body.end()) {
+        if (!it->is_object()) {
+            call.fail(bad_request("secret", "must be an object"));
+            return false;
+        }
+        value = it->dump();
+    }
+    return true;
+}
+
 thread_local SteadyClock::time_point request_started;
 
 } // namespace
@@ -814,6 +840,40 @@ struct ControlApi::Impl {
     std::thread thread;
     std::atomic<std::uint16_t> port{0};
     std::once_flag stopped;
+    std::mutex admission_mutex;
+    std::uint32_t admitted{0};
+    std::map<std::string, std::uint32_t> admitted_by_owner;
+
+    std::uint32_t admission_limit() const {
+        // Keep at least one listener worker available for local control operations.
+        return std::min(options.admission.global, std::max(options.listener.workers, 2u) - 1);
+    }
+
+    bool admit(Call& call) {
+        const std::lock_guard lock{admission_mutex};
+        const auto owner = admitted_by_owner.find(call.principal());
+        if (owner != admitted_by_owner.end() && owner->second >= options.admission.per_principal) {
+            call.res.set_header("Retry-After", "1");
+            call.fail(api_error(429, "CALLER_LIMIT_EXCEEDED", "too many concurrent requests for this principal"));
+            return false;
+        }
+        if (admitted >= admission_limit()) {
+            call.res.set_header("Retry-After", "1");
+            call.fail(api_error(503, "SERVICE_BUSY", "upstream request capacity is full"));
+            return false;
+        }
+        ++admitted_by_owner[call.principal()];
+        ++admitted;
+        return true;
+    }
+
+    void release(const std::string& owner) noexcept {
+        const std::lock_guard lock{admission_mutex};
+        if (const auto it = admitted_by_owner.find(owner); it != admitted_by_owner.end()) {
+            if (--it->second == 0) admitted_by_owner.erase(it);
+            --admitted;
+        }
+    }
 
     Impl(ControlApiOptions o, ControlApiServices s) : options(std::move(o)), services(std::move(s)) {
         configure();
@@ -826,7 +886,7 @@ struct ControlApi::Impl {
     }
 
     void configure() {
-        const auto workers = std::max<std::uint32_t>(options.listener.workers, 1);
+        const auto workers = std::max<std::uint32_t>(options.listener.workers, 2);
         const auto queue = options.listener.connection_queue;
         server.new_task_queue = [workers, queue] { return new httplib::ThreadPool(workers, workers, queue); };
         server.set_payload_max_length(options.http.body_limit_bytes);
@@ -899,7 +959,9 @@ struct ControlApi::Impl {
             if (services.on_request) {
                 const auto elapsed =
                     std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now() - request_started);
-                services.on_request(res.get_header_value("X-Request-Id"), req.method, req.path, res.status, elapsed);
+                try {
+                    services.on_request(res.get_header_value("X-Request-Id"), req.method, req.path, res.status, elapsed);
+                } catch (...) {} // diagnostics cannot escape a library worker thread
             }
         });
     }
@@ -907,8 +969,9 @@ struct ControlApi::Impl {
     enum class Access { open, any_scope, scoped };
 
     // Wraps a route with authentication, scope and content-type checks.
-    httplib::Server::Handler guard(Access access, std::string_view scope, std::function<void(Call&)> route) {
-        return [this, access, scope = std::string{scope}, route = std::move(route)](const httplib::Request& req,
+    httplib::Server::Handler guard(Access access, std::string_view scope, std::function<void(Call&)> route,
+                                  bool upstream = false) {
+        return [this, access, scope = std::string{scope}, route = std::move(route), upstream](const httplib::Request& req,
                                                                                    httplib::Response& res) {
             Call call{req, res, res.get_header_value("X-Request-Id"), std::nullopt};
             if (access != Access::open) {
@@ -939,7 +1002,16 @@ struct ControlApi::Impl {
                 call.fail(api_error(415, "UNSUPPORTED_CONTENT_TYPE", "request bodies must be application/json"));
                 return;
             }
-            route(call);
+            if (upstream) {
+                // cpp-httplib dedicates a worker to each keep-alive connection.
+                // Closing slow/rejected connections also releases that reservation.
+                res.set_header("Connection", "close");
+                if (!admit(call)) return;
+                const ports::ScopeExit release_slot{[this, &call]() noexcept { release(call.principal()); }};
+                route(call);
+            } else {
+                route(call);
+            }
         };
     }
 
@@ -966,7 +1038,7 @@ struct ControlApi::Impl {
         server.Put(R"(/api/v1/credentials/([A-Za-z0-9_]+))",
                    guard(Access::scoped, credentials, [this](Call& call) { update_credential(call); }));
         server.Post(R"(/api/v1/credentials/([A-Za-z0-9_]+)/verify)",
-                    guard(Access::scoped, credentials, [this](Call& call) { verify_credential(call); }));
+                    guard(Access::scoped, credentials, [this](Call& call) { verify_credential(call); }, true));
         server.Delete(R"(/api/v1/credentials/([A-Za-z0-9_]+))",
                       guard(Access::scoped, credentials, [this](Call& call) { revoke_credential(call); }));
         server.Get(R"(/api/v1/credential-defaults/([a-z0-9_]+))",
@@ -977,12 +1049,12 @@ struct ControlApi::Impl {
                       guard(Access::scoped, credentials, [this](Call& call) { clear_default(call); }));
 
         const auto catalog = accounts::scope::catalog_read;
-        server.Get("/api/v1/search/tracks", guard(Access::scoped, catalog, [this](Call& call) { search_tracks(call); }));
-        server.Get("/api/v1/tracks/detail", guard(Access::scoped, catalog, [this](Call& call) { track_detail(call); }));
+        server.Get("/api/v1/search/tracks", guard(Access::scoped, catalog, [this](Call& call) { search_tracks(call); }, true));
+        server.Get("/api/v1/tracks/detail", guard(Access::scoped, catalog, [this](Call& call) { track_detail(call); }, true));
         catalog_routes(catalog);
-        server.Post("/api/v1/links/parse", guard(Access::scoped, catalog, [this](Call& call) { parse_link(call); }));
-        server.Post("/api/v1/assets/resolve", guard(Access::scoped, catalog, [this](Call& call) { resolve_asset(call); }));
-        server.Post("/api/v1/assets/probe", guard(Access::scoped, catalog, [this](Call& call) { probe_asset(call); }));
+        server.Post("/api/v1/links/parse", guard(Access::scoped, catalog, [this](Call& call) { parse_link(call); }, true));
+        server.Post("/api/v1/assets/resolve", guard(Access::scoped, catalog, [this](Call& call) { resolve_asset(call); }, true));
+        server.Post("/api/v1/assets/probe", guard(Access::scoped, catalog, [this](Call& call) { probe_asset(call); }, true));
 
         const auto read = accounts::scope::downloads_read;
         const auto write = accounts::scope::downloads_write;
@@ -1003,7 +1075,7 @@ struct ControlApi::Impl {
         server.Get(R"(/api/v1/files/(fil_[A-Za-z0-9]+))",
                    guard(Access::scoped, accounts::scope::files_read, [this](Call& call) { get_file(call); }));
         // The scope depends on the target kind: checked in the route.
-        server.Post("/api/v1/media-access", guard(Access::any_scope, "", [this](Call& call) { media_access(call); }));
+        server.Post("/api/v1/media-access", guard(Access::any_scope, "", [this](Call& call) { media_access(call); }, true));
 
         server.Get("/api/v1/admin/status",
                    guard(Access::scoped, accounts::scope::admin, [this](Call& call) { admin_status(call); }));
@@ -1106,7 +1178,8 @@ struct ControlApi::Impl {
                  {"downloads",
                   {{"max_batch_items", options.download_limits.max_batch_items},
                    {"per_principal_active", options.download_limits.per_principal_active}}},
-                 {"media", {{"per_principal", options.media_limits.per_principal}}}});
+                 {"media", {{"per_principal", options.media_limits.per_principal}}},
+                 {"admission", {{"global", admission_limit()}, {"per_principal", options.admission.per_principal}}}});
     }
 
     void destinations(Call& call) {
@@ -1138,7 +1211,8 @@ struct ControlApi::Impl {
                   {{"workers", s.download_workers},
                    {"running", s.downloads_running},
                    {"paused", s.downloads_paused},
-                   {"claimed", s.downloads_claimed}}},
+                   {"claimed", s.downloads_claimed}, {"scheduler_errors", s.scheduler_errors}}},
+                 {"logging", {{"dropped", s.log_dropped}, {"failures", s.log_failures}, {"queued_bytes", s.log_queued_bytes}}},
                  {"media", {{"listening", s.media_listening}, {"responses", s.media_responses}}}});
     }
 
@@ -1327,7 +1401,7 @@ struct ControlApi::Impl {
     void catalog_routes(std::string_view scope) {
         namespace cat = application::catalog;
         const auto route = [&](const char* path, std::function<void(Call&)> handler) {
-            server.Get(path, guard(Access::scoped, scope, [handler = std::move(handler)](Call& call) { handler(call); }));
+            server.Get(path, guard(Access::scoped, scope, [handler = std::move(handler)](Call& call) { handler(call); }, true));
         };
         const auto c = [this] { return services.catalog; };
         route("/api/v1/search/playlists", [this, c](Call& call) {
@@ -1348,6 +1422,8 @@ struct ControlApi::Impl {
               [this, detail](Call& call) { detail_route(call, detail(&cat::CatalogService::playlist_detail), playlist_json); });
         route("/api/v1/albums/detail",
               [this, detail](Call& call) { detail_route(call, detail(&cat::CatalogService::album_detail), album_json); });
+        route("/api/v1/artists/detail",
+              [this, detail](Call& call) { detail_route(call, detail(&cat::CatalogService::artist_detail), artist_json); });
         route("/api/v1/charts/detail",
               [this, detail](Call& call) { detail_route(call, detail(&cat::CatalogService::chart_detail), chart_json); });
         route("/api/v1/lyrics",
@@ -1375,6 +1451,9 @@ struct ControlApi::Impl {
               [this, list](Call& call) { list_route(call, "id", list(&cat::CatalogService::chart_tracks), track_json); });
         route("/api/v1/categories/playlists", [this, list](Call& call) {
             list_route(call, "category_id", list(&cat::CatalogService::category_playlists), playlist_json);
+        });
+        route("/api/v1/categories/tracks", [this, list](Call& call) {
+            list_route(call, "category_id", list(&cat::CatalogService::category_tracks), track_json);
         });
         route("/api/v1/recommendations/playlists", [this, list](Call& call) {
             list_route(call, nullptr, list(&cat::CatalogService::recommend_playlists), playlist_json);
@@ -1461,12 +1540,7 @@ struct ControlApi::Impl {
         for (const auto& source : result.sources) {
             json page = nullptr;
             if (source.page) {
-                const auto& p = *source.page;
-                page = {{"limit", p.limit},
-                        {"returned", p.returned},
-                        {"total", p.total ? json(*p.total) : json(nullptr)},
-                        {"has_more", p.has_more ? json(*p.has_more) : json(nullptr)},
-                        {"next_cursor", optional_string(p.next_cursor)}};
+                page = page_json(*source.page);
             }
             json error = nullptr;
             if (source.error) {
@@ -2051,20 +2125,17 @@ struct ControlApi::Impl {
             call.fail(bad_request("kind", "must be cookie, oauth2 or api_key"));
             return;
         }
-        if (kind && *kind != "cookie") {
-            call.fail(api_error(422, "CAPABILITY_UNSUPPORTED", "only cookie credentials are supported by this build"));
-            return;
-        }
         const bool shorthand = body->contains("cookie");
         if (!shorthand && (!kind || !profile || !body->contains("secret"))) {
             call.fail(bad_request("secret", "kind, auth_profile and secret are required unless cookie is given"));
             return;
         }
-        if (!read_cookie(call, *body, cookie)) {
+        const auto kind_text = kind.value_or("cookie");
+        if (!read_credential_secret(call, *body, kind_text, cookie)) {
             return;
         }
         if (!cookie) {
-            call.fail(bad_request("secret.cookie", "is required"));
+            call.fail(bad_request("secret", "is required"));
             return;
         }
         if (!profile) {
@@ -2075,8 +2146,11 @@ struct ControlApi::Impl {
             }
             profile = std::move(found).value();
         }
+        const auto credential_kind = kind_text == "oauth2" ? ports::CredentialKind::oauth2
+                                   : kind_text == "api_key" ? ports::CredentialKind::api_key
+                                                            : ports::CredentialKind::cookie;
         auto created = services.credentials->create({call.principal(), *source, label.value_or(""),
-                                                     ports::CredentialKind::cookie, *profile,
+                                                     credential_kind, *profile,
                                                      ports::SecretBytes{std::move(*cookie)}, std::nullopt});
         if (!created) {
             call.fail(created.error());
@@ -2095,10 +2169,14 @@ struct ControlApi::Impl {
         }
         std::optional<std::string> label;
         std::optional<std::string> cookie;
-        if (!read_string(call, *body, "label", label) || !read_cookie(call, *body, cookie)) {
+        auto current = services.credentials->get(call.principal(), call.req.matches[1]);
+        if (!current) { call.fail(current.error()); return; }
+        if (!read_string(call, *body, "label", label) ||
+            !read_credential_secret(call, *body, current->kind, cookie)) {
             return;
         }
         accounts::CredentialUpdate update;
+        update.expected_version = current->version;
         update.label = std::move(label);
         if (cookie) {
             update.secret = ports::SecretBytes{std::move(*cookie)};

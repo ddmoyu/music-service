@@ -61,8 +61,9 @@ struct CredentialLease {
 // Coordinates platform credentials (application/accounts): validation against the
 // registered auth profiles, secret commit order, default selection, account binding
 // and leases. Platform packages only verify; they never see repositories or a
-// writable SecretStore. S1 implements Cookie credentials and anonymous/user modes;
-// OAuth, API keys and application mode are refused until their tasks land.
+// writable SecretStore. Cookie credentials and profiles with a registered structured
+// secret validator use owner-scoped credentials. Global application bindings and
+// OAuth refresh remain separate extensions.
 class CredentialService {
 public:
     CredentialService(std::shared_ptr<ports::CredentialRepository> credentials,

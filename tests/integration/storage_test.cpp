@@ -270,7 +270,7 @@ TEST_CASE("default credential selection", "[storage][credentials]") {
     CHECK(s.credentials->set_default(owner, "qq", b.id)->selection_version == 5);
     CHECK(s.credentials->clear_default(owner, "qq")->selection_version == 6);
     CHECK(s.credentials->clear_default(owner, "qq")->selection_version == 6);
-    CHECK(s.credentials->clear_default(owner, "spotify")->selection_version == 0);
+    CHECK(s.credentials->clear_default(owner, "mock_catalog")->selection_version == 0);
 
     // Defaults survive a restart.
     s.reopen();

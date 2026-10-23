@@ -5,8 +5,7 @@
 | 文件 | 来源 | 脱敏处理 |
 | --- | --- | --- |
 | `search-qingtian-pn0-rn3.json` | `searchMusicBykeyWord`，关键词“晴天”，pn=0、rn=3 | 请求标识 `UK` 置零 |
-| `play-detail-78932517.html` | `play_detail/78932517` 页面 | 只保留标题、canonical 链接、歌曲信息区与页面状态脚本；删除状态中的请求方 IP 与地理位置（`userIpInfo` 置空） |
-| `play-detail-missing.html` | 不存在的 rid（上游返回 HTTP 430） | 只保留标题 |
+| `track-info-78932517.json` | 2026-10-23 的 `wapi.kuwo.cn/api/www/music/musicInfo?mid=78932517` | 只保留真实身份、标题、歌手、专辑与时长字段；不含请求标识。0.1.8 改用 JSON 后移除旧 HTML 样本 |
 | `audio-78932517-standard.json` | `mobi.s`，br=128kmp3，免费歌曲 | 地址路径中的令牌与查询串、`sig`、`user` 置为占位值 |
 | `audio-228908-substitute.json` | 同上，付费歌曲，使用固定 user 值时返回的 11 秒替代短片（另一 rid，type=1） | 同上 |
 | `audio-missing.json` | 同上，不存在的 rid（code 4013） | 无需处理 |

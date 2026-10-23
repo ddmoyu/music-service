@@ -106,6 +106,9 @@ void check_public_urls(const cfg::ServiceConfig& c, Problems& p) {
 }
 
 void check_capacity(const cfg::ServiceConfig& c, Problems& p) {
+    if (c.control.workers < 2) {
+        p.add("/control/workers", "must be at least 2 to reserve control capacity");
+    }
     if (c.events.enabled && c.event_limits.global_subscriptions + 2 > c.events.workers) {
         p.add("/event_limits/global_subscriptions", "must be at least 2 below events.workers");
     }

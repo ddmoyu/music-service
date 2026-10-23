@@ -44,20 +44,20 @@ domain::Result<void> BoundedExecutor::submit(Work work) {
 }
 
 bool BoundedExecutor::run_guarded(Work& work, std::stop_token stop) noexcept {
-    std::string what;
+    // Report inside the catch, while what() is alive, without allocating on the
+    // noexcept error path (in particular when the original failure is bad_alloc).
+    const auto report = [this](std::string_view what) noexcept {
+        if (on_failure_) {
+            try { on_failure_(name_, what); } catch (...) {}
+        }
+    };
     try {
         work(std::move(stop));
         return true;
     } catch (const std::exception& e) {
-        what = e.what();
+        report(e.what());
     } catch (...) {
-        what = "unknown exception";
-    }
-    if (on_failure_) {
-        try {
-            on_failure_(name_, what);
-        } catch (...) { // a failing diagnostic sink must not take the worker down
-        }
+        report("unknown exception");
     }
     return false;
 }
@@ -102,15 +102,18 @@ bool BoundedExecutor::wait_idle(std::chrono::milliseconds budget) {
 }
 
 void BoundedExecutor::request_stop() {
+    std::deque<Work> dropped;
     {
         const std::lock_guard lock{mutex_};
         accepting_ = false;
         stats_.queued = 0;
-        queue_.clear(); // work that never started is dropped, not run half-way
+        dropped.swap(queue_);
     }
     stop_.request_stop();
     work_available_.notify_all();
     idle_.notify_all();
+    // Destructors may publish broken promises or release task claims. Never run
+    // that cleanup while holding the executor lock.
 }
 
 void BoundedExecutor::join() {

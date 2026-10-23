@@ -490,8 +490,6 @@ void read_document(Reader& r, const json& doc, const std::filesystem::path& base
                                    {"catalog_entries", [&](const json& x, const std::string& q) { r.number(x, q, k.catalog_entries, 0, 1000000); }},
                                    {"catalog_bytes", [&](const json& x, const std::string& q) { r.number(x, q, k.catalog_bytes, 0, 4 * cfg::gib); }},
                                    {"catalog_ttl_seconds", [&](const json& x, const std::string& q) { r.duration(x, q, k.catalog_ttl, 0, 86400); }},
-                                   {"failure_suppress_seconds", [&](const json& x, const std::string& q) { r.duration(x, q, k.failure_suppress, 0, 60); }},
-                                   {"app_token_entries", [&](const json& x, const std::string& q) { r.number(x, q, k.app_token_entries, 0, 100000); }},
                                });
                   }},
                  {"handles",

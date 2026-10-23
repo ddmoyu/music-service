@@ -104,7 +104,10 @@ public:
         if (auto failed = behave(*script_, context)) {
             return *failed;
         }
-        return page_of<typename Tag::Item>(*script_, source_, query.text, query.limit, query.cursor);
+        auto page = page_of<typename Tag::Item>(*script_, source_, query.text, query.limit, query.cursor);
+        page.page.page.listed_total = page.page.page.total;
+        page.page.page.unavailable_count = 0;
+        return page;
     }
 
 private:
@@ -215,6 +218,7 @@ inline ports::ProviderBundle mock_collections(std::string_view name, std::shared
         {.key = "search_artists", .pagination = cursor},
         {.key = "playlist_detail"},
         {.key = "album_detail"},
+        {.key = "artist_detail"},
         {.key = "chart_detail"},
         {.key = "playlist_tracks", .pagination = cursor},
         {.key = "album_tracks", .pagination = cursor},
@@ -222,6 +226,7 @@ inline ports::ProviderBundle mock_collections(std::string_view name, std::shared
         {.key = "chart_tracks", .pagination = cursor},
         {.key = "artist_albums", .pagination = cursor},
         {.key = "category_playlists", .pagination = cursor},
+        {.key = "category_tracks", .pagination = cursor},
         {.key = "categories", .catalog_kind = ports::CatalogKind::built_in},
         {.key = "charts", .catalog_kind = ports::CatalogKind::live},
         {.key = "recommend_playlists", .pagination = cursor},
@@ -248,6 +253,8 @@ inline ports::ProviderBundle mock_collections(std::string_view name, std::shared
             [script](const ports::ProviderSetup&) { return std::make_shared<d::Detail<tag::PlaylistDetail>>(script); }),
         d::bind_port<ports::AlbumDetail>(
             [script](const ports::ProviderSetup&) { return std::make_shared<d::Detail<tag::AlbumDetail>>(script); }),
+        d::bind_port<ports::ArtistDetail>(
+            [script](const ports::ProviderSetup&) { return std::make_shared<d::Detail<tag::ArtistDetail>>(script); }),
         d::bind_port<ports::ChartDetail>(
             [script](const ports::ProviderSetup&) { return std::make_shared<d::Detail<tag::ChartDetail>>(script); }),
         d::bind_port<ports::PlaylistTracks>(
@@ -262,6 +269,9 @@ inline ports::ProviderBundle mock_collections(std::string_view name, std::shared
             [script](const ports::ProviderSetup&) { return std::make_shared<d::List<tag::ArtistAlbums>>(script); }),
         d::bind_port<ports::CategoryPlaylists>([script](const ports::ProviderSetup&) {
             return std::make_shared<d::List<tag::CategoryPlaylists>>(script);
+        }),
+        d::bind_port<ports::CategoryTracks>([script](const ports::ProviderSetup&) {
+            return std::make_shared<d::List<tag::CategoryTracks>>(script);
         }),
         d::bind_port<ports::ICategories>(shared_directory),
         d::bind_port<ports::ICharts>(shared_directory),

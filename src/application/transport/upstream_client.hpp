@@ -15,6 +15,13 @@
 
 namespace music_service::application::transport {
 
+struct TrafficTimeouts {
+    std::chrono::milliseconds download_connect{10000};
+    std::chrono::milliseconds download_idle{30000};
+    std::chrono::milliseconds media_connect{5000};
+    std::chrono::milliseconds media_idle{30000};
+};
+
 using ports::HopResult;
 using ports::PendingHop;
 
@@ -32,7 +39,7 @@ class UpstreamClient final : public ports::UpstreamHttp {
 public:
     UpstreamClient(std::shared_ptr<ports::UpstreamAdmissionPort> admission,
                    std::shared_ptr<ports::HttpTransport> transport,
-                   std::shared_ptr<const ports::Clock> clock);
+                   std::shared_ptr<const ports::Clock> clock, TrafficTimeouts timeouts = {});
 
     domain::Result<HopResult<ports::HttpResponse>> fetch(ports::HttpRequest request,
                                                          const ports::AdmissionRequest& base,
@@ -54,6 +61,7 @@ private:
     std::shared_ptr<ports::UpstreamAdmissionPort> admission_;
     std::shared_ptr<ports::HttpTransport> transport_;
     std::shared_ptr<const ports::Clock> clock_;
+    TrafficTimeouts timeouts_;
 };
 
 } // namespace music_service::application::transport

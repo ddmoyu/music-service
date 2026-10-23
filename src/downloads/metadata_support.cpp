@@ -42,6 +42,40 @@ std::string component(std::string_view value, const std::function<std::string(st
 } // namespace
 
 std::optional<std::string> picture_mime(std::string_view b) {
+    // 咪咕封面使用静态 WebP；校验 RIFF 长度、块边界及图像头，不解码或转码。
+    // https://developers.google.com/speed/webp/docs/riff_container
+    if (b.size() >= 12 && b.substr(0, 4) == "RIFF" && b.substr(8, 4) == "WEBP") {
+        const auto le = [&](std::size_t at, std::size_t bytes) {
+            std::uint32_t value = 0;
+            for (std::size_t i = 0; i < bytes; ++i) value |= static_cast<std::uint32_t>(static_cast<unsigned char>(b[at+i])) << (8*i);
+            return value;
+        };
+        if (le(4, 4) != b.size() - 8) return {};
+        bool image = false, extended = false;
+        std::size_t pos = 12;
+        while (pos < b.size()) {
+            if (b.size() - pos < 8) return {};
+            auto kind = b.substr(pos, 4);
+            const auto size = le(pos + 4, 4);
+            pos += 8;
+            if (size > b.size() - pos) return {};
+            if (kind == "VP8X") {
+                if (extended || image || pos != 20 || size != 10 || (le(pos, 1) & 0xc3U) || le(pos+1, 3)) return {};
+                extended = true; // 不接受动画标记或保留位。
+            } else if (kind == "ANIM" || kind == "ANMF") return {};
+            else if (kind == "VP8 ") {
+                if (image || size <= 10 || (le(pos, 1) & 1U) || b.substr(pos+3, 3) != std::string_view{"\x9d\x01\x2a",3} ||
+                    (le(pos+6, 2) & 0x3fffU) == 0 || (le(pos+8, 2) & 0x3fffU) == 0) return {};
+                image = true;
+            } else if (kind == "VP8L") {
+                if (image || size <= 5 || le(pos, 1) != 0x2fU || (le(pos+4, 1) & 0xe0U)) return {};
+                image = true;
+            } else if (!extended) return {};
+            pos += size;
+            if (size & 1U) { if (pos == b.size() || b[pos] != '\0') return {}; ++pos; }
+        }
+        return image ? std::optional<std::string>{"image/webp"} : std::nullopt;
+    }
     if (b.starts_with(std::string_view{"\x89PNG\r\n\x1a\n", 8})) {
         bool header = false;
         bool data = false;

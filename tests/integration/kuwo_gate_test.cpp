@@ -106,11 +106,11 @@ public:
         if (url.rfind("https://www.kuwo.cn/search/searchMusicBykeyWord?", 0) == 0) {
             return answer(200, "application/json; charset=utf-8", fixture("search-qingtian-pn0-rn3.json"), url);
         }
-        if (url == "https://www.kuwo.cn/play_detail/" + rid) {
-            return answer(200, "text/html; charset=utf-8", fixture("play-detail-78932517.html"), url);
+        if (url.starts_with("https://wapi.kuwo.cn/api/www/music/musicInfo?mid=" + rid + "&")) {
+            return answer(200, "application/json", fixture("track-info-78932517.json"), url);
         }
-        if (url.rfind("https://www.kuwo.cn/play_detail/", 0) == 0) {
-            return answer(430, "text/html; charset=utf-8", fixture("play-detail-missing.html"), url);
+        if (url.starts_with("https://wapi.kuwo.cn/api/www/music/musicInfo?")) {
+            return answer(200, "application/json", R"({"code":-1,"data":null})", url);
         }
         if (url.rfind("https://mobi.kuwo.cn/mobi.s?", 0) == 0) {
             const auto found = url.find("&rid=" + rid + "&") != std::string::npos;
@@ -412,7 +412,8 @@ TEST_CASE("S1 gate: Kuwo search to a published file over HTTP, SSE and media", "
     for (const auto& request : requests) {
         CHECK(request.url.rfind("https://", 0) == 0);
         const auto host = request.url.substr(8, request.url.find('/', 8) - 8);
-        CHECK((host == "www.kuwo.cn" || host == "mobi.kuwo.cn" || host == "kw-lv.kuwo.cn" || host == "newlyric.kuwo.cn"));
+        CHECK((host == "www.kuwo.cn" || host == "wapi.kuwo.cn" || host == "mobi.kuwo.cn" ||
+               host == "kw-lv.kuwo.cn" || host == "newlyric.kuwo.cn"));
         CHECK(request.secret_headers.empty());
     }
     CHECK(upstream->audio_requests() == 1);

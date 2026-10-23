@@ -96,7 +96,7 @@ struct Catalog {
     milliseconds max_budget{15000};
     milliseconds per_source_budget{5000};
     std::uint32_t fanout{4};
-    std::uint32_t max_sources_per_request{8};
+    std::uint32_t max_sources_per_request{16};
     std::vector<std::string> default_sources;
 };
 
@@ -179,8 +179,6 @@ struct Cache {
     std::uint32_t catalog_entries{128};
     std::uint64_t catalog_bytes{16 * mib};
     seconds catalog_ttl{60};
-    seconds failure_suppress{5};
-    std::uint32_t app_token_entries{128};
 };
 
 struct Handles {

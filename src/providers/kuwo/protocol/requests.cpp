@@ -32,12 +32,32 @@ ports::HttpRequest search_tracks(std::string_view keyword, std::uint32_t page, s
     return get(std::move(url), "search_tracks");
 }
 
-ports::HttpRequest track_page(std::string_view rid) {
-    return get("https://www.kuwo.cn/play_detail/" + std::string{rid}, "track_detail");
+namespace {
+ports::HttpRequest web_json(std::string path, std::string_view operation) {
+    auto request = get("https://wapi.kuwo.cn/api/www/" + std::move(path) + "&httpsStatus=1&plat=web_www", operation);
+    request.headers.push_back({"Referer", "https://www.kuwo.cn/"});
+    return request;
+}
+std::string web_page(std::uint32_t page, std::uint32_t size) {
+    return "&pn=" + std::to_string(page + 1) + "&rn=" + std::to_string(size);
+}
 }
 
-ports::HttpRequest standard_audio(std::string_view rid, std::string_view client_id) {
-    return audio(rid, client_id, "128kmp3");
+ports::HttpRequest track_info(std::string_view rid) {
+    return web_json("music/musicInfo?mid=" + std::string{rid}, "track_detail");
+}
+ports::HttpRequest artist_search(std::string_view keyword, std::uint32_t page, std::uint32_t size) {
+    return web_json("search/searchArtistBykeyWord?key=" + encode_query_component(keyword) + web_page(page, size),
+                    "search_artists");
+}
+ports::HttpRequest artist_detail(std::string_view id) {
+    return web_json("artist/artist?artistid=" + std::string{id}, "artist_detail");
+}
+ports::HttpRequest artist_tracks(std::string_view id, std::uint32_t page, std::uint32_t size) {
+    return web_json("artist/artistMusic?artistid=" + std::string{id} + web_page(page, size), "artist_tracks");
+}
+ports::HttpRequest artist_albums(std::string_view id, std::uint32_t page, std::uint32_t size) {
+    return web_json("artist/artistAlbum?artistid=" + std::string{id} + web_page(page, size), "artist_albums");
 }
 
 ports::HttpRequest audio(std::string_view rid, std::string_view client_id, std::string_view bitrate) {

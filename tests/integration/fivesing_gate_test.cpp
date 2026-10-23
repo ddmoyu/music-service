@@ -266,12 +266,13 @@ TEST_CASE("T41: two real platforms, two principals, one download path", "[gate][
     CHECK(listed_sources(a, "?capability=lyrics") == std::set<std::string>{"fivesing", "kuwo"});
     CHECK(listed_sources(a, "?capability=search_playlists") == std::set<std::string>{"fivesing", "kuwo"});
     CHECK(listed_sources(a, "?capability=search_albums") == std::set<std::string>{"kuwo"});
-    CHECK(listed_sources(a, "?capability=search_artists").empty());
+    CHECK(listed_sources(a, "?capability=search_artists") == std::set<std::string>{"kuwo"});
+    CHECK(listed_sources(a, "?capability=artist_detail") == std::set<std::string>{"kuwo"});
     const auto providers = body(a.Get("/api/v1/providers"));
     for (const auto& item : providers["data"]["items"]) {
         CHECK(item["implementation"]["execution_mode"] == "native");
         CHECK(item["auth_methods"].empty());
-        const auto expected = item["source"] == "kuwo" ? json::array({"standard", "high", "lossless"}) : json::array({"standard", "high"});
+        const auto expected = item["source"] == "kuwo" ? json::array({"standard", "high", "lossless", "hires"}) : json::array({"standard", "high"});
         CHECK(item["quality_hints"] == expected);
     }
 

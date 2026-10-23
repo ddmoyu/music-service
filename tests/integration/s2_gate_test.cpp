@@ -269,7 +269,7 @@ TEST_CASE("T28: 100 sources are listed in pages; only the chosen ones are create
     }
 
     // Then all 102, three of the simulated ones searched by default.
-    d.config["catalog"] = {{"default_sources", {"m001", "m002", "m003"}}};
+    d.config["catalog"] = {{"default_sources", {"m001", "m002", "m003"}}, {"max_sources_per_request", 8}};
     d.config["providers"] = json::object();
     for (int n = 1; n <= 3; ++n) {
         d.config["providers"][simulated_name(n)] = json::object();
@@ -359,6 +359,7 @@ const std::vector<RouteCase>& route_cases() {
          "/api/v1/search/playlists?q=x&sources=fivesing"},
         {"search_albums", "/api/v1/search/albums?q=x&sources=kuwo", "/api/v1/search/albums?q=x&sources=fivesing"},
         {"search_artists", "/api/v1/search/artists?q=x&sources=kuwo", "/api/v1/search/artists?q=x&sources=fivesing"},
+        {"artist_detail", "/api/v1/artists/detail?source=kuwo&id=336", "/api/v1/artists/detail?source=fivesing&id=336"},
         {"track_detail", "/api/v1/tracks/detail?source=kuwo&id=78932517",
          "/api/v1/tracks/detail?source=fivesing&id=" + work},
         {"lyrics", "/api/v1/lyrics?source=kuwo&id=78932517", "/api/v1/lyrics?source=fivesing&id=" + work},

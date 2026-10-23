@@ -62,6 +62,10 @@ struct AdminStatus {
     std::uint32_t downloads_running{0};
     bool downloads_paused{false};
     std::uint64_t downloads_claimed{0}; // since start
+    std::uint64_t scheduler_errors{0};
+    std::uint64_t log_dropped{0};
+    std::uint64_t log_failures{0};
+    std::uint64_t log_queued_bytes{0};
     bool media_listening{false};
     std::uint32_t media_responses{0}; // file responses holding a slot
 };
@@ -82,6 +86,7 @@ struct ControlApiOptions {
     application::config::DownloadLimits download_limits;
     application::config::MediaLimits media_limits;
     ServiceInfo info;
+    application::config::Admission admission{};
 };
 
 struct ControlApiServices {

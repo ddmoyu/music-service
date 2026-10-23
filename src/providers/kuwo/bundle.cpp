@@ -2,6 +2,7 @@
 
 #include "providers/kuwo/capabilities.hpp"
 #include "providers/kuwo/collections.hpp"
+#include "providers/kuwo/artists.hpp"
 
 #include <utility>
 
@@ -15,7 +16,7 @@ ports::ProviderBundle make_bundle() {
         .source = std::move(source).value(),
         .name = "酷我音乐",
         .implementation_id = "kuwo-native",
-        .implementation_version = "0.1.5",
+        .implementation_version = "0.1.9",
     };
     // 已验证的匿名能力；不登记无实际用途的凭据。
     bundle.capabilities = {
@@ -39,7 +40,9 @@ ports::ProviderBundle make_bundle() {
     for (auto& binding : collection_bindings()) {
         bundle.bindings.push_back(std::move(binding));
     }
-    bundle.quality_hints = {domain::Quality::standard, domain::Quality::high, domain::Quality::lossless};
+    bundle.quality_hints = {domain::Quality::standard, domain::Quality::high, domain::Quality::lossless, domain::Quality::hires};
+    for (auto& spec : artist_capabilities()) bundle.capabilities.push_back(std::move(spec));
+    for (auto& binding : artist_bindings()) bundle.bindings.push_back(std::move(binding));
     return bundle;
 }
 

@@ -50,8 +50,8 @@ std::optional<std::chrono::seconds> retry_after(const ports::HttpResponseHead& h
 
 UpstreamClient::UpstreamClient(std::shared_ptr<ports::UpstreamAdmissionPort> admission,
                                std::shared_ptr<ports::HttpTransport> transport,
-                               std::shared_ptr<const ports::Clock> clock)
-    : admission_(std::move(admission)), transport_(std::move(transport)), clock_(std::move(clock)) {}
+                               std::shared_ptr<const ports::Clock> clock, TrafficTimeouts timeouts)
+    : admission_(std::move(admission)), transport_(std::move(transport)), clock_(std::move(clock)), timeouts_(timeouts) {}
 
 void UpstreamClient::report(const ports::AdmissionRequest& admitted, const ports::HttpResponseHead& head) {
     if (head.status != 429 && head.status != 503) {
@@ -65,6 +65,13 @@ void UpstreamClient::report(const ports::AdmissionRequest& admitted, const ports
 template <class T, class Call>
 domain::Result<HopResult<T>> UpstreamClient::run(ports::HttpRequest request, const ports::AdmissionRequest& base,
                                                  const ports::OperationContext& context, Call&& call) {
+    if (base.traffic_class == ports::TrafficClass::download) {
+        request.connect_timeout = timeouts_.download_connect;
+        request.idle_timeout = timeouts_.download_idle;
+    } else if (base.traffic_class == ports::TrafficClass::media) {
+        request.connect_timeout = timeouts_.media_connect;
+        request.idle_timeout = timeouts_.media_idle;
+    }
     while (true) {
         auto url = Url::parse(request.url);
         if (!url) {

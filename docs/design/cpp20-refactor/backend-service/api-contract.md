@@ -87,6 +87,8 @@ v1 允许新增可选响应字段；删除、改义、改变单位或必填参�
 
 业务错误中保留 source、operation、上游状态的去敏信息。上游 429 不直接等于调用者超出本服务额度；可作为逐源错误 `UPSTREAM_RATE_LIMITED`，附 retryable 与等待提示。
 
+搜索、详情、资源解析／探测、凭证验证及媒体访问描述受 `admission` 并发限制；超出调用者额度立即返回 429 `CALLER_LIMIT_EXCEEDED`，整体容量不足返回 503 `SERVICE_BUSY`，均带 `Retry-After: 1`。`GET /api/v1/limits` 的 `admission.global`／`per_principal` 给出有效额度。健康检查、下载查询及取消不占该额度。默认每次查询最多 16 个来源，当前 9 个内置来源可使用 `sources=all`；实际同时查询数量仍受 fanout 限制。
+
 媒体正常响应是二进制，不套 JSON 信封；HEAD、304、416 等遵守媒体部分。开始发送二进制后发生错误，关闭流并记录，不追加 JSON。
 
 ## 4. 幂等、分页和超时
@@ -150,7 +152,7 @@ features 反映实际构建及运行配置；客户端不能把该示例的布�
 | `GET /api/v1/search/tracks` | Track | q、sources、limit、cursor／单源 page、timeout_ms |
 | `GET /api/v1/search/playlists` | Playlist | 同上 |
 | `GET /api/v1/search/albums` | Album | 同上 |
-| `GET /api/v1/search/artists` | ArtistSummary | 同上 |
+| `GET /api/v1/search/artists` | Artist | 同上 |
 
 这些接口需要 catalog:read。q 必填，空白无效；明确给出未知 source 是整体 400，不能悄悄忽略拼错的平台名。
 
@@ -198,6 +200,8 @@ features 反映实际构建及运行配置；客户端不能把该示例的布�
 
 ## 7. 单曲、集合、分类与发现
 
+0.1.8 新增 `artist_detail` 能力及 `/api/v1/artists/detail`，目前酷我支持；其他平台未声明时返回 `CAPABILITY_UNSUPPORTED`。Artist 包含 `ref`、`name`、`artwork`，可选资料为 `description`、`alternate_name`、`country`、`birth_date`、`birthplace`、`gender`、`language`、`height`、`weight`、`constellation`，可选计数为 `track_count`、`album_count`、`mv_count`。资料保留平台原文，未知字段为 null；搜索中的 Artist 使用同一模型，可缺少详情字段。
+
 以下均需要 catalog:read，source 与平台 id 位于查询参数，避免平台保留字符与 URI 路径匹配冲突。
 
 | 方法与路径 | 必填参数 | 可选参数／结果 |
@@ -207,10 +211,12 @@ features 反映实际构建及运行配置；客户端不能把该示例的布�
 | `GET /api/v1/playlists/tracks` | source、id | limit=50（1～100）、cursor；Track 分页 |
 | `GET /api/v1/albums/detail` | source、id | Album |
 | `GET /api/v1/albums/tracks` | source、id | limit=50（1～100）、cursor；Track 分页 |
+| `GET /api/v1/artists/detail` | source、id | Artist；资料字段缺失返回 null |
 | `GET /api/v1/artists/tracks` | source、id | limit=50（1～100）、cursor |
 | `GET /api/v1/artists/albums` | source、id | limit=20（1～50）、cursor |
 | `GET /api/v1/categories` | source | Category 列表或分组，标记 catalog_kind |
 | `GET /api/v1/categories/playlists` | source、category_id | limit=20（1～50）、cursor |
+| `GET /api/v1/categories/tracks` | source、category_id | limit=20（1～50）、cursor；仅声明 `category_tracks` 的来源支持 |
 | `GET /api/v1/charts` | source | Chart 目录，标记 catalog_kind |
 | `GET /api/v1/charts/detail` | source、id | Chart 信息 |
 | `GET /api/v1/charts/tracks` | source、id | limit=50（1～100）、cursor |
@@ -223,6 +229,8 @@ features 反映实际构建及运行配置；客户端不能把该示例的布�
 | `POST /api/v1/links/parse` | body.text | 解析实体类型与 ref；分享文本最多 4096 字符 |
 
 曲目／歌单列表 data 为 `{items, page}`，详情 data 为实体对象。集合的 track_count 允许未知，返回的当前页大小不等于集合完整大小。不支持某种详情时明确返回 CAPABILITY_UNSUPPORTED，而不是用搜索结果伪装完整详情。
+
+0.1.15 新增 `category_tracks`，沿用列表鉴权、缓存、错误和游标规则，通过 `categories/tracks` 返回 Track。Jamendo 原生标签的 `lists=track`，不支持 `categories/playlists`。Jamendo `search_playlists` 只检索官方精选歌单的名称／简介，能力标记 `catalog_kind=search_derived`；`total=null`、`listed_total` 为精选范围内匹配数。搜索的 `meta.source_results[].page` 与列表分页统一保留 `listed_total`、`unavailable_count`，未提供时均为 null，缓存命中时仍保持。其官方歌曲榜使用 `bestof`、`trending`、`genre:<分类ID>`，读取前 100 项并保留顺序；`total=null`、`listed_total<=100`，检测到榜单变化返回 `CURSOR_EXPIRED`。
 
 阶段 B 增加可选分页事实：`page.listed_total` 为上游可见 ID／歌曲清单长度，`page.unavailable_count` 为本页有 ID 但缺失详情的位置数。未知为 null；`page.total` 仍是上游声明总数，不能用返回条数替代。网易云按原位置推进游标，可能出现 items 为空但仍有 next_cursor 的页。检测到集合曲目变更返回 CURSOR_EXPIRED；不承诺固定时刻快照。Album 增加可选 `description`，未知为 null。
 
@@ -258,7 +266,7 @@ match 请求默认最多返回 5 个候选、上限 10 个，候选包含 candid
 
 自动换源必须同时被服务启用、请求明确允许，且满足最低匹配条件。网络失败不会任意触发替曲；返回 actual_track、quality 与 warnings。解析结果不给普通客户端原始 CDN URL、秘密请求头或解密密钥；播放与文件获取使用后面的媒体契约。
 
-目录型来源可支持搜索／详情而不支持同源 resolve_audio。未指定 match_selection 且 fallback.mode=disabled 时，resolve 返回 422 CAPABILITY_UNSUPPORTED；下载创建同样在接受任务前拒绝这类没有执行路径的请求。手动选择先验证原曲与匹配上下文，再检查候选的音源能力，不要求原平台也支持音频。显式 auto 模式可把目录源能力缺失作为受控匹配入口，仍须满足上述服务开关与阈值，候选无结果则明确失败。original_track 与 actual_track 始终分别保存，不将 Spotify 曲目信息误报为 Spotify 音频。
+目录型来源可支持搜索／详情而不支持同源 resolve_audio。未指定 match_selection 且 fallback.mode=disabled 时，resolve 返回 422 CAPABILITY_UNSUPPORTED；下载创建同样在接受任务前拒绝这类没有执行路径的请求。手动选择先验证原曲与匹配上下文，再检查候选的音源能力，不要求原平台也支持音频。显式 auto 模式可把目录源能力缺失作为受控匹配入口，仍须满足上述服务开关与阈值，候选无结果则明确失败。original_track 与 actual_track 始终分别保存，不将目录元信息误报为该目录来源的实际音频。
 
 示例 resolve.data：
 
@@ -546,10 +554,9 @@ paused 只停止领取新任务，已有任务继续；取消活动任务仍走�
 
 重点验证 JSON 示例可解析、单位一致、逐源分页不重复第一页、所有错误有 request_id、下载提交可靠持久化、同键幂等、批次创建原子性、资源 owner 隔离、状态转换竞争、媒体票据范围与到期、Range／If-Range／304／416，以及关闭前端后任务生命周期独立。
 
-
 ### 0.1.5 已接入能力补充
 
-- 酷我新增 `lyrics`，quality_hints 为 standard／high／lossless。
+- 酷我新增 `lyrics`；0.1.9 起 quality_hints 为 standard／high／lossless／hires，hires 对应黑胶取流，需通过实际 FLAC 位深／采样率和完整帧／PCM 校验后才能发布。清理已识别的附加尾部时，结果 warnings 含 `KUWO_TRAILER_REMOVED`。strict 拒绝实际低档；allow_lower 如实报告实际品质和 `QUALITY_LOWERED`。取流响应中的 23000 是档位代码，不作为实际码率。
 - 网易云新增 `search_artists` 与 `artist_albums`，复用既有歌手搜索／专辑接口；歌手热门列表仍最多 50 首。quality_hints 增加 hires，表示可请求，并不保证账号可获得。
 - 5sing 的 `TrackLyrics.lrc` 可为上游纯文本；空白内容才标 unavailable。
 - 下载发布前按实测音频复核实际档位；Hi-Res 需平台明确声明且文件至少 24 bit／48 kHz。降级遵守 strict／allow_lower；新产品版本避免复用未经该检查的旧文件，旧幂等请求保持原结果。

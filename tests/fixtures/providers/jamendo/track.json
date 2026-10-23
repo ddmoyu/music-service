@@ -1,0 +1,53 @@
+[
+  {
+    "id": 49295,
+    "albumId": 5987,
+    "artistId": 6934,
+    "name": "Track 8 Gjacove",
+    "duration": 386,
+    "licenseId": 61,
+    "licenseCC": [
+      "by",
+      "nc"
+    ],
+    "licenseCCUrl": "http://creativecommons.org/licenses/nc-sampling+/1.0/",
+    "dateReleased": 993938400,
+    "coverUpload": 0,
+    "dateCreated": 1181501824,
+    "credits": "",
+    "description": null,
+    "types": [
+      "www"
+    ],
+    "tags": [],
+    "lyrics": null,
+    "cover": {
+      "small": {
+        "size50": "https://usercontent.jamendo.com?type=album&id=5987&width=50&trackid=49295",
+        "size75": "https://usercontent.jamendo.com?type=album&id=5987&width=50&trackid=49295",
+        "size100": "https://usercontent.jamendo.com?type=album&id=5987&width=300&trackid=49295",
+        "size130": "https://usercontent.jamendo.com?type=album&id=5987&width=300&trackid=49295",
+        "size150": "https://usercontent.jamendo.com?type=album&id=5987&width=300&trackid=49295",
+        "size175": "https://usercontent.jamendo.com?type=album&id=5987&width=300&trackid=49295",
+        "size200": "https://usercontent.jamendo.com?type=album&id=5987&width=300&trackid=49295",
+        "size300": "https://usercontent.jamendo.com?type=album&id=5987&width=300&trackid=49295",
+        "size600": "https://usercontent.jamendo.com?type=album&id=5987&width=300&trackid=49295"
+      },
+      "big": {
+        "size200": "https://usercontent.jamendo.com?type=album&id=5987&width=300&trackid=49295",
+        "size300": "https://usercontent.jamendo.com?type=album&id=5987&width=300&trackid=49295",
+        "size400": "https://usercontent.jamendo.com?type=album&id=5987&width=300&trackid=49295",
+        "size600": "https://usercontent.jamendo.com?type=album&id=5987&width=300&trackid=49295"
+      }
+    },
+    "download": {
+      "mp3": "https://prod-1.storage.jamendo.com/download/track/49295/mp32/",
+      "ogg": "https://prod-1.storage.jamendo.com/download/track/49295/ogg/"
+    },
+    "status": {
+      "available": true,
+      "nonAvailabilityReason": null
+    },
+    "isDownloadable": 1
+  }
+]

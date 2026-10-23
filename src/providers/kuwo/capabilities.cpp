@@ -2,9 +2,11 @@
 
 #include "providers/kuwo/client.hpp"
 #include "providers/kuwo/parsing/parsers.hpp"
+#include "providers/kuwo/parsing/artists.hpp"
 #include "providers/kuwo/protocol/requests.hpp"
 
 #include <array>
+#include <algorithm>
 #include <charconv>
 #include <random>
 #include <string>
@@ -93,18 +95,18 @@ public:
         if (!rid) {
             return std::move(rid).error();
         }
-        auto response = client_.fetch(protocol::track_page(*rid), context);
+        auto response = client_.fetch(protocol::track_info(*rid), context);
         if (!response) {
             return std::move(response).error();
         }
-        // Kuwo answers 430 (or 404) with a page without song data for unknown ids.
+        // 歌曲详情和可信封面直接读取 JSON，不解析网页。
         if (response->head.status == 404 || response->head.status == 430) {
             return Error{ErrorCode::not_found, "kuwo has no such song", false, {}};
         }
         if (response->head.status != 200) {
             return http_status_error(response->head);
         }
-        return parsing::parse_track_page(response->body, *rid);
+        return parsing::parse_track_info(response->body, *rid);
     }
 
 private:
@@ -157,20 +159,53 @@ public:
         if (!rid) {
             return std::move(rid).error();
         }
-        constexpr std::array offered{domain::Quality::standard, domain::Quality::high, domain::Quality::lossless};
+        constexpr std::array offered{domain::Quality::standard, domain::Quality::high, domain::Quality::lossless, domain::Quality::hires};
         auto chosen = domain::choose_quality(requirement, offered);
         if (!chosen) return chosen.error();
-        const auto br = *chosen == domain::Quality::lossless ? "2000kflac" :
-                        *chosen == domain::Quality::high ? "320kmp3" : "128kmp3";
-        auto response = client_.fetch(protocol::audio(*rid, client_id(), br), context);
+        auto result = resolve_one(context, track, requirement, *rid, *chosen);
+        if (requirement.requested != domain::Quality::hires || requirement.policy != domain::QualityPolicy::allow_lower)
+            return result;
+        // 黑胶不存在或返回不支持的专有格式时，只有显式允许降级才继续普通档位。
+        // 网络、限流和协议损坏错误直接返回，不以换档掩盖故障。
+        for (const auto lower : {domain::Quality::lossless, domain::Quality::high, domain::Quality::standard}) {
+            if (result) {
+                if (result->completeness == domain::Completeness::preview ||
+                    (result->actual_quality && *result->actual_quality >= lower)) return result;
+            } else if (!quality_missing(result.error())) return result;
+            auto next = resolve_one(context, track, requirement, *rid, lower);
+            // 已得到完整的低档资源时，后续档位不存在不丢弃该结果。
+            if (!next && result && quality_missing(next.error())) continue;
+            if (next && result && next->completeness != domain::Completeness::preview &&
+                next->actual_quality && result->actual_quality && *next->actual_quality < *result->actual_quality) continue;
+            result = std::move(next);
+        }
+        return result;
+    }
+
+private:
+    static bool quality_missing(const Error& error) {
+        return error.code == ErrorCode::quality_unavailable ||
+            (error.code == ErrorCode::upstream_failed && !error.retryable &&
+             std::any_of(error.details.begin(), error.details.end(), [](const auto& d) {
+                 return d.field == "kuwo_code" && (d.reason == "200" || d.reason == "-1");
+             }));
+    }
+    domain::Result<ports::ResolvedAudio> resolve_one(const ports::ProviderContext& context,
+        const domain::TrackRef& track, const domain::ResourceRequirement& requirement,
+        std::string_view rid, domain::Quality chosen) {
+        const auto br = chosen == domain::Quality::hires ? "23000kflac" : chosen == domain::Quality::lossless ? "2000kflac" :
+                        chosen == domain::Quality::high ? "320kmp3" : "128kmp3";
+        auto response = client_.fetch(protocol::audio(rid, client_id(), br), context);
         if (!response) {
             return std::move(response).error();
         }
         if (response->head.status != 200) {
             return http_status_error(response->head);
         }
-        auto evidence = parsing::parse_audio(response->body, *rid);
+        auto evidence = parsing::parse_audio(response->body, rid);
         if (!evidence) {
+            if (chosen == domain::Quality::hires && quality_missing(evidence.error()))
+                return Error{ErrorCode::quality_unavailable, "kuwo has no vinyl audio for this track", false, {}};
             return std::move(evidence).error();
         }
 
@@ -186,7 +221,7 @@ public:
             } else if (evidence->format == "mp3" && evidence->bitrate_kbps == 320) {
                 quality = domain::Quality::high;
             } else if (evidence->format == "flac" && evidence->bitrate_kbps && *evidence->bitrate_kbps > 0) {
-                quality = domain::Quality::lossless;
+                quality = *evidence->bitrate_kbps == 23000 ? domain::Quality::hires : domain::Quality::lossless;
             }
             if (!quality && requirement.requested != domain::Quality::standard)
                 return Error{ErrorCode::quality_unavailable, "kuwo returned an unverified quality tier", false, {}};
@@ -198,7 +233,8 @@ public:
             }
         }
         std::optional<std::int64_t> bitrate_bps;
-        if (evidence->bitrate_kbps && *evidence->bitrate_kbps >= 8) {
+        // FLAC 的 2000／23000 是档位编码，不是实际音频码率。
+        if (evidence->format == "mp3" && evidence->bitrate_kbps && *evidence->bitrate_kbps >= 8 && *evidence->bitrate_kbps <= 320) {
             bitrate_bps = *evidence->bitrate_kbps * 1000;
         }
         ports::ResolvedAudio audio{track,
@@ -215,10 +251,10 @@ public:
         if (evidence->duration_seconds && *evidence->duration_seconds > 0) {
             audio.duration_ms = *evidence->duration_seconds * 1000;
         }
+        if (quality == domain::Quality::hires) audio.processing = {"audio.kuwo-flac", 1, {}};
         return audio;
     }
 
-private:
     // The "user" value the Kuwo client sends: a random installation-like id per call.
     static std::string client_id() {
         thread_local std::mt19937_64 engine{std::random_device{}()};
