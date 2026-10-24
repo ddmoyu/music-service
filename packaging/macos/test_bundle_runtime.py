@@ -33,6 +33,12 @@ class RuntimeResolutionTest(unittest.TestCase):
     def test_rpath_from_executable_is_available_to_dependency(self):
         self.assertEqual(self.resolve("@rpath/libc++.1.dylib", executable_rpaths=[str(self.library.parent)]), self.library)
 
+    def test_bare_loader_path_in_llvm_runtime_rpath(self):
+        self.assertEqual(self.resolve("@rpath/libc++.1.dylib", rpaths=["@loader_path"]), self.library)
+
+    def test_bare_executable_path_is_a_directory(self):
+        self.assertEqual(bundle.expand_path("@executable_path", self.library, self.executable), self.executable.parent)
+
     def test_unknown_runtime_is_not_silently_bundled(self):
         with self.assertRaisesRegex(ValueError, "Unreviewed"):
             self.resolve(str(self.llvm / "lib/libzstd.1.dylib"))

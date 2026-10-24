@@ -54,6 +54,8 @@ def inspect(path):
 
 def expand_path(value, loader, executable):
     for variable, directory in (("@loader_path/", loader.parent), ("@executable_path/", executable.parent)):
+        if value == variable.rstrip("/"):
+            return directory
         if value.startswith(variable):
             return directory / value[len(variable):]
     if Path(value).is_absolute():
