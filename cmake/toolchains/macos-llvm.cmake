@@ -7,6 +7,13 @@ endif()
 if("$ENV{MUSIC_SERVICE_LLVM_ROOT}" STREQUAL "")
     message(FATAL_ERROR "Set MUSIC_SERVICE_LLVM_ROOT to the output of: brew --prefix llvm@20")
 endif()
+# CMake 4 leaves the SDK empty by default. Select one before compiler detection
+# so FindIconv and Clang agree on the implicit system include directories. An
+# explicit SDK /usr/include ahead of Clang's builtin headers breaks stddef.h.
+# Preserve an SDK selected by the caller through the cache or SDKROOT.
+if(NOT CMAKE_OSX_SYSROOT AND "$ENV{SDKROOT}" STREQUAL "")
+    set(CMAKE_OSX_SYSROOT macosx CACHE STRING "macOS SDK" FORCE)
+endif()
 set(music_service_llvm_root "$ENV{MUSIC_SERVICE_LLVM_ROOT}")
 set(CMAKE_C_COMPILER "${music_service_llvm_root}/bin/clang")
 set(CMAKE_CXX_COMPILER "${music_service_llvm_root}/bin/clang++")

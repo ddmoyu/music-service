@@ -196,7 +196,7 @@ SSE 退出时停止接受订阅，唤醒等待并关闭现有流，注销订阅�
 
 ### 系统、架构与支持级别
 
-以下是设计目标。当前仅初始化 C++ 工程骨架，没有服务程序；骨架配置检查不表示业务或目标环境运行通过。Windows、Linux 与 Docker 为必需目标；首批架构按下表建议推进，版本下限和正式发布组合由实际验证确定。
+以下是部署目标与交付边界。当前已有服务程序、原生构建预设和运行检查，CI 覆盖 Windows x64 及 Linux、macOS、Docker 的 x86_64／ARM64 原生环境。具体通过情况见[发布与部署](../../../../packaging/README.md)及对应提交的 CI 结果；构建成功不等于完成全部业务、发行包或真实设备验收，版本下限与正式发布组合由实际验证确定。
 
 | 运行目标 | CPU／镜像平台 | 计划与交付 |
 | --- | --- | --- |
@@ -204,7 +204,7 @@ SSE 退出时停止接受订阅，唤醒等待并关闭现有流，注销订阅�
 | Linux 原生 | x86_64、ARM64 | 建议首批；分架构二进制，标明发行版、最低内核／glibc 与 C++ 运行库要求 |
 | Linux 容器 | `linux/amd64`、`linux/arm64` | 建议首批；Dockerfile、Compose 示例与对应架构镜像，正式发布时提供多架构清单 |
 | NAS | 与设备系统、架构及容器能力匹配 | 优先复用 Linux 容器；原生包按具体型号和系统验证，专有套件另行决定 |
-| macOS 原生 | ARM64、x86_64 | 后续候选；保持设计兼容，原生发布、最低系统版本与 launchd 集成待明确 |
+| macOS 原生 | ARM64、x86_64 | 已配置原生 Debug 测试、Release 构建与运行检查；目前依赖 Homebrew LLVM 20／libc++，独立发行包、最低系统版本与 launchd 集成待补齐 |
 | 其他组合 | Windows ARM64、Linux ARMv7、musl／Alpine、FreeBSD、Android 等 | 暂不承诺正式支持；存在明确需求后补工具链和运行验证 |
 
 同一份源码按目标平台分别构建。Linux Docker 镜像内运行 Linux 程序；Docker 构建不会把 Windows `.exe` 转换为 Linux 程序。操作系统、CPU 架构和运行库兼容性分别验证，不能由“支持 Docker”推导为支持所有硬件。[Docker 多平台构建](https://docs.docker.com/build/building/multi-platform/)
