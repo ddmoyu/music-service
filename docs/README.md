@@ -13,7 +13,8 @@
 
 - [参考项目功能补齐计划](design/cpp20-refactor/reference-gap-plan.md)：A～E、现有三平台补齐、原生 NCM 导入与侧文件的实现、验收和限制。
 - [集合有限批次验收客户端](../packaging/e2e/collections.md)：三平台集合链接、网易云分页、选中或全部分批提交、停止与幂等重放。
-- [项目入口与构建](../README.md)：目录结构、构建与测试命令、当前进度。
+- [项目简介](../README.md)：服务定位与主要功能。
+- [构建与测试](../cmake/README.md)：原生构建预设、工具链要求及验证命令。
 - [重构设计入口](design/cpp20-refactor/README.md)：当前方向、选型状态和文档导航。
 - [后端服务详细设计](design/cpp20-refactor/backend-service/README.md)：C++20 + cpp-httplib 主方案的模块与目录、公共模型、API 契约、任务运行时、配置与部署。
 - [功能模块详细设计](design/cpp20-refactor/backend-service/feature-modules.md)：各模块的职责、业务规则、输入输出和协作方式。
