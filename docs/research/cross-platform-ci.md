@@ -51,7 +51,7 @@ Windows 专项 CI 首次复验出现一次 T32 负载重启用例的 30 秒轮�
 
 新基线的 Linux ARM64 在酷我搜索阶段发生上游 TLS 握手超时，服务返回 `UPSTREAM_TIMEOUT`；其他 6 个环境在解析阶段返回上游 `407`、无音源地址，服务明确返回 `UPSTREAM_FAILED`。这些结果不计作在线闭环通过。
 
-- macOS 产物依赖 Homebrew LLVM 20 的 libc++，尚无独立发行包、签名、公证或 launchd 安装验证。
+- 上述基线的 macOS 产物仍依赖 Homebrew LLVM 20。后续已完成双架构独立包、ad-hoc 签名及 launchd 验证，下载入口和独立测试基线见 [macOS 独立包验收](macos-package-acceptance.md)；Developer ID 签名与公证尚未验收。
 - Windows 包测试验证的是 PowerShell 可启动的中文深路径，未宣称可从超过 MAX_PATH 的可执行路径启动。
 - 未覆盖 Windows ARM64、旧版系统最低要求、Compose、真实 NAS／网络文件系统，也不等同于断电、长期稳定性或吞吐验收。
 - Docker 验证的是本地构建的原生镜像，未发布镜像仓库中的多架构清单。

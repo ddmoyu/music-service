@@ -40,4 +40,6 @@ ctest --preset macos-clang-debug --timeout 120
 bash packaging/linux/smoke.sh out/build/macos-clang-debug/src/server/music-service
 ```
 
-以上并发值可按机器内存调整。Release 使用对应的 `*-release` 预设；Windows 和 Linux 可加 `--target package` 生成发行包。macOS 当前仅验证构建与运行，产物仍依赖构建环境的 LLVM 运行库，不能作为独立发行包分发。部署检查与 CI 架构范围见[发布与部署](../packaging/README.md)。
+以上并发值可按机器内存调整。Release 使用对应的 `*-release` 预设；Windows、Linux 和 macOS 均可加 `--target package` 生成发行包。
+
+macOS 默认以 15.0 为部署目标，打包时用 Python 3.9+ 标准库和 Apple 开发工具收集当前 LLVM 20 运行库、改写为包内相对路径、剥离调试符号并签名；成品不要求 Homebrew／LLVM。默认 ad-hoc 签名，可通过 `MUSIC_SERVICE_MACOS_SIGN_IDENTITY` 指定已有 Developer ID Application 身份；签名不等于公证。使用方法与实际最低系统版本说明见 [macOS 发行包](../packaging/macos/README.md)。部署检查与 CI 架构范围见[发布与部署](../packaging/README.md)。

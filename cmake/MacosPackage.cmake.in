@@ -1,0 +1,11 @@
+# Runs after the executable and documentation have entered the installation tree.
+execute_process(
+    COMMAND "@Python3_EXECUTABLE@" -I "@PROJECT_SOURCE_DIR@/packaging/macos/bundle_runtime.py"
+        --prefix "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}"
+        --llvm-root "@music_service_llvm_root@"
+        --identity "@MUSIC_SERVICE_MACOS_SIGN_IDENTITY@"
+    RESULT_VARIABLE _macos_package_result
+)
+if(NOT _macos_package_result EQUAL 0)
+    message(FATAL_ERROR "macOS runtime relocation/signing failed (${_macos_package_result})")
+endif()

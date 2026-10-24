@@ -1,0 +1,12 @@
+{
+  "config_version": 1,
+  "data_dir": "data",
+  "control": {"host": "127.0.0.1", "port": 17632},
+  "media": {"enabled": true, "host": "127.0.0.1", "port": 17633},
+  "events": {"enabled": true, "host": "127.0.0.1", "port": 17634},
+  "features": {"file_access": true},
+  "logging": {"format": "json", "level": "info", "file_enabled": true},
+  "destinations": [
+    {"id": "dst_default", "name": "downloads", "root": "downloads", "principals": ["prn_local"]}
+  ]
+}

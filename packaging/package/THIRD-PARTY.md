@@ -21,3 +21,16 @@ This is compiled C++ code; the JavaScript application is not bundled or invoked.
 
 The Windows program also contains the Microsoft C/C++ runtime, linked statically under the
 Visual Studio license terms for redistributable code.
+
+macOS archives also contain the LLVM 20 runtime libraries actually referenced by the
+program (libc++, libc++abi and, when linked, libunwind), relocated under
+`lib/music-service/`. They are the existing build toolchain's runtimes, not a bundled
+compiler. The full component licenses from the `llvmorg-20.1.8` source tag accompany
+macOS packages as `libcxx-LICENSE.txt`, `libcxxabi-LICENSE.txt` and
+`libunwind-LICENSE.txt`; they include Apache-2.0 with LLVM exceptions and retained
+component notices. System libraries and Apple frameworks are not copied.
+
+License sources:
+[libc++](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/libcxx/LICENSE.TXT),
+[libc++abi](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/libcxxabi/LICENSE.TXT),
+[libunwind](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/libunwind/LICENSE.TXT).
