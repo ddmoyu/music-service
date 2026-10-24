@@ -1,8 +1,9 @@
 # 项目文档
 
-工作区目录见[项目入口](../README.md)。外部项目源码统一存放在 [third_party](../third_party/README.md)，研究与设计文档保留在本目录。
+服务定位与主要功能见[项目简介](../README.md)。外部项目源码统一存放在 [third_party](../third_party/README.md)，研究与设计文档保留在本目录。
 
 - [功能完成情况](feature-status.md)：平台功能勾选表、Windows 闭环、音质实测、公共下载能力及待开发／待验收项目。
+- [跨系统验收](research/cross-platform-ci.md)：Linux、macOS、Docker 双架构与 Windows 的 CI、运行验证、修复及交付边界。
 - [酷狗接入验收](research/kugou-acceptance.md)：21 项匿名能力、歌手资料与完整作品分页、标准整曲、歌词／封面输出、复用及重启回读；包含审查修复记录，高品质和账号能力单列边界。
 - [酷我歌手与封面验收](research/kuwo-artists-acceptance.md)：0.1.8 直接 JSON 接口、歌手资料与完整分页、MP3／FLAC 封面嵌入和导出、复用与重启回读。
 - [酷我黑胶原生接入验收](research/kuwo-vinyl-acceptance.md)：黑胶映射 hires、C++ 完整 FLAC 校验、尾部附加数据处理、实际音质判定及 Windows 下载闭环。
