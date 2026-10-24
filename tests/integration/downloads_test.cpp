@@ -605,8 +605,10 @@ TEST_CASE("a batch over the quota stores nothing", "[downloads]") {
 
 TEST_CASE("maintenance removes work directories by their task's state, never an active one", "[downloads][maintenance]") {
     Downloads d{"maintenance"};
-    const auto root = d.dir / "main";
-    fs::create_directories(root);
+    fs::create_directories(d.dir / "main");
+    // Match startup's contract: a temporary path may contain a short name,
+    // different casing, or /var's symlink on macOS.
+    const auto root = unwrap(infrastructure::filesystem::canonical_directory(d.dir / "main"));
     auto files = std::make_shared<infrastructure::filesystem::LocalDestinationFiles>(
         std::map<std::string, fs::path>{{"dst_main", root}, {"dst_offline", d.dir / "offline"}});
     const auto workspace = [&](const std::string& task_id) {
@@ -663,6 +665,8 @@ TEST_CASE("maintenance removes work directories by their task's state, never an 
     // An hour later: finished and unknown tasks lose their directories, the failed one is
     // kept for diagnosis, active ones keep theirs.
     const auto first = unwrap(maintenance.run(d.clock->now() + 1h));
+    CAPTURE(first.errors);
+    REQUIRE(first.errors.empty());
     auto seen = verdicts(first);
     CHECK(seen.at(queued) == downloads::WorkspaceVerdict::kept_active);
     CHECK(seen.at(finalizing_task) == downloads::WorkspaceVerdict::kept_active);
@@ -671,7 +675,6 @@ TEST_CASE("maintenance removes work directories by their task's state, never an 
     CHECK(seen.at(canceled_task) == downloads::WorkspaceVerdict::removed_finished);
     CHECK(seen.at(orphan) == downloads::WorkspaceVerdict::removed_orphan);
     CHECK(first.unavailable_destinations == std::vector<std::string>{"dst_offline"});
-    CHECK(first.errors.empty());
     CHECK(exists(queued));
     CHECK(fs::exists(root / ".music-service-work" / queued / "audio.part"));
     CHECK(exists(finalizing_task));
@@ -686,6 +689,8 @@ TEST_CASE("maintenance removes work directories by their task's state, never an 
     // Past the retention the failed task's files go too; the rest is unchanged, and the
     // expired idempotency keys are purged.
     const auto second = unwrap(maintenance.run(d.clock->now() + 25h));
+    CAPTURE(second.errors);
+    REQUIRE(second.errors.empty());
     seen = verdicts(second);
     CHECK(seen.at(failed_task) == downloads::WorkspaceVerdict::removed_expired);
     CHECK(seen.at(queued) == downloads::WorkspaceVerdict::kept_active);

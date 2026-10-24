@@ -31,7 +31,7 @@ echo "== system"
 uname -srm
 case "$(uname -s)" in
   Darwin) sw_vers; otool -L "$bin" ;;
-  *) ldd --version | head -n 1; ldd "$bin" | sed 's/ (0x[0-9a-f]*)//' ;;
+  *) ldd --version | sed -n '1p'; ldd "$bin" | sed 's/ (0x[0-9a-f]*)//' ;;
 esac
 
 echo "== version, check-config, init"

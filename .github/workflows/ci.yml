@@ -87,7 +87,7 @@ jobs:
         run: |
           cmake --version
           g++ --version
-          ldd --version | head -n 1
+          ldd --version | sed -n '1p'
           cmake --preset linux-gcc-debug
           cmake --build --preset linux-gcc-debug
           ctest --preset linux-gcc-debug --timeout 120
