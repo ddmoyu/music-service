@@ -5,10 +5,11 @@ include_guard(GLOBAL)
 #   share/music-service/README.md              installing and running
 #   share/music-service/config.example.json
 #   share/music-service/licenses/              the project's dependencies, as shipped
-#   share/music-service/service/               Windows service or systemd integration
+#   share/music-service/service/               native service integration
 # Build it with the release preset, then: cmake --build --preset <preset> --target package
 # The program links its runtimes statically (MSVC runtime; libstdc++/libgcc on Linux), so
-# the archive holds no other libraries. Data never lives in the installation directory.
+# macOS carries the existing LLVM C++ runtime beside the executable. Data never lives
+# in the installation directory.
 
 set(_share share/music-service)
 
@@ -35,6 +36,23 @@ if(WIN32)
         "${PROJECT_SOURCE_DIR}/packaging/windows/install-service.ps1"
         "${PROJECT_SOURCE_DIR}/packaging/windows/uninstall-service.ps1"
         DESTINATION ${_share}/service)
+elseif(APPLE)
+    install(PROGRAMS "${PROJECT_SOURCE_DIR}/packaging/macos/launch-agent.sh"
+        DESTINATION ${_share}/service)
+    install(FILES "${PROJECT_SOURCE_DIR}/packaging/macos/README.md"
+        DESTINATION ${_share} RENAME MACOS.md)
+    install(FILES "${PROJECT_SOURCE_DIR}/packaging/macos/config.example.json"
+        DESTINATION ${_share} RENAME config.macos.example.json)
+    foreach(_runtime libcxx libcxxabi libunwind)
+        install(FILES "${PROJECT_SOURCE_DIR}/packaging/package/licenses/${_runtime}-LICENSE.txt"
+            DESTINATION ${_share}/licenses)
+    endforeach()
+    find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
+    set(MUSIC_SERVICE_MACOS_SIGN_IDENTITY "-" CACHE STRING
+        "macOS code-signing identity; '-' means ad-hoc (not Developer ID or notarization)")
+    configure_file("${PROJECT_SOURCE_DIR}/cmake/MacosPackage.cmake.in"
+        "${PROJECT_BINARY_DIR}/MacosPackage.cmake" @ONLY)
+    install(SCRIPT "${PROJECT_BINARY_DIR}/MacosPackage.cmake")
 else()
     install(FILES "${PROJECT_SOURCE_DIR}/packaging/linux/music-service.service" DESTINATION ${_share}/service)
     install(PROGRAMS "${PROJECT_SOURCE_DIR}/packaging/linux/install.sh" DESTINATION ${_share}/service)
@@ -48,6 +66,9 @@ elseif(_arch MATCHES "^(arm64|aarch64)$")
     set(_arch arm64)
 endif()
 string(TOLOWER "${CMAKE_SYSTEM_NAME}" _system)
+if(APPLE)
+    set(_system macos)
+endif()
 
 set(CPACK_PACKAGE_NAME music-service)
 set(CPACK_PACKAGE_VENDOR music-service)
@@ -55,7 +76,12 @@ set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "${PROJECT_DESCRIPTION}")
 set(CPACK_PACKAGE_FILE_NAME "music-service-${PROJECT_VERSION}-${_system}-${_arch}")
 set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY ON)
-set(CPACK_STRIP_FILES ON)
+if(APPLE)
+    # Relocation and stripping must happen BEFORE signing, never after it.
+    set(CPACK_STRIP_FILES OFF)
+else()
+    set(CPACK_STRIP_FILES ON)
+endif()
 if(WIN32)
     set(CPACK_GENERATOR ZIP)
 else()

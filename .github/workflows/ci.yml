@@ -151,17 +151,37 @@ jobs:
         run: out/build/macos-clang-debug/tests/music_service_integration_tests "[online]"
       - name: Runtime smoke test
         run: bash packaging/linux/smoke.sh out/build/macos-clang-debug/src/server/music-service
-      - name: Release build and runtime smoke test
+      - name: Release package
         run: |
           cmake --preset macos-clang-release
-          cmake --build --preset macos-clang-release
-          bash packaging/linux/smoke.sh out/build/macos-clang-release/src/server/music-service
+          cmake --build --preset macos-clang-release --target package
       - name: Kuwo online loop
         continue-on-error: true
         run: python3 -I packaging/e2e/kuwo_e2e.py --binary out/build/macos-clang-debug/src/server/music-service
       - name: 5sing online loop
         continue-on-error: true
         run: python3 -I packaging/e2e/kuwo_e2e.py --binary out/build/macos-clang-debug/src/server/music-service --source fivesing
+      - name: Package and launchd smoke test without Homebrew LLVM
+        run: |
+          # Hide the actual keg as well as opt symlinks for this isolated runner.
+          llvm_real=$(cd "$MUSIC_SERVICE_LLVM_ROOT" && pwd -P)
+          llvm_hidden="${llvm_real}.music-service-package-test"
+          test ! -e "$llvm_hidden"
+          mv "$llvm_real" "$llvm_hidden"
+          trap 'mv "$llvm_hidden" "$llvm_real"' EXIT
+          bash packaging/macos/package_smoke.sh out/build/macos-clang-release/music-service-*.tar.gz
+      - name: Package checksums
+        working-directory: out/build/macos-clang-release
+        run: shasum -a 256 music-service-*.tar.gz > SHA256SUMS
+      - name: Save verified macOS package
+        uses: actions/upload-artifact@v4
+        with:
+          name: music-service-macos-${{ matrix.arch }}
+          path: |
+            out/build/macos-clang-release/music-service-*.tar.gz
+            out/build/macos-clang-release/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
 
   docker:
     if: github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == 'docker'
