@@ -1269,7 +1269,13 @@ TEST_CASE("processing and observer exceptions release slots and save a terminal 
     };
     auto processor = std::make_shared<ThrowOnce>();
     Runs r{"throwing-processing", quick_options(), {}, processor};
-    const auto first = r.create("src", "one"), second = r.create("src", "two");
+    r.create("src", "one");
+    r.create("src", "two");
+    // Creation timestamps have millisecond precision; ties are ordered by ID,
+    // not by create() call order. Inject into the first scheduled task.
+    const auto queued = unwrap(r.tasks->runnable(r.clock->now(), 2, 2));
+    REQUIRE(queued.size() == 2);
+    const auto first = queued[0].task_id, second = queued[1].task_id;
     auto executor = std::make_shared<runtime::BoundedExecutor>("downloads", 1, 4);
     downloads::DownloadScheduler scheduler{{1, 10ms}, r.tasks, r.ledger, r.runner, executor, r.clock,
         [](const auto&, const auto&) { throw std::runtime_error("observer failed"); }};
@@ -1283,8 +1289,11 @@ TEST_CASE("processing and observer exceptions release slots and save a terminal 
     executor->request_stop();
     executor->join();
     scheduler.join();
+    CAPTURE(r.get(first).status, r.get(second).status);
     REQUIRE(done);
+    REQUIRE(r.get(first).error_json);
     CHECK(json::parse(*r.get(first).error_json)["code"] == "INTERNAL_ERROR");
+    CHECK(processor->calls == 2);
     CHECK(scheduler.stats().errors == 2);
     CHECK(scheduler.stats().running == 0);
 }
