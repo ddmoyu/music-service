@@ -106,7 +106,7 @@ public:
                                        std::uint64_t size_bytes)>
                         file_intact,
                     std::uint32_t max_batch_items, std::shared_ptr<ports::DownloadQueue> queue = {},
-                    std::optional<domain::OutputOptions> output = {}, std::shared_ptr<ports::PublishedFiles> bundle_files = {});
+                    domain::OutputOptions output = {}, std::shared_ptr<ports::PublishedFiles> bundle_files = {});
 
     // Idempotency-Key: 16 to 128 printable ASCII characters without spaces.
     static domain::Result<void> check_idempotency_key(std::string_view key);
@@ -147,7 +147,7 @@ private:
     std::function<bool(const std::string&, const std::string&, std::uint64_t)> file_intact_;
     std::uint32_t max_batch_items_;
     std::shared_ptr<ports::DownloadQueue> queue_; // empty: tasks only queue
-    std::optional<domain::OutputOptions> output_;
+    domain::OutputOptions output_;
     std::shared_ptr<ports::PublishedFiles> bundle_files_;
 };
 

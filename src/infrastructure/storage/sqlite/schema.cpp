@@ -1,16 +1,12 @@
-#include "infrastructure/storage/sqlite/migrations.hpp"
+#include "infrastructure/storage/sqlite/schema.hpp"
 
-#include <algorithm>
-#include <array>
-#include <map>
 #include <string>
 
 namespace music_service::infrastructure::storage::sqlite {
-
 namespace {
 
-// Version 1: everything S1 needs. Times are UTC milliseconds since the Unix epoch.
-constexpr std::string_view schema_v1 = R"sql(
+// The complete current schema. Times are UTC milliseconds since the Unix epoch.
+constexpr std::string_view schema_sql = R"sql(
 CREATE TABLE principals (
     id TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,
@@ -44,8 +40,15 @@ CREATE TABLE credentials (
     last_verified_at INTEGER,
     last_verify_result TEXT,
     created_at INTEGER NOT NULL,
-    revoked_at INTEGER
+    revoked_at INTEGER,
+    refresh_state TEXT NOT NULL DEFAULT 'idle'
+        CHECK (refresh_state IN ('idle', 'pending', 'reauthorization_required')),
+    oauth_application_id TEXT,
+    oauth_application_version INTEGER NOT NULL DEFAULT 0,
+    refresh_after INTEGER
 ) STRICT;
+CREATE INDEX credentials_refresh_due ON credentials
+    (oauth_application_id, oauth_application_version, refresh_state, status, refresh_after);
 CREATE INDEX credentials_owner_source ON credentials (owner_id, source);
 
 CREATE TABLE credential_defaults (
@@ -88,7 +91,10 @@ CREATE TABLE download_tasks (
     updated_at INTEGER NOT NULL,
     started_at INTEGER,
     finished_at INTEGER,
-    cancel_requested_at INTEGER
+    cancel_requested_at INTEGER,
+    execution TEXT,
+    checkpoint TEXT,
+    attempt_used_ms INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 CREATE INDEX download_tasks_owner_list ON download_tasks (owner_id, status, created_at, id);
 CREATE INDEX download_tasks_due ON download_tasks (status, next_retry_at);
@@ -178,28 +184,6 @@ CREATE TABLE finalization_intents (
 ) STRICT;
 )sql";
 
-// Version 2 (T17): what the runner keeps between executions. execution holds the public
-// facts of the run (actual track and quality), checkpoint the private resume evidence of
-// the work file, attempt_used_ms the running time of the open attempt without its
-// admission pauses.
-constexpr std::string_view schema_v2 = R"sql(
-ALTER TABLE download_tasks ADD COLUMN execution TEXT;
-ALTER TABLE download_tasks ADD COLUMN checkpoint TEXT;
-ALTER TABLE download_tasks ADD COLUMN attempt_used_ms INTEGER NOT NULL DEFAULT 0;
-)sql";
-
-constexpr std::string_view schema_v3 = R"sql(
-ALTER TABLE credentials ADD COLUMN refresh_state TEXT NOT NULL DEFAULT 'idle'
-    CHECK (refresh_state IN ('idle', 'pending', 'reauthorization_required'));
-ALTER TABLE credentials ADD COLUMN oauth_application_id TEXT;
-ALTER TABLE credentials ADD COLUMN oauth_application_version INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE credentials ADD COLUMN refresh_after INTEGER;
-CREATE INDEX credentials_refresh_due ON credentials
-    (oauth_application_id, oauth_application_version, refresh_state, status, refresh_after);
-)sql";
-
-constexpr std::array<Migration, 3> migrations{{{1, schema_v1}, {2, schema_v2}, {3, schema_v3}}};
-
 std::string checksum(std::string_view text) {
     std::uint64_t hash = 14695981039346656037ULL;
     for (const char c : text) {
@@ -219,118 +203,51 @@ domain::Error schema_error(std::string message) {
     return domain::Error{domain::ErrorCode::storage_unavailable, std::move(message), false, {}};
 }
 
-// Applied migrations by version, with their recorded checksums.
-domain::Result<std::map<std::uint32_t, std::string>> applied_migrations(Connection& db) {
-    auto statement = db.prepare("SELECT version, checksum FROM schema_migrations");
-    if (!statement) {
-        return std::move(statement).error();
-    }
-    std::map<std::uint32_t, std::string> rows;
-    while (true) {
-        auto row = statement->step();
-        if (!row) {
-            return std::move(row).error();
-        }
-        if (!*row) {
-            break;
-        }
-        rows.emplace(static_cast<std::uint32_t>(statement->integer(0)), statement->text(1));
-    }
-    return rows;
-}
-
-// The newest applied version, or a refusal for versions or checksums this build does not know.
-domain::Result<std::uint32_t> check_applied(const std::map<std::uint32_t, std::string>& applied,
-                                            std::span<const Migration> list) {
-    const auto latest = list.empty() ? 0U : list.back().version;
-    for (const auto& [version, recorded] : applied) {
-        if (version > latest) {
-            return schema_error("database schema version " + std::to_string(version) +
-                                " is newer than this build supports (" + std::to_string(latest) +
-                                "); upgrade the program or restore a matching backup");
-        }
-        const auto known = std::find_if(list.begin(), list.end(),
-                                        [version](const Migration& m) { return m.version == version; });
-        if (known == list.end() || checksum(known->sql) != recorded) {
-            return schema_error("schema migration " + std::to_string(version) +
-                                " differs from this build");
-        }
-    }
-    return applied.empty() ? 0U : applied.rbegin()->first;
-}
-
 } // namespace
 
-std::span<const Migration> builtin_migrations() { return migrations; }
-
-domain::Result<std::uint32_t> schema_version(Connection& db, std::span<const Migration> list) {
-    auto table = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'");
-    if (!table) {
-        return std::move(table).error();
-    }
+domain::Result<std::uint32_t> schema_version(Connection& db) {
+    auto table = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_metadata'");
+    if (!table) return std::move(table).error();
     auto exists = table->step();
-    if (!exists) {
-        return std::move(exists).error();
-    }
-    if (!exists.value()) {
+    if (!exists) return std::move(exists).error();
+    if (!*exists) {
+        auto objects = db.prepare("SELECT 1 FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' LIMIT 1");
+        if (!objects) return std::move(objects).error();
+        auto any = objects->step();
+        if (!any) return std::move(any).error();
+        if (*any) return schema_error("database does not use the current schema; use a new data_dir");
         return 0U;
     }
-    auto applied = applied_migrations(db);
-    if (!applied) {
-        return std::move(applied).error();
+    auto record = db.prepare("SELECT version, checksum FROM schema_metadata WHERE id = 1");
+    if (!record) return std::move(record).error();
+    auto row = record->step();
+    if (!row) return std::move(row).error();
+    if (!*row || record->integer(0) != current_schema_version || record->text(1) != checksum(schema_sql)) {
+        return schema_error("database schema differs from this build; use a new data_dir");
     }
-    return check_applied(applied.value(), list);
+    return current_schema_version;
 }
 
-domain::Result<std::uint32_t> migrate(Database& database, std::chrono::system_clock::time_point now,
-                                      std::span<const Migration> list) {
-    const auto applied_at = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                now.time_since_epoch())
-                                .count();
-
-    auto applied = database.write([&](Connection& db) -> domain::Result<std::map<std::uint32_t, std::string>> {
-        if (auto created = db.exec("CREATE TABLE IF NOT EXISTS schema_migrations ("
-                                   " version INTEGER PRIMARY KEY,"
-                                   " checksum TEXT NOT NULL,"
-                                   " applied_at INTEGER NOT NULL) STRICT;");
-            !created) {
-            return created.error();
+domain::Result<std::uint32_t> initialize_schema(Database& database, std::chrono::system_clock::time_point now) {
+    return database.write([&](Connection& db) -> domain::Result<std::uint32_t> {
+        auto current = schema_version(db);
+        if (!current) return std::move(current).error();
+        if (*current != 0) return *current;
+        if (auto created = db.exec(schema_sql); !created) return std::move(created).error();
+        if (auto created = db.exec("CREATE TABLE schema_metadata ("
+                                  "id INTEGER PRIMARY KEY CHECK (id = 1),"
+                                  "version INTEGER NOT NULL, checksum TEXT NOT NULL,"
+                                  "created_at INTEGER NOT NULL) STRICT"); !created) {
+            return std::move(created).error();
         }
-        return applied_migrations(db);
+        auto record = db.prepare("INSERT INTO schema_metadata (id, version, checksum, created_at) VALUES (1, ?, ?, ?)");
+        if (!record) return std::move(record).error();
+        record->bind(1, static_cast<std::int64_t>(current_schema_version))
+            .bind(2, checksum(schema_sql))
+            .bind(3, std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count());
+        if (auto saved = record->run(); !saved) return std::move(saved).error();
+        return current_schema_version;
     });
-    if (!applied) {
-        return std::move(applied).error();
-    }
-    auto checked = check_applied(applied.value(), list);
-    if (!checked) {
-        return std::move(checked).error();
-    }
-
-    std::uint32_t current = checked.value();
-    for (const auto& migration : list) {
-        if (applied.value().count(migration.version) != 0) {
-            continue;
-        }
-        auto done = database.write([&](Connection& db) -> domain::Result<void> {
-            if (auto run = db.exec(migration.sql); !run) {
-                return run;
-            }
-            auto record = db.prepare(
-                "INSERT INTO schema_migrations (version, checksum, applied_at) VALUES (?, ?, ?)");
-            if (!record) {
-                return std::move(record).error();
-            }
-            record->bind(1, static_cast<std::int64_t>(migration.version))
-                .bind(2, checksum(migration.sql))
-                .bind(3, static_cast<std::int64_t>(applied_at));
-            return record->run();
-        });
-        if (!done) {
-            return done.error();
-        }
-        current = migration.version;
-    }
-    return current;
 }
 
 } // namespace music_service::infrastructure::storage::sqlite

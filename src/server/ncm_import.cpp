@@ -51,7 +51,7 @@ domain::Result<ports::CompletedPublication> import_ncm(const application::config
     auto binding = domain::AccountBinding::make(owner, source, domain::AccountMode::anonymous, "anonymous", {}, {});
     if (!binding) return binding.error();
     domain::DownloadIntentDraft draft{owner, {source, domain::PlatformId::parse(identity.value()->sha256).value()},
-        domain::SameSource{}, {*binding}, {domain::Quality::standard, domain::QualityPolicy::allow_lower, false}, policy,
+        {*binding}, {domain::Quality::standard, domain::QualityPolicy::allow_lower, false}, policy,
         {destination, "local-ncm-v1", "naming-v2", "metadata-v3", config.downloads.output}};
     auto intent = domain::NormalizedDownloadIntent::normalize(std::move(draft));
     if (!intent) return intent.error();

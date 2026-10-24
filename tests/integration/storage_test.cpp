@@ -5,7 +5,7 @@
 #include "infrastructure/clock.hpp"
 #include "infrastructure/filesystem/paths.hpp"
 #include "infrastructure/storage/sqlite/account_repositories.hpp"
-#include "infrastructure/storage/sqlite/migrations.hpp"
+#include "infrastructure/storage/sqlite/schema.hpp"
 #include "infrastructure/storage/sqlite/task_repositories.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -53,7 +53,7 @@ struct Store {
         repos_reset();
         database.reset();
         database = Database::open(dir / "service.sqlite3", db_options).value();
-        REQUIRE(*migrate(*database, clock->now()) == 3);
+        REQUIRE(*initialize_schema(*database, clock->now()) == current_schema_version);
         const RepositoryContext ctx{database.get(), clock, ids};
         identity = std::make_unique<SqliteIdentityRepository>(ctx);
         credentials = std::make_unique<SqliteCredentialRepository>(ctx);
@@ -85,7 +85,6 @@ domain::NormalizedDownloadIntent intent_for(const std::string& owner, std::strin
     domain::DownloadIntentDraft draft{
         owner,
         test::track("kuwo", track_id),
-        domain::SameSource{},
         {test::anonymous(owner, "kuwo")},
         {domain::Quality::standard, domain::QualityPolicy::strict, allow_preview},
         domain::MetadataPolicy::best_effort,
@@ -116,9 +115,9 @@ ports::TaskRecord step(Store& s, const ports::TaskRecord& task, TaskStatus to) {
 
 } // namespace
 
-TEST_CASE("migrations run once and reopen cleanly", "[storage][migrations]") {
-    Store s{"migrate"};
-    CHECK(*migrate(*s.database, s.clock->now()) == 3);
+TEST_CASE("current schema initializes once and reopens cleanly", "[storage][schema]") {
+    Store s{"schema"};
+    CHECK(*initialize_schema(*s.database, s.clock->now()) == current_schema_version);
 
     const auto mode = s.database->read([](Connection& db) -> domain::Result<std::string> {
         auto stmt = db.prepare("PRAGMA journal_mode");
@@ -129,23 +128,23 @@ TEST_CASE("migrations run once and reopen cleanly", "[storage][migrations]") {
     CHECK(*mode == "wal");
 
     s.reopen();
-    CHECK(*migrate(*s.database, s.clock->now()) == 3);
+    CHECK(*initialize_schema(*s.database, s.clock->now()) == current_schema_version);
 }
 
-TEST_CASE("a newer or altered schema is refused", "[storage][migrations]") {
+TEST_CASE("a newer or altered schema is refused", "[storage][schema]") {
     Store s{"newer"};
     REQUIRE(s.database->write([](Connection& db) {
-        return db.exec("INSERT INTO schema_migrations VALUES (99, 'x', 0)");
+        return db.exec("UPDATE schema_metadata SET version = 99");
     }));
-    const auto newer = migrate(*s.database, s.clock->now());
+    const auto newer = initialize_schema(*s.database, s.clock->now());
     REQUIRE_FALSE(newer);
     CHECK(newer.error().code == ErrorCode::storage_unavailable);
 
     REQUIRE(s.database->write([](Connection& db) {
-        return db.exec("DELETE FROM schema_migrations WHERE version = 99;"
-                       "UPDATE schema_migrations SET checksum = 'changed' WHERE version = 1;");
+        return db.exec("UPDATE schema_metadata SET version = " + std::to_string(current_schema_version) +
+                       ", checksum = 'changed'");
     }));
-    CHECK_FALSE(migrate(*s.database, s.clock->now()));
+    CHECK_FALSE(initialize_schema(*s.database, s.clock->now()));
 }
 
 TEST_CASE("failed writes roll back", "[storage][database]") {

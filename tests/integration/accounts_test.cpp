@@ -12,7 +12,7 @@
 #include "infrastructure/filesystem/paths.hpp"
 #include "infrastructure/secrets/file_secret_store.hpp"
 #include "infrastructure/storage/sqlite/account_repositories.hpp"
-#include "infrastructure/storage/sqlite/migrations.hpp"
+#include "infrastructure/storage/sqlite/schema.hpp"
 #include "providers/registry/provider_registry.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -148,7 +148,7 @@ struct Accounts {
         credential_repo.reset();
         database.reset();
         database = Database::open(dir / "service.sqlite3", {}).value();
-        REQUIRE(migrate(*database, clock->now()).has_value());
+        REQUIRE(initialize_schema(*database, clock->now()).has_value());
         const RepositoryContext ctx{database.get(), clock, ids};
         identities = std::make_shared<FlakyIdentityRepository>(std::make_shared<SqliteIdentityRepository>(ctx));
         credential_repo = std::make_shared<SqliteCredentialRepository>(ctx);

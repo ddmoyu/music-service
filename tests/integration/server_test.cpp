@@ -9,7 +9,7 @@
 #include "infrastructure/filesystem/paths.hpp"
 #include "infrastructure/observability/correlation.hpp"
 #include "infrastructure/observability/logger.hpp"
-#include "infrastructure/storage/sqlite/migrations.hpp"
+#include "infrastructure/storage/sqlite/schema.hpp"
 #include "infrastructure/storage/sqlite/task_repositories.hpp"
 #include "server/commands.hpp"
 #include "server/process_host.hpp"
@@ -95,7 +95,7 @@ TEST_CASE("saturated upstream requests leave health queries and cancellation res
     RunningService service{d, std::make_shared<infrastructure::observability::MemorySink>(),
                            std::vector<ports::ProviderBundle>{mock_audio("aud"), catalog}, true};
     auto admin = service.client(admin_token);
-    const auto credential = body(admin.Post("/api/v1/credentials", R"({"source":"aud","cookie":"good"})", "application/json"))["data"];
+    const auto credential = body(admin.Post("/api/v1/credentials", R"({"source":"aud","kind":"cookie","auth_profile":"web_cookie","secret":{"cookie":"good"}})", "application/json"))["data"];
     const auto credential_id = credential["credential_id"].get<std::string>();
     REQUIRE(admin.Put("/api/v1/credential-defaults/aud", json{{"credential_id", credential_id}}.dump(), "application/json")->status == 200);
     const auto created = admin.Post("/api/v1/downloads", httplib::Headers{{"Idempotency-Key", "capacity-test-key"}},
@@ -196,6 +196,9 @@ TEST_CASE("removed matching and source switching are rejected before task creati
     auto admin = service.client(d.read(d.bootstrap()));
     const httplib::Headers key{{"Idempotency-Key", "removed-feature"}};
     for (const auto& extra : {json{{"fallback", {{"mode", "auto"}}}},
+                             json{{"fallback", {{"mode", "disabled"}}}},
+                             json{{"fallback", {{"mode", "disabled"}, {"sources", json::array()}}}},
+                             json{{"fallback", nullptr}}, json{{"match_selection", nullptr}},
                              json{{"fallback", {{"mode", "disabled"}, {"sources", {"aud"}}}}},
                              json{{"match_selection", {{"match_id", "mat_old"}, {"candidate_id", "x"}}}}}) {
         json request{{"track", {{"source", "aud"}, {"id", "one"}}}};
@@ -405,7 +408,7 @@ TEST_CASE("the service serves the control API and stops in order", "[server]") {
         CHECK(body(reader_client.Get("/api/v1/destinations"))["data"]["items"].empty());
 
         // Credentials and defaults (A47 through the API).
-        const auto made = admin.Post("/api/v1/credentials", R"({"source":"aud","label":"主账号","cookie":"good"})",
+        const auto made = admin.Post("/api/v1/credentials", R"({"source":"aud","label":"主账号","kind":"cookie","auth_profile":"web_cookie","secret":{"cookie":"good"}})",
                                      "application/json");
         REQUIRE(made);
         CHECK(made->status == 201);
@@ -422,10 +425,21 @@ TEST_CASE("the service serves the control API and stops in order", "[server]") {
         CHECK(full->status == 201);
         CHECK(error_code(admin.Post("/api/v1/credentials", R"({"source":"aud","kind":"oauth2","auth_profile":"x","secret":{}})",
                                     "application/json")) == "VALIDATION_FAILED"); // 未注册 profile 仍不可导入
-        CHECK(error_code(admin.Post("/api/v1/credentials", R"({"source":"ghost","cookie":"a"})", "application/json")) ==
+        CHECK(error_code(admin.Post("/api/v1/credentials", R"({"source":"ghost","kind":"cookie","auth_profile":"web_cookie","secret":{"cookie":"a"}})", "application/json")) ==
               "UNKNOWN_PROVIDER");
-        CHECK(error_code(admin.Post("/api/v1/credentials", R"({"source":"aud","cookie":"a","extra":1})",
+        CHECK(error_code(admin.Post("/api/v1/credentials", R"({"source":"aud","extra":1,"kind":"cookie","auth_profile":"web_cookie","secret":{"cookie":"a"}})",
                                     "application/json")) == "VALIDATION_FAILED");
+        CHECK(admin.Post("/api/v1/credentials", R"({"source":"aud","cookie":"good"})", "application/json")->status == 400);
+        for (const auto* missing : {"kind", "auth_profile", "secret"}) {
+            json incomplete{{"source", "aud"}, {"kind", "cookie"}, {"auth_profile", "web_cookie"},
+                            {"secret", {{"cookie", "good"}}}};
+            incomplete.erase(missing);
+            CHECK(admin.Post("/api/v1/credentials", incomplete.dump(), "application/json")->status == 400);
+        }
+        CHECK(admin.Put("/api/v1/credentials/" + id, R"({"cookie":"changed"})", "application/json")->status == 400);
+        const auto unchanged = body(admin.Get("/api/v1/credentials?source=aud"))["data"]["items"];
+        REQUIRE(unchanged.size() == 2);
+        for (const auto& item : unchanged) CHECK(item["version"] == 1);
         const auto wrong_type = admin.Post("/api/v1/credentials", "source=aud", "text/plain");
         CHECK(wrong_type->status == 415);
         CHECK(error_code(wrong_type) == "UNSUPPORTED_CONTENT_TYPE");
@@ -599,7 +613,6 @@ TEST_CASE("destination bindings cannot move or disappear while in use", "[server
         sqlite::SqliteTaskRepository tasks{ctx, {}};
         domain::DownloadIntentDraft draft{"prn_local",
                                           test::track("cat", "1"),
-                                          domain::SameSource{},
                                           {test::anonymous("prn_local", "cat")},
                                           {domain::Quality::standard, domain::QualityPolicy::strict, false},
                                           domain::MetadataPolicy::best_effort,

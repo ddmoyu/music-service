@@ -148,7 +148,6 @@ namespace {
 ports::CreateTaskCommand create_command() {
     domain::DownloadIntentDraft draft{"prn_a",
                                       test::track("kuwo", "MUSIC_1"),
-                                      domain::SameSource{},
                                       {test::anonymous("prn_a", "kuwo")},
                                       {},
                                       domain::MetadataPolicy::best_effort,

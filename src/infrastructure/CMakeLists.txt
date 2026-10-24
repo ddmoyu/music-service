@@ -20,7 +20,7 @@ add_library(music_service_infrastructure STATIC
     storage/sqlite/backup.cpp
     storage/sqlite/connection.cpp
     storage/sqlite/database.cpp
-    storage/sqlite/migrations.cpp
+    storage/sqlite/schema.cpp
     storage/sqlite/task_repositories.cpp
     transport/httplib_transport.cpp
 )

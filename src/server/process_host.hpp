@@ -37,7 +37,7 @@ struct HostOptions {
 };
 
 // The serving process (configuration-and-deployment.md, 启动与退出). start() runs the
-// startup order: instance lock -> database and migrations -> identities and secrets
+// startup order: instance lock -> current database schema -> identities and secrets
 // -> destination bindings -> providers and transport -> listeners -> ready. Any
 // failure before ready undoes what was opened and returns the error; nothing is
 // served half-initialized. stop() reverses it: readiness off, listeners stopped,

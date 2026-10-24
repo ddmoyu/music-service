@@ -42,7 +42,7 @@ def run(service, cookie_file, report):
         report["catalog"][source + "_lyrics"] = {"characters": len(lyrics["lrc"])}
 
     credential = api.json("POST", "/api/v1/credentials", {"source": "netease",
-        "cookie": cookie_file.read_text(encoding="utf-8").strip(), "label": "E acceptance"}, expect=(201,))[2]["credential_id"]
+        "kind": "cookie", "auth_profile": "web_cookie", "secret": {"cookie": cookie_file.read_text(encoding="utf-8").strip()}, "label": "E acceptance"}, expect=(201,))[2]["credential_id"]
     verified = api.json("POST", f"/api/v1/credentials/{credential}/verify", {})[2]
     check(verified["result"] == "valid", "provided account verifies")
     api.json("PUT", "/api/v1/credential-defaults/netease", {"credential_id": credential})

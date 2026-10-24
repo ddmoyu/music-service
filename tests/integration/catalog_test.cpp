@@ -11,7 +11,7 @@
 #include "infrastructure/observability/correlation.hpp"
 #include "infrastructure/secrets/file_secret_store.hpp"
 #include "infrastructure/storage/sqlite/account_repositories.hpp"
-#include "infrastructure/storage/sqlite/migrations.hpp"
+#include "infrastructure/storage/sqlite/schema.hpp"
 #include "providers/registry/provider_registry.hpp"
 #include "runtime/executors/bounded_executor.hpp"
 
@@ -252,7 +252,7 @@ struct Catalog {
         fs::remove_all(dir);
         fs::create_directories(dir / "secrets");
         database = infrastructure::storage::sqlite::Database::open(dir / "service.sqlite3", {}).value();
-        REQUIRE(infrastructure::storage::sqlite::migrate(*database, clock->now()).has_value());
+        REQUIRE(infrastructure::storage::sqlite::initialize_schema(*database, clock->now()).has_value());
         const infrastructure::storage::sqlite::RepositoryContext ctx{database.get(), clock, ids};
         identities = std::make_shared<infrastructure::storage::sqlite::SqliteIdentityRepository>(ctx);
         auto repo = std::make_shared<infrastructure::storage::sqlite::SqliteCredentialRepository>(ctx);

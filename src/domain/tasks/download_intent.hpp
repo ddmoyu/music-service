@@ -9,7 +9,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <variant>
 #include <vector>
 
 namespace music_service::domain {
@@ -18,12 +17,6 @@ enum class MetadataPolicy { best_effort, required, skip };
 
 std::string_view to_string(MetadataPolicy value) noexcept;
 Result<MetadataPolicy> parse_metadata_policy(std::string_view text);
-
-// Persist the same-source marker to preserve existing task fingerprints and recovery.
-struct SameSource {
-    friend bool operator==(const SameSource&, const SameSource&) = default;
-};
-using SourceSelection = std::variant<SameSource>;
 
 // Effective product settings resolved from configuration by the application layer.
 // Versions are deterministic digests of the relevant configuration, not timestamps.
@@ -50,8 +43,7 @@ struct ProductPolicy {
     std::string destination_config_version;
     std::string naming_config_version;
     std::string metadata_config_version;
-    // 旧意图不含此字段：恢复时仍只写基础标签并沿用原命名。
-    std::optional<OutputOptions> output{};
+    OutputOptions output{};
 
     friend bool operator==(const ProductPolicy&, const ProductPolicy&) = default;
 };
@@ -60,7 +52,6 @@ struct ProductPolicy {
 struct DownloadIntentDraft {
     std::string owner_id;
     TrackRef original_track;
-    SourceSelection selection{SameSource{}};
     std::vector<AccountBinding> account_bindings;
     ResourceRequirement requirement;
     MetadataPolicy metadata_policy{MetadataPolicy::best_effort};
@@ -78,7 +69,6 @@ public:
 
     [[nodiscard]] const std::string& owner_id() const noexcept { return owner_id_; }
     [[nodiscard]] const TrackRef& original_track() const noexcept { return original_track_; }
-    [[nodiscard]] const SourceSelection& selection() const noexcept { return selection_; }
     [[nodiscard]] const std::vector<AccountBinding>& account_bindings() const noexcept {
         return account_bindings_;
     }
@@ -88,14 +78,12 @@ public:
 
 private:
     NormalizedDownloadIntent(std::string owner_id, TrackRef original_track,
-                             SourceSelection selection,
                              std::vector<AccountBinding> account_bindings,
                              ResourceRequirement requirement, MetadataPolicy metadata_policy,
                              ProductPolicy product);
 
     std::string owner_id_;
     TrackRef original_track_;
-    SourceSelection selection_;
     std::vector<AccountBinding> account_bindings_;
     ResourceRequirement requirement_;
     MetadataPolicy metadata_policy_{MetadataPolicy::best_effort};
@@ -106,7 +94,7 @@ private:
 // Equality compares schema and canonical form, so a digest collision cannot merge
 // two different intents.
 struct DownloadFingerprint {
-    static constexpr std::uint32_t current_schema = 1;
+    static constexpr std::uint32_t current_schema = 2;
 
     std::uint32_t schema_version{current_schema};
     std::string canonical;

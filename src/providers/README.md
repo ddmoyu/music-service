@@ -38,7 +38,7 @@ OAuth 使用独立的 2 个工作线程、32 项队列，满额返回 SERVICE_BU
 
 自动刷新仅作用于本流程产生并绑定应用 ID／version 的凭证；手工替换 secret 会清除应用绑定，之后须重新登录才能恢复自动刷新。改用其他应用身份时递增 app_profiles.version 并重新授权。获取租约不会同步等待刷新；短期令牌或上游缓慢可能使已过期凭证暂时不可用，查询凭证可看到 refresh_state。登录成功不会自动改选默认账号。
 
-数据库升级到 schema 3，旧版程序不能读取升级后的数据库，回退需恢复匹配的数据库及 secrets 备份。应用 token 缓存、application 模式租约及真实平台 OAuth 协议仍属于 T24 后续范围。配置和 API 示例见[配置说明](../../config/README.md#oauth-应用配置与秘密)及 [API 契约](../../docs/design/cpp20-refactor/backend-service/api-contract.md#oauth-登录会话)。
+数据库仅支持当前 schema 4，不执行历史迁移；非当前开发数据需使用新的 data_dir，备份恢复也只接受当前结构。应用 token 缓存、application 模式租约及真实平台 OAuth 协议仍属于 T24 后续范围。配置和 API 示例见[配置说明](../../config/README.md#oauth-应用配置与秘密)及 [API 契约](../../docs/design/cpp20-refactor/backend-service/api-contract.md#oauth-登录会话)。
 
 2026-10-24 验证：Windows MSVC x64 Debug／Release 构建通过；全量 CTest 607 项中 601 通过、6 项在线／样本门控跳过、0 失败。最终 OAuth／迁移专项 14 项、947 个断言通过，覆盖浏览器绑定、跨应用／跨账号隔离、PKCE 标准向量、拒绝／异常／取消／到期、参数重复、队列过载、日志脱敏、刷新轮换、存储失败及跨连接重启恢复。Release 实测 Jamendo 匿名歌曲 49292 的详情与 MP3 下载成功，产物 310,500 字节。证据为 out/oauth-flow-debug-build.log、out/oauth-flow-release-build.log、out/oauth-flow-ctest.log、out/oauth-flow-targeted.log、out/oauth-release-smoke-report.json；不包含真实平台 OAuth 账号授权验收。
 

@@ -80,7 +80,7 @@ AccountBinding 表达稳定的账号选择，不含 token、Cookie、secret_ref 
 
 缩略图首版只暴露可公开访问的展示 URL；需要秘密头的封面在缺少专用图片代理时返回 null／警告，不复用音频 asset 路由伪装支持。`links` 是服务自身的资源链接，不包含带账号秘密的上游 URL。
 
-`context_ref` 是平台 hash、资源参数等附加上下文的服务端句柄，按 AuthIdentityKey、实体、实现／schema 版本与有效期绑定。客户端可以原样回传，不能自行构造平台扩展 JSON。句柄过期或授权身份不匹配时不能复用其私有数据，先按 ref 在当前授权下重新取详情；只有确实无法恢复所需上下文时返回 `422 CONTEXT_REQUIRED`。下载被接收前，将必要的非秘密上下文保存到任务私有快照，记录生成它的授权身份和 schema；执行时版本改变则重新获取或由平台明确声明可安全迁移，不能盲用旧账号上下文。
+`context_ref` 是平台 hash、资源参数等附加上下文的服务端句柄，按 AuthIdentityKey、实体、实现／schema 版本与有效期绑定。客户端可以原样回传，不能自行构造平台扩展 JSON。句柄过期或授权身份不匹配时不能复用其私有数据，先按 ref 在当前授权下重新取详情；只有确实无法恢复所需上下文时返回 `422 CONTEXT_REQUIRED`。下载被接收前，将必要的非秘密上下文保存到任务私有快照，记录生成它的授权身份和 schema；执行时版本改变则重新获取，不能盲用旧账号上下文。
 
 ## 品质、解析和探测
 
@@ -138,9 +138,9 @@ phase 用 status 表达，`stage` 用于 processing 内部的 decrypt／validate
 
 `metadata_policy`：`best_effort`（默认）、`required`、`skip`。best_effort 允许标签失败而音频 completed，metadata_status 为 partial／failed 并列出 warnings；required 失败则不发布最终资产；skip 明确不写标签。
 
-0.1.1 的新任务默认获取可用封面和歌词。`result.metadata_fields` 为字段到状态的对象：`written`、`unavailable`（平台未提供可信字段或明确无歌词）、`unsupported`（无能力）、`disabled`、`fetch_failed`、`write_failed`。当前报告字段为 title、artist、album、cover、lyrics、track_number、track_total；未提供的基础标签／曲号可以省略，客户端须兼容未知新字段。`required` 要求可提供的启用字段成功获取和写入，不把缺失／不支持当失败；获取失败不能冒充缺失。部分获取失败使 `metadata_status=partial`，警告包含 METADATA_PARTIAL 及字段原因。每项图片／歌词获取沿用任务取消、绝对期限和公共入场；子请求超时可在 best_effort 下继续，不会重置任务预算。
+当前任务默认获取可用封面和歌词。`result.metadata_fields` 为字段到状态的对象：`written`、`unavailable`（平台未提供可信字段或明确无歌词）、`unsupported`（无能力）、`disabled`、`fetch_failed`、`write_failed`。当前报告字段为 title、artist、album、cover、lyrics、track_number、track_total；未提供的基础标签／曲号可以省略，客户端按当前字段定义读取。`required` 要求可提供的启用字段成功获取和写入，不把缺失／不支持当失败；获取失败不能冒充缺失。部分获取失败使 `metadata_status=partial`，警告包含 METADATA_PARTIAL 及字段原因。每项图片／歌词获取沿用任务取消、绝对期限和公共入场；子请求超时可在 best_effort 下继续，不会重置任务预算。
 
-`track_number`、`track_total` 为正整数或 null，来自专辑元数据而非歌单位置；未知不生成 0/0。曲号与总数写入 MP3／FLAC／M4A；无曲号时不单独写总数。配置取值、原文／译文规则与升级兼容见 [输出配置](../../../../config/README.md#下载文件输出011)。
+`track_number`、`track_total` 为正整数或 null，来自专辑元数据而非歌单位置；未知不生成 0/0。曲号与总数写入 MP3／FLAC／M4A；无曲号时不单独写总数。配置取值、原文／译文规则与当前结构见 [输出配置](../../../../config/README.md#下载文件输出011)。
 
 `attempt` 统计已开始的任务级资源解析与传输尝试，排队时为 0，上限使用 downloads.max_attempts，包含首次。领取产生 execution_id，但不自动消耗 attempt；首次获准执行该逻辑尝试时持久递增，admission 等待后的再领取沿用该 attempt。只有 RetryPolicy 判定结束旧尝试并开始新的上游重试时才再递增。单次传输内部网络重试另计，使用 downloads.transport_retries；任务绝对时间预算自首次逻辑尝试开始计时，此后的所有等待和重试均受其约束。具体边界见[运行时](runtime-and-tasks.md)。
 
@@ -153,7 +153,7 @@ phase 用 status 表达，`stage` 用于 processing 内部的 decrypt／validate
 | 指纹内容 | 归一规则 |
 | --- | --- |
 | owner 与 original_track | source + 不透明 id 保持原值，不对平台 ID 大小写折叠 |
-| 音源选择 | 仅同源。持久编码保留 selection.kind=same，以兼容已有 schema 1～4 与指纹；历史 manual／auto 编码明确报错，不静默转换成另一首歌 |
+| 音源选择 | 仅使用 original_track 的来源；没有换源选择字段或占位类型 |
 | 账号 | 原曲及手动／auto 目标所需的 AccountBinding；来源映射按稳定键编码，默认选择在提交时固定 |
 | 音质与内容 | requested_quality、quality_policy、allow_preview |
 | 产物 | metadata_policy、destination_id 及目标配置版本、命名与元数据配置版本；包含封面／歌词等会影响产物的有效配置 |
@@ -183,7 +183,7 @@ phase 用 status 表达，`stage` 用于 processing 内部的 decrypt／validate
 
 | 表 | 核心列与索引 |
 | --- | --- |
-| `schema_migrations` | version、checksum、applied_at；与 HTTP API 版本独立 |
+| `schema_metadata` | 单行 id=1、version、checksum、created_at；只校验当前结构，与 HTTP API 版本独立 |
 | `principals` | id、display_name、role、enabled |
 | `access_tokens` | token_id、principal_id、token_hash、scopes、created_at、revoked_at；不存可直接使用的明文 token |
 | `credentials` | id、owner_id、source、label、kind、auth_profile、secret_ref、version、status、scope_summary、expires_at、last_verified_at、last_verify_result、revoked_at；与 CredentialDescriptor 字段对应，秘密由 SecretStore 管理 |
@@ -219,7 +219,7 @@ T05 的实现约定：表使用 STRICT 模式；库内时间存为 UTC 毫秒整
 
 ## 0.1.6 本地产物集合扩展
 
-- 开启 `export_lyrics` 或 `export_cover` 的下载意图使用 schema 4，包含两个导出标志、`sidecars_required` 与歌词选择，全部参与复用指纹；兼容 schema 1～3。未开启导出时维持旧编码和路径。SQLite 表结构未改变，回退旧程序前需使用匹配版本的备份。
+- 所有下载意图统一使用 schema 5，完整包含输出设置、两个导出标志、`sidecars_required` 与歌词选择，全部参与当前 schema 2 复用指纹；仅接受这一种快照结构。SQLite 使用当前 schema 4，不维护历史迁移。
 - 开启导出时，finalization_intents 的 workspace_file／reserved_path 指向整个目录，evidence.properties.bundle 保存 audio／lyrics／cover 的文件名、大小、SHA-256。各文件在工作区写入并刷新后，保存意图，再独占重命名目录；SQLite 事务只在全部成员匹配时发布一个 file_id。目录是唯一预留键，资产 relative_path 指向目录内音频。恢复逐项比对，丢失或改写不完成。
 - file_assets.properties.bundle 是同一资产的产物清单，不生成彼此独立的无主侧文件；成员共用 owner、destination ACL、生命周期与文件票据。读取／复用校验整个集合。历史 result 保留元数据及侧文件状态；原有单文件记录继续读写。
 - import-ncm 任务使用内部来源 local_ncm、输入内容摘要作引用，保存的意图不含本机输入绝对路径。CLI 对输入复核哈希、保留原文件；相同输入与产品选项可复用完整资产。中断的未发布本地任务标记 LOCAL_IMPORT_INTERRUPTED，不交给在线平台调度；持久发布意图仍走通用恢复。

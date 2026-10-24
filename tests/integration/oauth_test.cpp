@@ -6,7 +6,7 @@
 #include "infrastructure/clock.hpp"
 #include "infrastructure/secrets/file_secret_store.hpp"
 #include "infrastructure/storage/sqlite/account_repositories.hpp"
-#include "infrastructure/storage/sqlite/migrations.hpp"
+#include "infrastructure/storage/sqlite/schema.hpp"
 #include "providers/registry/provider_registry.hpp"
 
 #include <condition_variable>
@@ -101,7 +101,7 @@ struct Fixture {
     explicit Fixture(std::string_view name, OAuthLimits limits = {}) : deployment(name) {
         std::filesystem::create_directories(deployment.dir / "secrets");
         database = unwrap(sqlite::Database::open(deployment.dir / "oauth.sqlite3", {}));
-        REQUIRE(sqlite::migrate(*database, clock->now()));
+        REQUIRE(sqlite::initialize_schema(*database, clock->now()));
         sqlite::RepositoryContext context{database.get(), clock, ids};
         identities = std::make_shared<sqlite::SqliteIdentityRepository>(context);
         repository = std::make_shared<sqlite::SqliteCredentialRepository>(context);

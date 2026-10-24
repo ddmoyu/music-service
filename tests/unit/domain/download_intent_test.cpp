@@ -17,7 +17,6 @@ DownloadIntentDraft base_draft() {
     DownloadIntentDraft draft{
         "prn_a",
         track("kuwo", "MUSIC_1"),
-        SameSource{},
         {anonymous("prn_a", "kuwo")},
         {},
         MetadataPolicy::best_effort,
@@ -32,46 +31,41 @@ DownloadFingerprint fp(DownloadIntentDraft draft) {
 
 } // namespace
 
-TEST_CASE("output settings survive storage and isolate reuse from legacy products", "[domain][intent][output]") {
+TEST_CASE("current output settings survive storage and isolate reuse", "[domain][intent][output]") {
     namespace storage = music_service::infrastructure::storage;
-    const auto legacy = unwrap(NormalizedDownloadIntent::normalize(base_draft()));
-    const auto old = unwrap(storage::decode_intent(storage::encode_intent(legacy)));
-    CHECK_FALSE(old.product().output);
-    CHECK(fingerprint(old) == fingerprint(legacy));
     auto draft = base_draft();
     draft.product.output = OutputOptions{};
     const auto base = fp(draft);
-    CHECK_FALSE(base == fingerprint(legacy));
     const auto saved = unwrap(NormalizedDownloadIntent::normalize(draft));
     const auto decoded = unwrap(storage::decode_intent(storage::encode_intent(saved)));
     CHECK(decoded.product().output == draft.product.output);
     CHECK(fingerprint(decoded) == base);
-    SECTION("name") { draft.product.output->name_format = "title"; }
-    SECTION("folders") { draft.product.output->folder_layout = "artist_album"; }
-    SECTION("cover") { draft.product.output->embed_cover = false; }
-    SECTION("lyrics") { draft.product.output->embed_lyrics = false; }
+    SECTION("name") { draft.product.output.name_format = "title"; }
+    SECTION("folders") { draft.product.output.folder_layout = "artist_album"; }
+    SECTION("cover") { draft.product.output.embed_cover = false; }
+    SECTION("lyrics") { draft.product.output.embed_lyrics = false; }
     SECTION("sidecars") {
-        draft.product.output->export_lyrics = true;
-        draft.product.output->export_cover = true;
-        draft.product.output->sidecars_required = true;
-        draft.product.output->lyrics_variant = "romanized";
+        draft.product.output.export_lyrics = true;
+        draft.product.output.export_cover = true;
+        draft.product.output.sidecars_required = true;
+        draft.product.output.lyrics_variant = "romanized";
         auto selected = unwrap(NormalizedDownloadIntent::normalize(draft));
         const auto stored = storage::encode_intent(selected);
         auto restored = unwrap(storage::decode_intent(stored));
         CHECK(restored.product().output == draft.product.output);
         CHECK(fingerprint(restored) == fingerprint(selected));
         auto optional = draft;
-        optional.product.output->sidecars_required = false;
+        optional.product.output.sidecars_required = false;
         CHECK_FALSE(fp(optional) == fp(draft));
     }
-    SECTION("size") { draft.product.output->cover_max_bytes = 1024; }
-    SECTION("budget") { draft.product.output->metadata_timeout_seconds = 2; }
+    SECTION("size") { draft.product.output.cover_max_bytes = 1024; }
+    SECTION("budget") { draft.product.output.metadata_timeout_seconds = 2; }
     SECTION("lyrics variant") {
-        draft.product.output->lyrics_variant = "verbatim";
+        draft.product.output.lyrics_variant = "verbatim";
         auto selected = unwrap(NormalizedDownloadIntent::normalize(draft));
         const auto stored = storage::encode_intent(selected);
         auto restored = unwrap(storage::decode_intent(stored));
-        CHECK(restored.product().output->lyrics_variant == "verbatim");
+        CHECK(restored.product().output.lyrics_variant == "verbatim");
         CHECK(fingerprint(restored) == fingerprint(selected));
     }
     CHECK_FALSE(fp(draft) == base);
@@ -82,12 +76,31 @@ TEST_CASE("stored cross-source selections fail without becoming same-source down
     namespace storage = music_service::infrastructure::storage;
     const auto intent = unwrap(NormalizedDownloadIntent::normalize(base_draft()));
     auto document = nlohmann::json::parse(storage::encode_intent(intent));
-    for (const auto kind : {"manual", "auto"}) {
+    for (const auto kind : {"same", "manual", "auto"}) {
         document["selection"] = {{"kind", kind}, {"target", {{"source", "qq"}, {"id", "different"}}}};
         const auto restored = storage::decode_intent(document.dump());
         REQUIRE_FALSE(restored);
-        CHECK(restored.error().message.find("source switching has been removed") != std::string::npos);
+        CHECK(restored.error().message.find("current schema") != std::string::npos);
     }
+}
+
+TEST_CASE("non-current and incomplete snapshots are rejected", "[domain][intent]") {
+    namespace storage = music_service::infrastructure::storage;
+    const auto intent = unwrap(NormalizedDownloadIntent::normalize(base_draft()));
+    const auto current = nlohmann::json::parse(storage::encode_intent(intent));
+    for (const auto version : {1, 2, 3, 4, 6}) {
+        auto document = current;
+        document["schema"] = version;
+        CHECK_FALSE(storage::decode_intent(document.dump()));
+    }
+    for (const auto& [field, value] : current.at("product").at("output").items()) {
+        auto document = current;
+        document["product"]["output"].erase(field);
+        CHECK_FALSE(storage::decode_intent(document.dump()));
+    }
+    auto document = current;
+    document["product"].erase("output");
+    CHECK_FALSE(storage::decode_intent(document.dump()));
 }
 
 TEST_CASE("the same intent produces the same fingerprint", "[domain][intent]") {

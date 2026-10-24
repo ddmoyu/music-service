@@ -1,15 +1,10 @@
-// Database backup and restore (T31): a consistent copy while the service runs, an offline
-// restore that keeps the database it replaces, refusals for unusable backups, the copy
-// taken before migrations change a database, and a failed migration that leaves the
-// database at its old version.
-
 #include "service_harness.hpp"
 
 #include "infrastructure/clock.hpp"
 #include "infrastructure/storage/sqlite/backup.hpp"
 #include "infrastructure/storage/sqlite/connection.hpp"
 #include "infrastructure/storage/sqlite/database.hpp"
-#include "infrastructure/storage/sqlite/migrations.hpp"
+#include "infrastructure/storage/sqlite/schema.hpp"
 
 #include <fstream>
 
@@ -54,7 +49,7 @@ TEST_CASE("a backup taken while serving restores offline, keeping the replaced d
         const auto saved = d.run({"backup", "--output", utf8(backup)});
         INFO(saved.err);
         REQUIRE(saved.code == server::exit_ok);
-        CHECK(saved.out.find("schema_version=3") != std::string::npos);
+        CHECK(saved.out.find("schema_version=" + std::to_string(sqlite::current_schema_version)) != std::string::npos);
         // Restoring needs the lock: refused while serving, nothing changed.
         const auto locked = d.run({"restore", "--input", utf8(backup)});
         CHECK(locked.code == server::exit_failed);
@@ -64,7 +59,7 @@ TEST_CASE("a backup taken while serving restores offline, keeping the replaced d
     }
     const auto info = sqlite::verify_backup(backup);
     REQUIRE(info);
-    CHECK(info->schema_version == 3);
+    CHECK(info->schema_version == sqlite::current_schema_version);
     CHECK_FALSE(fs::exists(d.dir / "out" / "备份.sqlite3.partial"));
     // An existing file is never replaced.
     const auto again = d.run({"backup", "--output", utf8(backup)});
@@ -106,10 +101,10 @@ TEST_CASE("unusable backups are refused and change nothing", "[server][backup]")
     const auto missing = d.dir / "out" / "missing.sqlite3";
     const auto newer = d.dir / "out" / "newer.sqlite3";
     REQUIRE(d.run({"backup", "--output", utf8(newer)}).code == server::exit_ok);
-    exec_on(newer, "INSERT INTO schema_migrations VALUES (99, 'x', 0)");
+    exec_on(newer, "UPDATE schema_metadata SET version = 99");
     const auto altered = d.dir / "out" / "altered.sqlite3";
     REQUIRE(d.run({"backup", "--output", utf8(altered)}).code == server::exit_ok);
-    exec_on(altered, "UPDATE schema_migrations SET checksum = 'changed' WHERE version = 1");
+    exec_on(altered, "UPDATE schema_metadata SET checksum = 'changed'");
 
     for (const auto& input : {garbage, missing, newer, altered}) {
         INFO(utf8(input));
@@ -123,64 +118,23 @@ TEST_CASE("unusable backups are refused and change nothing", "[server][backup]")
     CHECK(d.run({"backup", "--output", utf8(garbage), "--extra", "1"}).code == server::exit_usage);
 }
 
-TEST_CASE("a database is copied before migrations change it", "[server][backup][migrations]") {
-    Deployment d{"backup-premigration"};
-    // A data_dir as an older build left it: only the first migration applied.
-    fs::create_directories(d.dir / "data");
-    {
-        auto database = sqlite::Database::open(d.dir / "data" / "service.sqlite3", {});
-        REQUIRE(database);
-        const auto first = sqlite::builtin_migrations().first(1);
-        REQUIRE(*sqlite::migrate(*database.value(), std::chrono::system_clock::now(), first) == 1U);
-    }
+TEST_CASE("startup refuses non-current databases without converting or replacing data", "[server][backup][schema]") {
+    Deployment d{"non-current-schema"};
     REQUIRE(d.run({"init"}).code == server::exit_ok);
-    const auto copies = files_in(d.dir / "data" / "backups", "pre-migration-v1-");
-    REQUIRE(copies.size() == 1);
-    const auto info = sqlite::verify_backup(copies[0]);
-    REQUIRE(info);
-    CHECK(info->schema_version == 1);
-    // An up-to-date database is not copied again.
-    REQUIRE(d.run({"principal", "list"}).code == server::exit_ok);
-    CHECK(files_in(d.dir / "data" / "backups", "pre-migration-").size() == 1);
-}
-
-TEST_CASE("a failing migration leaves the database at its previous version", "[storage][migrations][backup]") {
-    const auto dir = fs::temp_directory_path() / "music-service-failed-migration";
-    fs::remove_all(dir);
-    fs::create_directories(dir);
-    const auto file = dir / "service.sqlite3";
-    const auto clock = std::make_shared<infrastructure::ManualClock>();
-    {
-        auto database = sqlite::Database::open(file, {});
-        REQUIRE(database);
-        REQUIRE(*sqlite::migrate(*database.value(), clock->now()) == 3U);
-        REQUIRE(database.value()->write([](sqlite::Connection& db) {
-            return db.exec("INSERT INTO principals (id, display_name, role, enabled, created_at)"
-                           " VALUES ('prn_kept', 'kept', 'user', 1, 0)");
-        }));
-
-        std::vector<sqlite::Migration> list(sqlite::builtin_migrations().begin(), sqlite::builtin_migrations().end());
-        list.push_back({list.back().version + 1, "ALTER TABLE principals ADD COLUMN note TEXT; INSERT INTO no_such_table VALUES (1);"});
-        const auto failed = sqlite::migrate(*database.value(), clock->now(), list);
-        CHECK_FALSE(failed);
-        // Each migration is one transaction: the half that ran is rolled back.
-        const auto state = database.value()->read([](sqlite::Connection& db) -> domain::Result<std::string> {
-            auto version = sqlite::schema_version(db);
-            REQUIRE(version);
-            auto columns = db.prepare("SELECT count(*) FROM pragma_table_info('principals') WHERE name = 'note'");
-            REQUIRE(columns);
-            REQUIRE(*columns->step());
-            auto kept = db.prepare("SELECT count(*) FROM principals WHERE id = 'prn_kept'");
-            REQUIRE(kept);
-            REQUIRE(*kept->step());
-            return std::to_string(version.value()) + "/" + std::to_string(columns->integer(0)) + "/" +
-                   std::to_string(kept->integer(0));
-        });
-        REQUIRE(state);
-        CHECK(*state == std::to_string(sqlite::builtin_migrations().back().version) + "/0/1");
-        // This build still opens it.
-        CHECK(*sqlite::migrate(*database.value(), clock->now()) == 3U);
-    }
-    std::error_code ec;
-    fs::remove_all(dir, ec);
+    REQUIRE(d.run({"principal", "create", "--name", "kept"}).code == server::exit_ok);
+    const auto file = d.dir / "data" / "service.sqlite3";
+    SECTION("older version") { exec_on(file, "UPDATE schema_metadata SET version = 1"); }
+    SECTION("missing metadata") { exec_on(file, "DROP TABLE schema_metadata"); }
+    SECTION("empty metadata") { exec_on(file, "DELETE FROM schema_metadata"); }
+    const auto failed = d.run({"init"});
+    CHECK(failed.code == server::exit_failed);
+    CHECK((failed.err.find("current schema") != std::string::npos || failed.err.find("differs from this build") != std::string::npos));
+    auto db = sqlite::Connection::open(file, sqlite::Connection::Mode::read_only);
+    REQUIRE(db);
+    auto kept = db->prepare("SELECT count(*) FROM principals WHERE display_name = 'kept'");
+    REQUIRE(kept);
+    REQUIRE(*kept->step());
+    CHECK(kept->integer(0) == 1);
+    CHECK_FALSE(sqlite::schema_version(*db));
+    CHECK(files_in(d.dir / "data" / "backups", "pre-migration-").empty());
 }

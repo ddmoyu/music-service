@@ -64,7 +64,7 @@ def run(service, cookie_file, report):
         status, value = result
         check(status >= 400 and value["error"]["code"] == code, "expected " + code)
     def create_cookie(value):
-        return api.json("POST", "/api/v1/credentials", {"source": "netease", "cookie": value,
+        return api.json("POST", "/api/v1/credentials", {"source": "netease", "kind": "cookie", "auth_profile": "web_cookie", "secret": {"cookie": value},
             "label": "C acceptance"}, expect=(201,))[2]["credential_id"]
 
     report["discovery"] = {}

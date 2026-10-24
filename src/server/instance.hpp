@@ -46,7 +46,7 @@ std::filesystem::path new_backup_path(const std::filesystem::path& backups, cons
                                       std::chrono::system_clock::time_point time);
 
 // Prepares data_dir, takes the instance lock (INSTANCE_LOCKED while the service or
-// another command runs), opens the database and applies migrations.
+// another command runs), opens and initializes or validates the current database schema.
 domain::Result<std::unique_ptr<Instance>> open_instance(const application::config::ServiceConfig& config,
     std::shared_ptr<application::ports::Metrics> metrics = {});
 

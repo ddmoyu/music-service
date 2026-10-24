@@ -39,22 +39,22 @@ domain::Result<void> integrity_ok(Connection& db, const fs::path& file) {
     return domain::ok();
 }
 
-domain::Result<BackupInfo> inspect(Connection& db, const fs::path& file, std::span<const Migration> migrations) {
+domain::Result<BackupInfo> inspect(Connection& db, const fs::path& file) {
     if (auto ok = integrity_ok(db, file); !ok) {
         return std::move(ok).error();
     }
-    auto version = schema_version(db, migrations);
+    auto version = schema_version(db);
     if (!version) {
         return invalid_backup(file, "has an unusable schema: " + version.error().message);
     }
+    if (*version != current_schema_version) return invalid_backup(file, "has no current schema");
     std::error_code ec;
     const auto size = fs::file_size(file, ec);
     return BackupInfo{version.value(), ec ? 0 : static_cast<std::uint64_t>(size)};
 }
 
 // Copies source into a new file at partial and checks it there.
-domain::Result<BackupInfo> copy_checked(const fs::path& source, const fs::path& partial,
-                                        std::span<const Migration> migrations) {
+domain::Result<BackupInfo> copy_checked(const fs::path& source, const fs::path& partial) {
     if (auto removed = filesystem::remove_file(partial); !removed) {
         return std::move(removed).error();
     }
@@ -74,7 +74,7 @@ domain::Result<BackupInfo> copy_checked(const fs::path& source, const fs::path& 
         if (auto mode = to->exec("PRAGMA journal_mode = DELETE"); !mode) {
             return std::move(mode).error();
         }
-        auto checked = inspect(to.value(), partial, migrations);
+        auto checked = inspect(to.value(), partial);
         if (!checked) {
             return std::move(checked).error();
         }
@@ -84,7 +84,7 @@ domain::Result<BackupInfo> copy_checked(const fs::path& source, const fs::path& 
     if (ec) {
         return domain::Error{domain::ErrorCode::storage_unavailable, "cannot read the backup size", true, {}};
     }
-    auto info = verify_backup(partial, migrations);
+    auto info = verify_backup(partial);
     if (info) {
         info->size_bytes = static_cast<std::uint64_t>(size);
     }
@@ -93,7 +93,7 @@ domain::Result<BackupInfo> copy_checked(const fs::path& source, const fs::path& 
 
 } // namespace
 
-domain::Result<BackupInfo> verify_backup(const fs::path& file, std::span<const Migration> migrations) {
+domain::Result<BackupInfo> verify_backup(const fs::path& file) {
     std::error_code ec;
     if (!fs::is_regular_file(file, ec)) {
         return invalid_backup(file, "is not a file");
@@ -102,11 +102,10 @@ domain::Result<BackupInfo> verify_backup(const fs::path& file, std::span<const M
     if (!db) {
         return std::move(db).error();
     }
-    return inspect(db.value(), file, migrations);
+    return inspect(db.value(), file);
 }
 
-domain::Result<BackupInfo> backup_database(const fs::path& source, const fs::path& target,
-                                           std::span<const Migration> migrations) {
+domain::Result<BackupInfo> backup_database(const fs::path& source, const fs::path& target) {
     std::error_code ec;
     if (!fs::is_regular_file(source, ec)) {
         return domain::Error{domain::ErrorCode::not_found,
@@ -117,7 +116,7 @@ domain::Result<BackupInfo> backup_database(const fs::path& source, const fs::pat
                              filesystem::path_to_utf8(target) + " already exists", false, {}};
     }
     const auto partial = sibling(target, ".partial");
-    auto info = copy_checked(source, partial, migrations);
+    auto info = copy_checked(source, partial);
     if (!info) {
         (void)filesystem::remove_file(partial);
         return info;
@@ -130,20 +129,20 @@ domain::Result<BackupInfo> backup_database(const fs::path& source, const fs::pat
 }
 
 domain::Result<BackupInfo> restore_database(const fs::path& backup, const fs::path& database,
-                                            const fs::path& replaced_copy, std::span<const Migration> migrations) {
-    auto info = verify_backup(backup, migrations);
+                                            const fs::path& replaced_copy) {
+    auto info = verify_backup(backup);
     if (!info) {
         return info;
     }
     std::error_code ec;
     if (fs::exists(database, ec)) {
         // The database being replaced stays available, WAL content included.
-        if (auto kept = backup_database(database, replaced_copy, migrations); !kept) {
+        if (auto kept = backup_database(database, replaced_copy); !kept) {
             return std::move(kept).error();
         }
     }
     const auto restoring = sibling(database, ".restoring");
-    auto copied = copy_checked(backup, restoring, migrations);
+    auto copied = copy_checked(backup, restoring);
     if (!copied) {
         (void)filesystem::remove_file(restoring);
         return copied;

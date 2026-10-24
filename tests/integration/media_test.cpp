@@ -10,7 +10,7 @@
 #include "infrastructure/clock.hpp"
 #include "infrastructure/filesystem/destination_files.hpp"
 #include "infrastructure/observability/correlation.hpp"
-#include "infrastructure/storage/sqlite/migrations.hpp"
+#include "infrastructure/storage/sqlite/schema.hpp"
 #include "infrastructure/storage/sqlite/task_repositories.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -66,7 +66,6 @@ struct MediaDeployment {
         sqlite::SqlitePublicationRepository publications{ctx};
         domain::DownloadIntentDraft draft{"prn_local",
                                           track("both", track_id),
-                                          domain::SameSource{},
                                           {anonymous("prn_local", "both")},
                                           {},
                                           domain::MetadataPolicy::best_effort,

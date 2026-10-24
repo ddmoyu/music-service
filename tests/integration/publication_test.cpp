@@ -14,7 +14,7 @@
 #include "infrastructure/filesystem/paths.hpp"
 #include "infrastructure/observability/correlation.hpp"
 #include "infrastructure/storage/sqlite/account_repositories.hpp"
-#include "infrastructure/storage/sqlite/migrations.hpp"
+#include "infrastructure/storage/sqlite/schema.hpp"
 #include "infrastructure/storage/sqlite/task_repositories.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -96,7 +96,7 @@ struct Publishing {
     // A restart: every repository and the database are closed and opened again.
     void open() {
         database = sqlite::Database::open(dir / "service.sqlite3", {}).value();
-        REQUIRE(sqlite::migrate(*database, clock->now()));
+        REQUIRE(sqlite::initialize_schema(*database, clock->now()));
         const sqlite::RepositoryContext ctx{database.get(), clock, ids};
         identities = std::make_shared<sqlite::SqliteIdentityRepository>(ctx);
         destinations = std::make_shared<sqlite::SqliteDestinationRepository>(ctx);
@@ -134,7 +134,6 @@ struct Publishing {
     ports::TaskRecord processing(std::string_view track_id) {
         domain::DownloadIntentDraft draft{owner,
                                           test::track("kuwo", track_id),
-                                          domain::SameSource{},
                                           {test::anonymous(owner, "kuwo")},
                                           {domain::Quality::standard, domain::QualityPolicy::strict, false},
                                           domain::MetadataPolicy::best_effort,

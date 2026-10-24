@@ -18,7 +18,7 @@
 #include "infrastructure/observability/correlation.hpp"
 #include "infrastructure/secrets/file_secret_store.hpp"
 #include "infrastructure/storage/sqlite/account_repositories.hpp"
-#include "infrastructure/storage/sqlite/migrations.hpp"
+#include "infrastructure/storage/sqlite/schema.hpp"
 #include "infrastructure/storage/sqlite/task_repositories.hpp"
 #include "providers/registry/provider_registry.hpp"
 #include "runtime/admission/admission_ledger.hpp"
@@ -280,7 +280,7 @@ struct Runs {
         fs::create_directories(dir / "下载");
         root = unwrap(infrastructure::filesystem::canonical_directory(dir / "下载"));
         database = sqlite::Database::open(dir / "service.sqlite3", {}).value();
-        REQUIRE(sqlite::migrate(*database, clock->now()));
+        REQUIRE(sqlite::initialize_schema(*database, clock->now()));
         const sqlite::RepositoryContext ctx{database.get(), clock, ids};
         identities = std::make_shared<sqlite::SqliteIdentityRepository>(ctx);
         destinations = std::make_shared<sqlite::SqliteDestinationRepository>(ctx);
@@ -336,7 +336,6 @@ struct Runs {
         }
         domain::DownloadIntentDraft draft{who,
                                           track(source, id),
-                                          domain::SameSource{},
                                           {anonymous(who, source)},
                                           requirement,
                                           domain::MetadataPolicy::best_effort,
@@ -382,7 +381,7 @@ struct Runs {
     std::string owner;
     std::string other;
     std::string audio = mp3();
-    std::optional<domain::OutputOptions> output;
+    domain::OutputOptions output{"artist_title", "flat", false, false};
     domain::MetadataPolicy metadata_policy{domain::MetadataPolicy::best_effort};
     domain::ResourceRequirement requirement{};
 };
@@ -446,7 +445,7 @@ TEST_CASE("one accepted batch permission failure leaves completed files and othe
 TEST_CASE("new downloads fetch bounded metadata and publish readable tags in folders", "[runner][output]") {
     Runs r{"metadata-output"};
     r.output = domain::OutputOptions{};
-    r.output->folder_layout = "artist_album";
+    r.output.folder_layout = "artist_album";
     r.script->detail = [](const domain::TrackRef& ref) -> domain::Result<domain::Track> {
         return domain::Track{ref, "晴天", {{"歌手甲", {}}, {"歌手乙", {}}}, domain::AlbumSummary{"专辑", {}},
                              30010, {}, "https://img.test/cover.png", 3, 12};
@@ -471,8 +470,8 @@ TEST_CASE("new downloads fetch bounded metadata and publish readable tags in fol
     };
     const auto id = r.create();
     // Changing the defaults after acceptance must not alter this task's stored snapshot.
-    r.output->folder_layout = "flat";
-    r.output->embed_cover = false;
+    r.output.folder_layout = "flat";
+    r.output.embed_cover = false;
     CHECK(r.run_next().outcome == RunOutcome::completed);
     const auto task = r.get(id);
     REQUIRE(task.result_json);
@@ -499,14 +498,14 @@ TEST_CASE("new downloads fetch bounded metadata and publish readable tags in fol
 TEST_CASE("sidecar fetch and tag requirements are independent", "[runner][sidecars]") {
     Runs r{"sidecar-policy"};
     r.output = domain::OutputOptions{};
-    r.output->embed_cover = r.output->embed_lyrics = false;
-    r.output->export_lyrics = true;
+    r.output.embed_cover = r.output.embed_lyrics = false;
+    r.output.export_lyrics = true;
     r.metadata_policy = domain::MetadataPolicy::required;
     bool required_side = false;
     SECTION("optional lyric failure does not fail required basic tags") {}
     SECTION("required lyric failure fails even when tags are skipped") {
         required_side = true;
-        r.output->sidecars_required = true;
+        r.output.sidecars_required = true;
         r.metadata_policy = domain::MetadataPolicy::skip;
     }
     r.script->lyrics = [](const ports::ProviderContext&) -> domain::Result<domain::TrackLyrics> {
@@ -563,7 +562,7 @@ TEST_CASE("sidecar-only downloads keep audio bytes and reject corrupt bundles fo
 TEST_CASE("metadata acquisition failures obey policy and never masquerade as absence", "[runner][output]") {
     Runs r{"metadata-errors"};
     r.output = domain::OutputOptions{};
-    r.output->cover_max_bytes = 64;
+    r.output.cover_max_bytes = 64;
     r.script->detail = [](const domain::TrackRef& ref) -> domain::Result<domain::Track> {
         return domain::Track{ref, "detail", {}, {}, 30010, {}, "https://img.test/a", {}, {}};
     };
@@ -603,17 +602,13 @@ TEST_CASE("metadata acquisition failures obey policy and never masquerade as abs
     }
 }
 
-TEST_CASE("metadata disabled and legacy tasks make no optional fetches", "[runner][output]") {
+TEST_CASE("disabled metadata makes no optional fetches", "[runner][output]") {
     Runs r{"metadata-disabled"};
     bool skip = false;
-    bool legacy = false;
     SECTION("skip policy") { skip = true; }
     SECTION("independent switches") {}
-    SECTION("old snapshot") { legacy = true; }
-    if (!legacy) {
-        r.output = domain::OutputOptions{};
-        if (!skip) { r.output->embed_cover = false; r.output->embed_lyrics = false; }
-    }
+    r.output = domain::OutputOptions{};
+    if (!skip) { r.output.embed_cover = false; r.output.embed_lyrics = false; }
     if (skip) r.metadata_policy = domain::MetadataPolicy::skip;
     r.script->detail = [](const domain::TrackRef& ref) -> domain::Result<domain::Track> {
         return domain::Track{ref, "detail", {}, {}, 30010, {}, "https://img.test/a", {}, {}};
@@ -629,10 +624,8 @@ TEST_CASE("metadata disabled and legacy tasks make no optional fetches", "[runne
     const auto id = r.create();
     CHECK(r.run_next().outcome == RunOutcome::completed);
     const auto result = json::parse(*r.get(id).result_json);
-    if (!legacy) {
-        CHECK(result["metadata_fields"]["cover"] == "disabled");
-        CHECK(result["metadata_fields"]["lyrics"] == "disabled");
-    }
+    CHECK(result["metadata_fields"]["cover"] == "disabled");
+    CHECK(result["metadata_fields"]["lyrics"] == "disabled");
 }
 
 TEST_CASE("required metadata permits confirmed absent cover and instrumental lyrics", "[runner][output]") {
@@ -653,10 +646,10 @@ TEST_CASE("required metadata permits confirmed absent cover and instrumental lyr
 TEST_CASE("hostile and long metadata publishes stable paths without escaping or overwriting", "[runner][output]") {
     Runs r{"metadata-paths"};
     r.output = domain::OutputOptions{};
-    r.output->folder_layout = "artist_album";
-    r.output->name_format = "title";
-    r.output->embed_cover = false;
-    r.output->embed_lyrics = false;
+    r.output.folder_layout = "artist_album";
+    r.output.name_format = "title";
+    r.output.embed_cover = false;
+    r.output.embed_lyrics = false;
     std::string label = "CON";
     SECTION("reserved and traversal components") {}
     SECTION("long UTF-8 components") { for (int i = 0; i < 100; ++i) label += "中文"; }
@@ -1068,8 +1061,7 @@ TEST_CASE("byte evidence downgrade obeys strict and allow_lower before publicati
             return ports::ResolvedAudio{t, domain::Quality::high, domain::Completeness::full, "mp3", 320000,
                 "https://cdn.test/wrong-bitrate.mp3", {}, {}, 30010, ports::ProcessingPlan{}};
         }; // 实际传输仍是测试服务器生成的 128 kbps MP3。
-        domain::DownloadIntentDraft draft{r.owner, track("src","1"), domain::SameSource{},
-            {anonymous(r.owner,"src")}, {domain::Quality::high, policy, false},
+        domain::DownloadIntentDraft draft{r.owner, track("src","1"), {anonymous(r.owner,"src")}, {domain::Quality::high, policy, false},
             domain::MetadataPolicy::best_effort, {"dst_main","d1","n1","m1"}};
         const auto created = unwrap(r.tasks->create({unwrap(domain::NormalizedDownloadIntent::normalize(std::move(draft))),
             "byte-quality-test", "h", false}));
@@ -1449,6 +1441,35 @@ TEST_CASE("a cancel stops the transfer and removes the work files", "[downloads]
     executor->request_stop();
     executor->join();
     scheduler.join();
+}
+
+TEST_CASE("incomplete checkpoint fields are rejected before upstream work", "[downloads][runner]") {
+    Runs r{"incomplete-checkpoint"};
+    const auto id = r.create();
+    auto claimed = *unwrap(r.tasks->claim_next(r.clock->now()));
+    json checkpoint{{"file", "input.part"}, {"track", "src:1"}, {"quality", "standard"},
+                    {"name", "track"}, {"durable_bytes", 0}, {"total_bytes", nullptr},
+                    {"etag", nullptr}, {"last_modified", nullptr}, {"complete", false},
+                    {"implementation", "test@1"}};
+    bool incomplete = true;
+    SECTION("current fields") { incomplete = false; }
+    SECTION("implementation") { checkpoint.erase("implementation"); }
+    SECTION("name") { checkpoint.erase("name"); }
+    SECTION("complete") { checkpoint.erase("complete"); }
+    SECTION("nullable field") { checkpoint.erase("etag"); }
+    claimed = unwrap(r.tasks->checkpoint({id, *claimed.execution_id, claimed.version, {}, {}, checkpoint.dump()}));
+    downloads::ExecutionControl control;
+    const auto report = r.runner->run(claimed, control);
+    if (incomplete) {
+        CHECK(report.outcome == RunOutcome::failed);
+        CHECK(r.script->calls == 0);
+        const auto task = r.get(id);
+        REQUIRE(task.error_json);
+        CHECK(task.error_json->find("current format") != std::string::npos);
+    } else {
+        CHECK(report.outcome == RunOutcome::completed);
+        CHECK(r.script->calls > 0);
+    }
 }
 
 TEST_CASE("a shutdown keeps the checkpoint and the next run resumes it (A27)", "[downloads][scheduler]") {

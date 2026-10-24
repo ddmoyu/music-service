@@ -135,7 +135,7 @@ struct Checkpoint {
     bool complete{false}; // the whole resource is in the work file
     // The provider implementation (id@version) whose address the bytes came from. An
     // upgraded implementation may map the same track and quality to another resource,
-    // so its bytes are never continued; empty in checkpoints from earlier builds.
+    // so its bytes are never continued across different implementations.
     std::string implementation;
 
     [[nodiscard]] std::string encode() const {
@@ -157,26 +157,28 @@ struct Checkpoint {
             return std::nullopt;
         }
         const auto j = json::parse(*text, nullptr, false);
-        if (!j.is_object() || j.value("file", "") != work_file) {
+        if (!j.is_object()) {
             return std::nullopt;
         }
         Checkpoint c;
         try {
+            if (j.at("file").get<std::string>() != work_file) return std::nullopt;
             c.track = j.at("track").get<std::string>();
             c.quality = j.at("quality").get<std::string>();
-            c.name = j.value("name", "");
+            c.name = j.at("name").get<std::string>();
             c.durable_bytes = j.at("durable_bytes").get<std::uint64_t>();
-            if (j.contains("total_bytes") && j["total_bytes"].is_number_unsigned()) {
-                c.total_bytes = j["total_bytes"].get<std::uint64_t>();
+            if (!j.at("total_bytes").is_null()) {
+                c.total_bytes = j.at("total_bytes").get<std::uint64_t>();
             }
-            if (j.contains("etag") && j["etag"].is_string()) {
-                c.etag = j["etag"].get<std::string>();
+            if (!j.at("etag").is_null()) {
+                c.etag = j.at("etag").get<std::string>();
             }
-            if (j.contains("last_modified") && j["last_modified"].is_string()) {
-                c.last_modified = j["last_modified"].get<std::string>();
+            if (!j.at("last_modified").is_null()) {
+                c.last_modified = j.at("last_modified").get<std::string>();
             }
-            c.complete = j.value("complete", false);
-            c.implementation = j.value("implementation", "");
+            c.complete = j.at("complete").get<bool>();
+            c.implementation = j.at("implementation").get<std::string>();
+            if (j != json::parse(c.encode())) return std::nullopt;
         } catch (const json::exception&) {
             return std::nullopt;
         }
@@ -534,6 +536,9 @@ std::optional<RunReport> Execution::prepare() {
         return expired();
     }
     checkpoint_ = Checkpoint::decode(task_.checkpoint_json);
+    if (task_.checkpoint_json && !checkpoint_) {
+        return fail(error(ErrorCode::internal, "stored checkpoint does not match the current format", false));
+    }
     return std::nullopt;
 }
 
@@ -575,9 +580,8 @@ std::optional<RunReport> Execution::choose_name() {
     const bool named = checkpoint_ && checkpoint_->track == key && !checkpoint_->name.empty();
     const auto policy = intent_->metadata_policy();
     name_ = named ? checkpoint_->name : s_.file_name(actual_->source.value() + "-" + actual_->id.value());
-    const bool sidecars = intent_->product().output &&
-        (intent_->product().output->export_lyrics || intent_->product().output->export_cover);
-    if (intent_->product().output && policy == domain::MetadataPolicy::skip && !sidecars) {
+    const bool sidecars = (intent_->product().output.export_lyrics || intent_->product().output.export_cover);
+    if (policy == domain::MetadataPolicy::skip && !sidecars) {
         metadata_fields_ = {{"cover", "disabled"}, {"lyrics", "disabled"}};
     }
     if (named && policy == domain::MetadataPolicy::skip && !sidecars) {
@@ -598,28 +602,20 @@ std::optional<RunReport> Execution::choose_name() {
     }
     ports::TrackMetadata metadata;
     metadata.title = track->title;
-    std::string artists;
     for (const auto& artist : track->artists) {
         if (!artist.name.empty()) {
             metadata.artists.push_back(artist.name);
-            artists += (artists.empty() ? "" : ", ") + artist.name;
         }
     }
     if (track->album && !track->album->title.empty()) {
         metadata.album = track->album->title;
     }
     metadata_ = std::move(metadata);
-    if (intent_->product().output) {
-        if (!named) name_ = output_name(*track, *intent_->product().output, s_.file_name);
-        if (policy != domain::MetadataPolicy::skip || sidecars) {
-            metadata_->track_number = track->track_number;
-            metadata_->track_total = track->track_total;
-            return collect_metadata(*track);
-        }
-        return std::nullopt;
-    }
-    if (!named && !track->title.empty()) {
-        name_ = s_.file_name(artists.empty() ? track->title : artists + " - " + track->title);
+    if (!named) name_ = output_name(*track, intent_->product().output, s_.file_name);
+    if (policy != domain::MetadataPolicy::skip || sidecars) {
+        metadata_->track_number = track->track_number;
+        metadata_->track_total = track->track_total;
+        return collect_metadata(*track);
     }
     return std::nullopt;
 }
@@ -631,9 +627,9 @@ std::optional<RunReport> Execution::metadata_error(std::string field, const Erro
     }
     metadata_fields_.emplace_back(field, "fetch_failed");
     const auto& output = intent_->product().output;
-    const bool embed = !output || (field == "cover" ? output->embed_cover : output->embed_lyrics);
-    const bool required_sidecar = output && output->sidecars_required &&
-        (field == "cover" ? output->export_cover : output->export_lyrics);
+    const bool embed = field == "cover" ? output.embed_cover : output.embed_lyrics;
+    const bool required_sidecar = output.sidecars_required &&
+        (field == "cover" ? output.export_cover : output.export_lyrics);
     if ((intent_->metadata_policy() == domain::MetadataPolicy::required && embed) || required_sidecar) {
         return on_error(error(ErrorCode::metadata_failed, "required metadata could not be obtained",
                               cause.retryable || cause.code == ErrorCode::deadline_exceeded,
@@ -645,7 +641,7 @@ std::optional<RunReport> Execution::metadata_error(std::string field, const Erro
 }
 
 std::optional<RunReport> Execution::collect_metadata(const domain::Track& track) {
-    const auto& options = *intent_->product().output;
+    const auto& options = intent_->product().output;
     const auto bounded = [&] {
         return ports::OperationContext{std::min(deadline_, s_.clock->steady_now() +
                                                 std::chrono::seconds{options.metadata_timeout_seconds}),
@@ -1071,13 +1067,11 @@ std::optional<RunReport> Execution::process() {
         intent_->metadata_policy(),
         metadata_};
     request.decryption_key = audio_->decryption_key;
-    if (intent_->product().output) {
-        request.embed_cover = intent_->product().output->embed_cover;
-        request.embed_lyrics = intent_->product().output->embed_lyrics;
-        if (request.metadata) {
-            if (!request.embed_cover) request.metadata->cover.reset();
-            if (!request.embed_lyrics) request.metadata->lyrics.reset();
-        }
+    request.embed_cover = intent_->product().output.embed_cover;
+    request.embed_lyrics = intent_->product().output.embed_lyrics;
+    if (request.metadata) {
+        if (!request.embed_cover) request.metadata->cover.reset();
+        if (!request.embed_lyrics) request.metadata->lyrics.reset();
     }
     const auto ctx = context();
 
@@ -1203,11 +1197,9 @@ RunReport Execution::publish() {
     const auto output = report_->output.filename().u8string();
     FinalizeRequest request{task_, s_.work_files->relative_path(task_.task_id, std::string{output.begin(), output.end()}),
                             name_ + "." + report_->facts.container, *report_, properties.dump()};
-    if (intent_->product().output) {
-        auto prepared = prepare_sidecars(request, *s_.work_files, metadata_.value_or(ports::TrackMetadata{}),
-                                         *intent_->product().output, context());
-        if (!prepared) return on_error(prepared.error(), TaskStatus::downloading);
-    }
+    auto prepared = prepare_sidecars(request, *s_.work_files, metadata_.value_or(ports::TrackMetadata{}),
+                                     intent_->product().output, context());
+    if (!prepared) return on_error(prepared.error(), TaskStatus::downloading);
     auto published = s_.finalizer->publish(request);
     if (published) {
         task_ = published->task;

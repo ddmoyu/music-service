@@ -5,7 +5,7 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_CURRENT_BINARY_DIR)
 endif()
 
 project(music_service
-    VERSION 0.1.25
+    VERSION 0.1.26
     DESCRIPTION "Cross-platform music backend libraries and service"
     LANGUAGES C CXX
 )

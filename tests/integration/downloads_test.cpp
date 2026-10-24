@@ -14,7 +14,7 @@
 #include "infrastructure/observability/correlation.hpp"
 #include "infrastructure/secrets/file_secret_store.hpp"
 #include "infrastructure/storage/sqlite/account_repositories.hpp"
-#include "infrastructure/storage/sqlite/migrations.hpp"
+#include "infrastructure/storage/sqlite/schema.hpp"
 #include "infrastructure/storage/sqlite/task_repositories.hpp"
 #include "providers/registry/provider_registry.hpp"
 
@@ -48,7 +48,7 @@ struct Downloads {
         fs::remove_all(dir);
         fs::create_directories(dir / "secrets");
         database = sqlite::Database::open(dir / "service.sqlite3", {}).value();
-        REQUIRE(sqlite::migrate(*database, clock->now()).has_value());
+        REQUIRE(sqlite::initialize_schema(*database, clock->now()).has_value());
         const sqlite::RepositoryContext ctx{database.get(), clock, ids};
         identities = std::make_shared<sqlite::SqliteIdentityRepository>(ctx);
         destinations = std::make_shared<sqlite::SqliteDestinationRepository>(ctx);
@@ -292,7 +292,7 @@ TEST_CASE("different product or content rules are different downloads", "[downlo
     const auto binding = anonymous(d.owner, "both");
     const auto intent_for = [&](std::string_view target_id) {
         return unwrap(domain::NormalizedDownloadIntent::normalize(
-            {d.owner, track("both", target_id), domain::SameSource{}, {binding},
+            {d.owner, track("both", target_id), {binding},
              {}, domain::MetadataPolicy::best_effort, {"dst_main", "v", "n", "m"}}));
     };
     CHECK(domain::fingerprint(intent_for("t1")) == domain::fingerprint(intent_for("t1")));
@@ -315,7 +315,7 @@ TEST_CASE("new quality and lyric semantics do not reuse older completed products
     auto old_product = i.product();
     old_product.metadata_config_version = "metadata-v1";
     auto old_intent = unwrap(domain::NormalizedDownloadIntent::normalize({i.owner_id(), i.original_track(),
-        i.selection(), i.account_bindings(), i.requirement(), i.metadata_policy(), old_product}));
+        i.account_bindings(), i.requirement(), i.metadata_policy(), old_product}));
     const auto old = unwrap(d.tasks->create({std::move(old_intent), d.key(2), "old", false}));
     (void)d.complete("old.mp3");
     const auto fresh = d.create(d.request(), 3);

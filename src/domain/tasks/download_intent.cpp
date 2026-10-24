@@ -90,20 +90,17 @@ Result<MetadataPolicy> parse_metadata_policy(std::string_view text) {
 }
 
 NormalizedDownloadIntent::NormalizedDownloadIntent(std::string owner_id, TrackRef original_track,
-                                                   SourceSelection selection,
                                                    std::vector<AccountBinding> account_bindings,
                                                    ResourceRequirement requirement,
                                                    MetadataPolicy metadata_policy,
                                                    ProductPolicy product)
     : owner_id_(std::move(owner_id)), original_track_(std::move(original_track)),
-      selection_(std::move(selection)), account_bindings_(std::move(account_bindings)),
+      account_bindings_(std::move(account_bindings)),
       requirement_(requirement), metadata_policy_(metadata_policy), product_(std::move(product)) {}
 
 Result<NormalizedDownloadIntent> NormalizedDownloadIntent::normalize(DownloadIntentDraft draft) {
-    if (draft.product.output) {
-        if (auto checked = validate_output_options(*draft.product.output); !checked) {
-            return checked.error();
-        }
+    if (auto checked = validate_output_options(draft.product.output); !checked) {
+        return checked.error();
     }
     if (!is_valid_service_id("prn_", draft.owner_id)) {
         return Error::validation("owner_id", "must be a prn_ service id");
@@ -125,7 +122,6 @@ Result<NormalizedDownloadIntent> NormalizedDownloadIntent::normalize(DownloadInt
 
     return NormalizedDownloadIntent{std::move(draft.owner_id),
                                     std::move(draft.original_track),
-                                    SourceSelection{SameSource{}},
                                     std::move(bindings).value(),
                                     draft.requirement,
                                     draft.metadata_policy,
@@ -137,8 +133,6 @@ DownloadFingerprint fingerprint(const NormalizedDownloadIntent& intent) {
     writer.number("schema", DownloadFingerprint::current_schema)
         .field("owner", std::string_view{intent.owner_id()});
     write_ref(writer, "orig", intent.original_track());
-
-    writer.field("sel", std::string_view{"same"});
 
     writer.number("acct.count", intent.account_bindings().size());
     for (const auto& binding : intent.account_bindings()) {
@@ -159,21 +153,18 @@ DownloadFingerprint fingerprint(const NormalizedDownloadIntent& intent) {
         .field("naming.v", std::string_view{intent.product().naming_config_version})
         .field("metadata.v", std::string_view{intent.product().metadata_config_version});
 
+    const auto& output = intent.product().output;
+    writer.field("output.name", std::string_view{output.name_format})
+        .field("output.folder", std::string_view{output.folder_layout})
+        .flag("output.cover", output.embed_cover)
+        .flag("output.lyrics", output.embed_lyrics)
+        .number("output.cover_max", output.cover_max_bytes)
+        .number("output.timeout", output.metadata_timeout_seconds)
+        .flag("output.export_lyrics", output.export_lyrics)
+        .flag("output.export_cover", output.export_cover)
+        .flag("output.sidecars_required", output.sidecars_required)
+        .field("output.lyrics_variant", output.lyrics_variant);
     DownloadFingerprint result;
-    if (const auto& output = intent.product().output) {
-        writer.field("output.name", std::string_view{output->name_format})
-            .field("output.folder", std::string_view{output->folder_layout})
-            .flag("output.cover", output->embed_cover)
-            .flag("output.lyrics", output->embed_lyrics)
-            .number("output.cover_max", output->cover_max_bytes)
-            .number("output.timeout", output->metadata_timeout_seconds);
-        if (output->export_lyrics || output->export_cover) {
-            writer.flag("output.export_lyrics", output->export_lyrics)
-                .flag("output.export_cover", output->export_cover)
-                .flag("output.sidecars_required", output->sidecars_required);
-        }
-        if (output->lyrics_variant != "lrc") writer.field("output.lyrics_variant", output->lyrics_variant);
-    }
     result.canonical = writer.str();
     result.digest = to_hex(fnv1a64(result.canonical));
     return result;

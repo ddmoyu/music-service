@@ -227,15 +227,17 @@ TEST_CASE("application profiles stay gated and validate their source binding", "
 }
 
 TEST_CASE("logging bounds and removed source switching are validated", "[config][observability]") {
-    const auto config = load(R"({"logging":{"file_enabled":true,"max_file_bytes":65536,"retained_files":2},
-        "features":{"automatic_fallback":false}, "lifetimes":{"match_seconds":300},"handles":{"matches":1000}})");
+    const auto config = load(R"({"logging":{"file_enabled":true,"max_file_bytes":65536,"retained_files":2}})");
     REQUIRE(config);
     CHECK(config->logging.file_enabled);
     CHECK(config->logging.max_file_bytes == 65536);
     CHECK(config->logging.retained_files == 2);
-    const auto removed = load(R"({"features":{"automatic_fallback":true}})");
-    REQUIRE_FALSE(removed);
-    CHECK(has_problem(removed.error(), "/features/automatic_fallback"));
+    for (const auto* removed : {R"({"features":{"automatic_fallback":false}})",
+                               R"({"features":{"automatic_fallback":true}})",
+                               R"({"lifetimes":{"match_seconds":300}})", R"({"handles":{"matches":1000}})"}) {
+        const auto rejected = load(removed);
+        REQUIRE_FALSE(rejected);
+    }
     const auto invalid = load(R"({"logging":{"max_file_bytes":1,"retained_files":21}})");
     REQUIRE_FALSE(invalid);
     CHECK(has_problem(invalid.error(), "/logging/max_file_bytes"));

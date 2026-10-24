@@ -105,7 +105,7 @@ music-service/
       transport/httplib/
       storage/sqlite/
         repositories/
-        migrations/
+        sqlite/schema.cpp
       filesystem/
       secrets/
       auth/                        # 服务 token 校验等通用实现，不放平台 OAuth 协议

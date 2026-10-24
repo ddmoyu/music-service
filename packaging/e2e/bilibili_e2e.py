@@ -33,7 +33,7 @@ def run(service, args, report):
         return doc
 
     invalid = api.json("POST", "/api/v1/credentials", {
-        "source": "bilibili", "cookie": "SESSDATA=synthetic-invalid", "label": "Bilibili invalid acceptance"}, expect=(201,))[2]
+        "source": "bilibili", "kind": "cookie", "auth_profile": "web_cookie", "secret": {"cookie": "SESSDATA=synthetic-invalid"}, "label": "Bilibili invalid acceptance"}, expect=(201,))[2]
     verified = api.json("POST", "/api/v1/credentials/" + invalid["credential_id"] + "/verify", {})[2]
     check(verified["result"] == "invalid", "invalid session is rejected")
     report["invalid_cookie"] = "invalid"
@@ -58,7 +58,7 @@ def run(service, args, report):
 
     if args.cookie_file:
         credential = api.json("POST", "/api/v1/credentials", {
-            "source": "bilibili", "cookie": args.cookie_file.read_text(encoding="utf-8").strip(),
+            "source": "bilibili", "kind": "cookie", "auth_profile": "web_cookie", "secret": {"cookie": args.cookie_file.read_text(encoding="utf-8").strip()},
             "label": "Bilibili acceptance"}, expect=(201,))[2]
         verified = api.json("POST", "/api/v1/credentials/" + credential["credential_id"] + "/verify", {})[2]
         check(verified["result"] == "valid", "provided session verifies")

@@ -54,7 +54,7 @@ struct FinalizeRequest {
     std::vector<application::media::BundleMember> bundle{}; // audio first; workspace/target are directories
 };
 
-// Checks every member against the durable manifest; legacy products remain single files.
+// Checks every member against the durable manifest; products without sidecars use single-file evidence.
 domain::Result<bool> publication_matches(ports::DestinationFiles& files, const std::string& destination,
     const std::string& path, const PublicationEvidence& evidence);
 

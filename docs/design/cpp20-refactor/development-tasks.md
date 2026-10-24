@@ -1,5 +1,9 @@
 # 开发任务拆分与验收计划
 
+当前开发约束（2026-10-24）：尚未发布正式版，不维护历史兼容。0.1.26 删除逐版数据库迁移、旧任务快照与请求简写，统一为当前 schema、配置和 API。下文历史验收中的自动迁移、旧格式兼容及其测试记录仅说明当时行为，不代表当前支持；当前规则见根目录 AGENTS.md、配置说明和 API 契约。
+
+0.1.26 验证：Windows MSVC x64 Debug／Release 构建通过；全量 CTest 608 项中 602 通过、6 项在线／样本门控跳过、0 失败（168.07 秒）。覆盖当前 schema 初始化与重启、非当前数据库拒绝且数据保留、备份恢复、快照往返、缺字段检查点拒绝、旧请求字段拒绝、OAuth 回调与刷新，以及下载取消、并发和恢复。Release 实测新目录初始化、Jamendo 匿名详情和 MP3 下载成功（310,500 字节）；Release 可执行文件 7,783,936 字节。证据：out/current-schema-debug-build.log、out/current-schema-release-build.log、out/current-schema-ctest.log、out/current-schema-release-smoke-report.json。调用脚本通过 Python 语法检查，未重新执行需要真实账号的各平台在线脚本。
+
 更新：2026-10-23。已提交基线为 0.1.6（`e13053c`）；N04 QQ 音乐和 N05 酷狗首阶段已通过 Windows 本机验收，代码尚未提交，分别见[QQ 验收记录](platform-roadmap.md#n04-qq-音乐首阶段验收2026-10-23)和[酷狗验收记录](../../research/kugou-acceptance.md)。当前应用版本以根目录 CMakeLists 为准。T01～T19、T21～T23、T29、T30 及 T41（选用 5sing）已完成本机验收；T30.s 侧文件及原生 NCM 导入也已完成本机验收，见补齐计划第 14 节。T20 的容器在线闭环仍保留受阻记录，T28／T31／T32／T34 的跨系统验收及 T37 的系统服务／其他系统发行包仍有缺口。N07 网易云已完成本轮批准范围，真实 Hi-Res 成功样本独立待验收。T26 已取消，后续平台坚持原生实现。**QQ、酷狗与咪咕首阶段已完成，未覆盖的品质与账号能力按子项推进；优先 Windows，非 Windows 的专门适配和验收排到最后。** 新平台的顺序、范围与验收统一见[平台路线图](platform-roadmap.md#当前执行顺序与交付范围)；文末保留历史实施证据，不用其旧状态覆盖最新子项结论。
 
 本文管理实施顺序、依赖与交付关口；规则和字段仍以[模块设计](backend-service/feature-modules.md)、[内部契约](backend-service/internal-contracts.md)、[公共模型](backend-service/data-models.md)、[API](backend-service/api-contract.md)和[运行时](backend-service/runtime-and-tasks.md)为准。A01～A50 的完整场景以[验收矩阵](backend-service/flows-and-acceptance.md#7-故障与验收矩阵)为准；本文只分配落实任务，不另建一套行为规范。

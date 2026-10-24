@@ -11,7 +11,7 @@ struct BundleMember {
     std::string container;
     ports::FileFingerprint file;
 };
-// Empty for legacy single-file assets. Malformed manifests fail closed.
+// Empty for single-file assets without sidecars. Malformed manifests fail closed.
 domain::Result<std::vector<BundleMember>> bundle_members(std::string_view properties);
 std::string with_bundle(std::string_view properties, const std::vector<BundleMember>& members);
 std::string sibling_path(std::string_view audio_path, std::string_view filename);

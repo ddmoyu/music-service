@@ -29,10 +29,6 @@ std::string fnv_hex(std::string_view data) {
     return out;
 }
 
-// 产品语义也进入复用指纹：新增歌词能力及字节级品质复核后，不复用旧版本成品。
-constexpr std::string_view naming_version = "naming-v1";
-constexpr std::string_view metadata_version = "metadata-v3";
-
 domain::Result<CreateResult> replay(ports::TaskRepository& tasks, const std::string& owner_id,
                                     const ports::StoredResponse& stored, const std::string& request_hash,
                                     const std::function<domain::Result<TaskView>(ports::TaskRecord)>& view_of);
@@ -92,7 +88,7 @@ DownloadService::DownloadService(std::shared_ptr<ports::TaskRepository> tasks,
                                  std::function<bool(const DestinationRule&)> destination_available,
                                  std::function<bool(const std::string&, const std::string&, std::uint64_t)> file_intact,
                                  std::uint32_t max_batch_items, std::shared_ptr<ports::DownloadQueue> queue,
-                                 std::optional<domain::OutputOptions> output, std::shared_ptr<ports::PublishedFiles> bundle_files)
+                                 domain::OutputOptions output, std::shared_ptr<ports::PublishedFiles> bundle_files)
     : tasks_(std::move(tasks)), providers_(std::move(providers)), credentials_(std::move(credentials)),
       destinations_(std::move(destinations)), destination_available_(std::move(destination_available)),
       file_intact_(std::move(file_intact)), max_batch_items_(max_batch_items), queue_(std::move(queue)),
@@ -161,19 +157,12 @@ domain::Result<domain::NormalizedDownloadIntent> DownloadService::prepare(const 
     const auto& rule = *destination.value();
     domain::DownloadIntentDraft draft{owner_id,
                                       request.track,
-                                      domain::SameSource{},
                                       {binding->binding},
                                       request.requirement,
                                       request.metadata_policy,
-                                      {rule.id, fnv_hex(rule.id + "\x1f" + rule.canonical_root), std::string{naming_version},
-                                       std::string{metadata_version}}};
-    if (output_) {
-        draft.product.output = output_;
-        draft.product.naming_config_version = "naming-v2:" + output_->name_format + ":" + output_->folder_layout;
-        draft.product.metadata_config_version = std::string{"metadata-v3:"} +
-            (output_->embed_cover ? "cover:" : "no-cover:") + (output_->embed_lyrics ? "lyrics" : "no-lyrics");
-        if (output_->lyrics_variant != "lrc") draft.product.metadata_config_version += ":" + output_->lyrics_variant;
-    }
+                                      {rule.id, fnv_hex(rule.id + "\x1f" + rule.canonical_root), "naming:" + output_.name_format + ":" + output_.folder_layout,
+                                       std::string{"metadata:"} + (output_.embed_cover ? "cover:" : "no-cover:") +
+                                       (output_.embed_lyrics ? "lyrics:" : "no-lyrics:") + output_.lyrics_variant, output_}};
     return domain::NormalizedDownloadIntent::normalize(std::move(draft));
 }
 

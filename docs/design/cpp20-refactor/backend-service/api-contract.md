@@ -1,12 +1,12 @@
 # 对外 HTTP API 详细契约
 
-v1 契约。实体语义见[模型](data-models.md)，执行与取消见[运行时](runtime-and-tasks.md)。原 Go 页面 `/music` 需独立兼容层。
+开发阶段当前 v1 契约，尚未发布正式版，不保留旧接口或请求别名。实体语义见[模型](data-models.md)，执行与取消见[运行时](runtime-and-tasks.md)。
 
 ## 1. 地址、版本与功能发现
 
 控制 base URL 初始为 `http://127.0.0.1:17632`，JSON 业务前缀 `/api/v1`。媒体 base URL 初始为 `http://127.0.0.1:17633`，前缀 `/media/v1`。部署可通过反向代理统一 origin；客户端应使用 info 与资源 links 返回的地址，不能拼出一个固定媒体端口。
 
-事件 base URL 初始为 `http://127.0.0.1:17634`，前缀 `/events/v1`，独立监听与工作池。进度默认使用 SSE，HTTP 查询用于初始加载、重连同步和兼容兜底。
+事件 base URL 初始为 `http://127.0.0.1:17634`，前缀 `/events/v1`，独立监听与工作池。进度默认使用 SSE，HTTP 查询用于初始加载、重连同步和无 SSE 时的轮询。
 
 `GET /api/v1/info` 声明已启用的服务级功能；`GET /api/v1/providers` 声明各平台能力。
 
@@ -112,7 +112,7 @@ v1 允许新增可选响应字段；删除、改义、改变单位或必填参�
 | 方法与路径 | 权限 | 返回 |
 | --- | --- | --- |
 | `GET /health/live` | 无 | 进程可响应时 200，最小状态，不探测平台 |
-| `GET /health/ready` | 无 | 可接收工作时 200；启动／迁移／停机或关键存储不可用时 503 |
+| `GET /health/ready` | 无 | 可接收工作时 200；启动／schema 校验／停机或关键存储不可用时 503 |
 | `GET /api/v1/info` | 任一有效 scope | 版本、API 版本、features、media_base_url、events_base_url、实例启动标识；支持仅有下载权限的客户端发现事件入口 |
 | `GET /api/v1/providers` | catalog:read | 可选 capability、enabled、limit（默认 50、1～100）、cursor；data 为 items + page，项包含平台、实现、能力、要求、可用状态及当前调用方凭证摘要 |
 | `GET /api/v1/limits` | catalog:read | 当前调用者的查询、批次、任务与媒体额度 |
@@ -258,7 +258,7 @@ v1 为单实体解析契约；文本含多个不同的已识别实体时返回 4
 
 均需要 catalog:read，属于有额度的昂贵控制操作。resolve 中的 track 为 TrackRef，默认 standard、strict、allow_preview=false。音频只从该 TrackRef 指定的平台解析，目录型来源没有 resolve_audio 能力时返回 422 CAPABILITY_UNSUPPORTED，下载同样在创建前拒绝。
 
-2026-10-24 已取消跨平台匹配与换源，`/api/v1/tracks/matches` 路由不存在。旧客户端的 `fallback: {"mode":"disabled"}` 与 null match_selection 仅作兼容忽略；下载还允许 disabled 对象携带空 sources。其他换源或匹配参数返回 400 VALIDATION_FAILED。解析结果不公开原始 CDN URL、秘密请求头或解密密钥。
+2026-10-24 已取消跨平台匹配与换源，`/api/v1/tracks/matches` 路由不存在。请求不允许 `fallback` 或 `match_selection`，无论 disabled、空 sources 或 null 均返回 400 VALIDATION_FAILED。解析结果不公开原始 CDN URL、秘密请求头或解密密钥。
 
 示例 resolve.data：
 
@@ -500,7 +500,7 @@ direct URL 是可能携带限时授权参数的敏感能力，仅在此显式访
 | `POST /api/v1/credentials/{credential_id}/verify` | 无秘密 body；有限平台校验，200 返回 valid／invalid／unknown 与原因 |
 | `DELETE /api/v1/credentials/{credential_id}` | 200，撤销未来使用；重复撤销自己的已知记录仍成功 |
 
-kind 支持 cookie、oauth2、api_key，只有平台声明并已实现的 kind／auth_profile 可写入。secret 分别为 `{cookie}`、`{access_token, refresh_token?, expires_at?, scopes?}` 或 `{api_key}`；平台可在已公布 schema 中约束必填字段，声明的 scopes 不能代替上游校验。保留原顶层 cookie 作为 kind=cookie 的简写，与 kind／auth_profile／secret 完整形式互斥；简写使用该平台默认 Cookie profile。OAuth 应用 client_secret 通过服务管理配置的 SecretStore 引用设置，不能由普通用户替换整个服务的应用身份。所有秘密仅写入、不回显。
+kind 支持 cookie、oauth2、api_key，只有平台声明并已实现的 kind／auth_profile 可写入。secret 分别为 `{cookie}`、`{access_token, refresh_token?, expires_at?, scopes?}` 或 `{api_key}`；平台可在已公布 schema 中约束必填字段，声明的 scopes 不能代替上游校验。创建凭据必须显式填写 kind、auth_profile 和 secret。Cookie 使用 `{"kind":"cookie","auth_profile":"web_cookie","secret":{"cookie":"..."}}`；更新秘密也使用 secret 对象。顶层 cookie 是未知字段，不推断认证类型或 profile。OAuth 应用 client_secret 通过服务管理配置的 SecretStore 引用设置，不能由普通用户替换整个服务的应用身份。所有秘密仅写入、不回显。
 
 校验接口不替代账号登录。auth_methods 公布对应 profile 的 supports_verify／supports_refresh／supports_application_token／supports_authorization_code／configured，没有实际工厂不声明支持。没有验证工厂时 verify 返回 422 CAPABILITY_UNSUPPORTED。0.1.25 的 OAuth 用户刷新由 CredentialService 调用 IOAuth2 并条件提交；应用 token 仍未接入。删除凭证会阻止后续读取和重新解析，但已经交给在途请求的凭证不保证可被“收回”；需停止下载时调用任务取消。
 
@@ -561,7 +561,7 @@ paused 只停止领取新任务，已有任务继续；取消活动任务仍走�
 
 ## 14. 契约验证清单
 
-0.1.1 兼容扩展：歌曲的 `artwork` 在有可信平台封面时为 HTTPS URL；`track_number`、`track_total` 为正整数或 null。下载结果新增 `metadata_fields`，取值见 [任务模型](data-models.md#下载任务)。客户端忽略不认识的可选字段即可；下载请求无需增加参数。输出默认配置由服务端 `downloads.output` 控制，并在受理时固定；单任务仍可使用 `metadata_policy`。
+当前元数据定义：歌曲的 `artwork` 在有可信平台封面时为 HTTPS URL；`track_number`、`track_total` 为正整数或 null。下载结果新增 `metadata_fields`，取值见 [任务模型](data-models.md#下载任务)。客户端按当前契约读取结果；下载请求无需增加参数。输出默认配置由服务端 `downloads.output` 控制，并在受理时固定；单任务仍可使用 `metadata_policy`。
 
 重点验证 JSON 示例可解析、单位一致、逐源分页不重复第一页、所有错误有 request_id、下载提交可靠持久化、同键幂等、批次创建原子性、资源 owner 隔离、状态转换竞争、媒体票据范围与到期、Range／If-Range／304／416，以及关闭前端后任务生命周期独立。
 

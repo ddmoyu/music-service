@@ -2,7 +2,7 @@
 
 #include "infrastructure/filesystem/paths.hpp"
 #include "infrastructure/storage/sqlite/backup.hpp"
-#include "infrastructure/storage/sqlite/migrations.hpp"
+#include "infrastructure/storage/sqlite/schema.hpp"
 
 #include <chrono>
 #include <cstdio>
@@ -77,22 +77,8 @@ domain::Result<std::unique_ptr<Instance>> open_instance(const application::confi
         return std::move(database).error();
     }
     instance->database = std::move(database).value();
-    // A database that migrations are about to change is copied first, so a failed or
-    // unwanted upgrade can be undone with "restore" (internal-contracts.md 8).
-    auto current = instance->database->read([](sqlite::Connection& db) { return sqlite::schema_version(db); });
-    if (!current) {
-        return std::move(current).error();
-    }
-    const auto migrations = sqlite::builtin_migrations();
-    if (current.value() > 0 && current.value() < migrations.back().version) {
-        const auto copy = new_backup_path(instance->layout.backups,
-                                          "pre-migration-v" + std::to_string(current.value()), instance->clock->now());
-        if (auto saved = sqlite::backup_database(instance->layout.database, copy); !saved) {
-            return std::move(saved).error();
-        }
-    }
-    if (auto migrated = sqlite::migrate(*instance->database, instance->clock->now()); !migrated) {
-        return std::move(migrated).error();
+    if (auto initialized = sqlite::initialize_schema(*instance->database, instance->clock->now()); !initialized) {
+        return std::move(initialized).error();
     }
     const sqlite::RepositoryContext context{instance->database.get(), instance->clock, instance->ids};
     instance->identities = std::make_shared<sqlite::SqliteIdentityRepository>(context);

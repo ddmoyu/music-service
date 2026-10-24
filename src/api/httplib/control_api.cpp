@@ -563,8 +563,8 @@ std::string task_etag(const ports::TaskRecord& task) {
 // A single download from its JSON object; field names in errors carry prefix.
 domain::Result<application::tasks::DownloadRequest> parse_download(const json& body, const std::string& prefix) {
     static const std::set<std::string> allowed{"track",           "context_ref",     "quality",       "quality_policy",
-                                               "allow_preview",   "fallback",        "destination_id", "metadata_policy",
-                                               "duplicate_policy", "credential_id",  "match_selection"};
+                                               "allow_preview",   "destination_id", "metadata_policy",
+                                               "duplicate_policy", "credential_id"};
     const auto bad = [&](const std::string& field, std::string reason) {
         return domain::Error::validation(prefix + field, std::move(reason));
     };
@@ -639,26 +639,6 @@ domain::Result<application::tasks::DownloadRequest> parse_download(const json& b
             return bad("allow_preview", "must be a boolean");
         }
         request.requirement.allow_preview = preview->get<bool>();
-    }
-    if (const auto fallback = body.find("fallback"); fallback != body.end()) {
-        if (!fallback->is_object() || !fallback->contains("mode") || !(*fallback)["mode"].is_string()) {
-            return bad("fallback", "legacy compatibility requires mode=disabled and optional empty sources");
-        }
-        for (const auto& [key, value] : fallback->items()) {
-            if (key != "mode" && key != "sources") {
-                return bad("fallback." + key, "unknown field");
-            }
-        }
-        const auto mode = (*fallback)["mode"].get<std::string>();
-        if (mode != "disabled") {
-            return bad("fallback.mode", "source switching has been removed");
-        }
-        if (fallback->contains("sources") && (!(*fallback)["sources"].is_array() || !(*fallback)["sources"].empty())) {
-            return bad("fallback.sources", "source switching has been removed");
-        }
-    }
-    if (body.contains("match_selection") && !body["match_selection"].is_null()) {
-        return bad("match_selection", "cross-source matching has been removed");
     }
     return request;
 }
@@ -793,17 +773,9 @@ bool read_string(const Call& call, const json& object, const char* key, std::opt
     return true;
 }
 
-// The cookie from {"secret": {"cookie": "..."}} or the {"cookie": "..."} shorthand.
+// Cookie credentials use the structured secret object.
 bool read_cookie(const Call& call, const json& body, std::optional<std::string>& cookie) {
     const auto secret = body.find("secret");
-    const auto shorthand = body.find("cookie");
-    if (secret != body.end() && shorthand != body.end()) {
-        call.fail(bad_request("cookie", "cannot be combined with secret"));
-        return false;
-    }
-    if (shorthand != body.end()) {
-        return read_string(call, body, "cookie", cookie);
-    }
     if (secret != body.end()) {
         if (!secret->is_object()) {
             call.fail(bad_request("secret", "must be an object"));
@@ -824,10 +796,6 @@ bool read_cookie(const Call& call, const json& body, std::optional<std::string>&
 bool read_credential_secret(const Call& call, const json& body, std::string_view kind,
                             std::optional<std::string>& value) {
     if (kind == "cookie") return read_cookie(call, body, value);
-    if (body.contains("cookie")) {
-        call.fail(bad_request("cookie", "is only available for cookie credentials"));
-        return false;
-    }
     if (auto it = body.find("secret"); it != body.end()) {
         if (!it->is_object()) {
             call.fail(bad_request("secret", "must be an object"));
@@ -1839,8 +1807,7 @@ struct ControlApi::Impl {
         if (!only_params(call, {})) {
             return;
         }
-        auto body = body_object(call, {"track", "context_ref", "quality", "quality_policy", "allow_preview", "fallback",
-                                       "match_selection"});
+        auto body = body_object(call, {"track", "context_ref", "quality", "quality_policy", "allow_preview"});
         if (!body) {
             return;
         }
@@ -1885,22 +1852,6 @@ struct ControlApi::Impl {
                 return;
             }
             request.requirement.allow_preview = preview->get<bool>();
-        }
-        if (const auto fallback = body->find("fallback"); fallback != body->end()) {
-            if (!fallback->is_object() || !fallback->contains("mode") ||
-                !(*fallback)["mode"].is_string() || fallback->size() != 1) {
-                call.fail(bad_request("fallback", "must be {mode: disabled}"));
-                return;
-            }
-            const auto mode = (*fallback)["mode"].get<std::string>();
-            if (mode != "disabled") {
-                call.fail(bad_request("fallback.mode", "source switching has been removed"));
-                return;
-            }
-        }
-        if (body->contains("match_selection") && !(*body)["match_selection"].is_null()) {
-            call.fail(bad_request("match_selection", "cross-source matching has been removed"));
-            return;
         }
         auto resolved = services.assets->resolve(request);
         resolved ? call.ok(asset_json(resolved.value())) : call.fail(resolved.error());
@@ -2207,27 +2158,6 @@ struct ControlApi::Impl {
         call.ok({{"items", std::move(items)}});
     }
 
-    // The platform's only cookie profile, for the {"cookie": ...} shorthand.
-    domain::Result<std::string> default_cookie_profile(const std::string& source) {
-        auto view = services.providers->describe(source);
-        if (!view) {
-            return std::move(view).error();
-        }
-        std::vector<std::string> cookie_profiles;
-        for (const auto& method : view->auth_methods) {
-            if (method.kind == ports::CredentialKind::cookie) {
-                cookie_profiles.push_back(method.auth_profile);
-            }
-        }
-        if (cookie_profiles.empty()) {
-            return domain::Error{ErrorCode::capability_unsupported, "this source accepts no cookie credentials", false, {}};
-        }
-        if (cookie_profiles.size() > 1) {
-            return domain::Error::validation("auth_profile", "this source has several cookie profiles; name one");
-        }
-        return cookie_profiles.front();
-    }
-
     static json oauth_json(const accounts::OAuthSessionView& s) {
         return {{"session_id", s.id}, {"source", s.source}, {"auth_profile", s.auth_profile},
             {"status", s.status}, {"expires_at", utc(s.expires_at)},
@@ -2308,7 +2238,7 @@ struct ControlApi::Impl {
         if (!only_params(call, {})) {
             return;
         }
-        auto body = body_object(call, {"source", "label", "kind", "auth_profile", "secret", "cookie"});
+        auto body = body_object(call, {"source", "label", "kind", "auth_profile", "secret"});
         if (!body) {
             return;
         }
@@ -2329,26 +2259,17 @@ struct ControlApi::Impl {
             call.fail(bad_request("kind", "must be cookie, oauth2 or api_key"));
             return;
         }
-        const bool shorthand = body->contains("cookie");
-        if (!shorthand && (!kind || !profile || !body->contains("secret"))) {
-            call.fail(bad_request("secret", "kind, auth_profile and secret are required unless cookie is given"));
+        if (!kind || !profile || !body->contains("secret")) {
+            call.fail(bad_request("secret", "kind, auth_profile and secret are required"));
             return;
         }
-        const auto kind_text = kind.value_or("cookie");
+        const auto& kind_text = *kind;
         if (!read_credential_secret(call, *body, kind_text, cookie)) {
             return;
         }
         if (!cookie) {
             call.fail(bad_request("secret", "is required"));
             return;
-        }
-        if (!profile) {
-            auto found = default_cookie_profile(*source);
-            if (!found) {
-                call.fail(found.error());
-                return;
-            }
-            profile = std::move(found).value();
         }
         const auto credential_kind = kind_text == "oauth2" ? ports::CredentialKind::oauth2
                                    : kind_text == "api_key" ? ports::CredentialKind::api_key
@@ -2367,7 +2288,7 @@ struct ControlApi::Impl {
         if (!only_params(call, {})) {
             return;
         }
-        auto body = body_object(call, {"label", "secret", "cookie"});
+        auto body = body_object(call, {"label", "secret"});
         if (!body) {
             return;
         }
