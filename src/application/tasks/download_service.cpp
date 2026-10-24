@@ -142,12 +142,6 @@ DownloadService::destination_for(const std::string& owner_id, const std::optiona
 
 domain::Result<domain::NormalizedDownloadIntent> DownloadService::prepare(const std::string& owner_id,
                                                                           const DownloadRequest& request) {
-    if (request.match_selection) {
-        return Error{ErrorCode::capability_unsupported, "match selection is not available yet", false, {}};
-    }
-    if (request.automatic_fallback) {
-        return Error{ErrorCode::capability_unsupported, "automatic fallback is not enabled", false, {}};
-    }
     const auto& source = request.track.source.value();
     if (auto known = providers_->check_source(source); !known) {
         return known.error();

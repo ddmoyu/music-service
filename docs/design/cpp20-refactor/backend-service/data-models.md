@@ -55,11 +55,11 @@ AccountBinding 表达稳定的账号选择，不含 token、Cookie、secret_ref 
 
 秘密、有效 scope 或其他授权条件变更必须推进对应版本；应用配置版本随管理配置变更，应用 token 版本随成功获取／刷新变更。不同 scope 的应用 token 缓存条目分配不同 app_token_id，重建已淘汰条目时使用新 ID，不能因两个条目都是 version=1 而混用。凭证和应用 profile 标识不可回收给另一条记录。即使使用共享应用身份，用户数据缓存仍保留 principal 分区；配额组另有稳定标识，不随 token 刷新重置。
 
-创建下载时将各实际可用来源的默认选择解析为 AccountBinding 并保存；自动换源只使用提交时固定的有限候选来源与账号绑定。执行时可租用同一绑定的最新有效版本，不改用另一默认账号，也不把原来源凭证交给目标来源。账号撤销或权限不足按现有错误规则处理；应用模式与匿名模式必须由该能力明确允许。
+创建下载时将请求平台的默认选择解析为 AccountBinding 并保存。执行时可租用同一绑定的最新有效版本，不改用其他默认账号或其他平台。账号撤销或权限不足按现有错误规则处理；应用模式与匿名模式必须由该能力明确允许。
 
 默认用户凭证的唯一事实来源是 SQLite 的 `credential_defaults`，按 owner + source 保存 credential_id（可为 null）与单调递增的 selection_version。配置文件不保存另一份用户默认账号；设置与清除使用[默认凭证 API](api-contract.md#111-默认平台凭证)。新增凭证不自动成为默认，清除或撤销默认凭证也不自动改选另一用户账号；没有默认时仅可按能力使用 application／anonymous，否则返回 CREDENTIALS_REQUIRED。
 
-默认选择提交后立即影响新请求。使用隐式默认选择的分页／匹配句柄还绑定 selection_version；即使默认账号从 A 改到 B 再改回 A，旧选择句柄仍失效。缓存内容继续按 AuthIdentityKey 分区，selection_version 不加入稳定 AccountBinding 或下载指纹；已受理任务使用原绑定。撤销凭证与清空其默认引用在同一事务提交。
+默认选择提交后立即影响新请求。使用隐式默认选择的分页句柄还绑定 selection_version；即使默认账号从 A 改到 B 再改回 A，旧选择句柄仍失效。缓存内容继续按 AuthIdentityKey 分区，selection_version 不加入稳定 AccountBinding 或下载指纹；已受理任务使用原绑定。撤销凭证与清空其默认引用在同一事务提交。
 
 ## 歌曲与集合
 
@@ -89,12 +89,11 @@ AccountBinding 表达稳定的账号选择，不含 token、Cookie、secret_ref 
 | `quality` | `standard`、`high`、`lossless`、`hires`；默认 standard |
 | `quality_policy` | `strict` 或 `allow_lower`，默认 strict |
 | `allow_preview` | 默认 false；为 true 时允许明确的试听资源，但结果仍须标记 preview |
-| `fallback.mode` | `disabled` 或 `auto`，默认 disabled；手动换源通过候选接口选择实体 |
 | `container` | mp3、flac、m4a、ogg 等，未知为 null |
 | 音频属性 | codec、bitrate_bps、sample_rate_hz、channels、bit_depth，均允许未知 |
 | `completeness` | full／preview／unknown；不能仅因为拿到 URL 就填 full |
 
-`ResolvedAsset` 内部保存带类型的传输计划（首版 HttpAsset；新增传输形态由服务自己实现）、必需请求条件、处理计划、实际来源、有效期和资源指纹。HttpAsset 包含 URL 与秘密请求头；处理计划通过 processor_id、版本和私有上下文绑定。公开 `AssetDescriptor` 只返回 asset_id、原曲／实际曲目、品质属性、access_state、completeness、expires_at、warnings 与匹配／资源证据摘要，不返回命令或私有处理参数。
+`ResolvedAsset` 内部保存带类型的传输计划（首版 HttpAsset；新增传输形态由服务自己实现）、必需请求条件、处理计划、实际来源、有效期和资源指纹。HttpAsset 包含 URL 与秘密请求头；处理计划通过 processor_id、版本和私有上下文绑定。公开 `AssetDescriptor` 只返回 asset_id、原曲／实际曲目、品质属性、access_state、completeness、expires_at、warnings 与资源证据摘要，不返回命令或私有处理参数。
 
 目录源与音频源可以不同，例如模拟组合 original_track.source=mock_catalog、actual_track.source=mock_audio；实现工具不作为 source。外部提取／传输不会改变实际音频来源或凭空提升品质。缺少可直接转发的 HttpAsset 时不提供在线代理或直链，可在下载完成后访问 file_id。
 
@@ -125,8 +124,8 @@ AccountBinding 表达稳定的账号选择，不含 token、Cookie、secret_ref 
 | 字段组 | 字段与语义 |
 | --- | --- |
 | 身份 | task_id、owner_id（普通查询不返回其他用户）、retry_of、version；批次关系由 batch_items 表维护 |
-| 请求 | original_track、requested_quality、quality_policy、allow_preview、fallback、destination_id、metadata_policy；私有 normalized_intent 保存 AccountBinding、已验证手动目标与配置快照，context_snapshot／context_schema_version 保存必要的非秘密上下文 |
-| 实际执行 | actual_track、actual_quality、container、completeness、attempt、stage、warnings、匹配证据摘要；私有快照另存 implementation_id／version 与处理计划版本 |
+| 请求 | original_track、requested_quality、quality_policy、allow_preview、destination_id、metadata_policy；私有 normalized_intent 保存 AccountBinding 与配置快照，context_snapshot／context_schema_version 保存必要的非秘密上下文 |
+| 实际执行 | actual_track、actual_quality、container、completeness、attempt、stage、warnings；私有快照另存 implementation_id／version 与处理计划版本 |
 | 状态 | queued／resolving／probing／downloading／processing／finalizing／waiting_retry／canceling／completed／failed／canceled |
 | 进度 | received_bytes、total_bytes、speed_bytes_per_second、eta_ms、stage_progress；未知为 null |
 | 时刻 | created_at、updated_at、started_at、finished_at、next_retry_at |
@@ -154,14 +153,14 @@ phase 用 status 表达，`stage` 用于 processing 内部的 decrypt／validate
 | 指纹内容 | 归一规则 |
 | --- | --- |
 | owner 与 original_track | source + 不透明 id 保持原值，不对平台 ID 大小写折叠 |
-| 音源选择 | 同源、手动目标或 auto 三种；手动保存验证后的目标 TrackRef；auto 保存有序候选来源及匹配策略版本，不以尚未确定的 actual_track 代替策略 |
+| 音源选择 | 仅同源。持久编码保留 selection.kind=same，以兼容已有 schema 1～4 与指纹；历史 manual／auto 编码明确报错，不静默转换成另一首歌 |
 | 账号 | 原曲及手动／auto 目标所需的 AccountBinding；来源映射按稳定键编码，默认选择在提交时固定 |
 | 音质与内容 | requested_quality、quality_policy、allow_preview |
 | 产物 | metadata_policy、destination_id 及目标配置版本、命名与元数据配置版本；包含封面／歌词等会影响产物的有效配置 |
 
-auto 来源顺序有语义，保留首次出现顺序去重并移除原曲来源，去除后至少保留一个候选；关闭 auto 时归一为同源。手动目标与原曲相同时归一为同源。账号绑定只保留所选音源实际需要的来源，按来源排序，同一来源出现不同绑定即拒绝。客户端省略与显式提交相同默认值生成同一下载意图，但幂等请求哈希仍按各自输入判定。手动候选保存目标、证据摘要、必要上下文及验证版本；排队、恢复和 retry 不依赖短期 match_id／candidate_id。临时句柄、token／URL、授权版本、request_id、task_id、时间和 duplicate_policy 不进入下载指纹；凭证刷新不会单独制造一个新下载意图。
+账号绑定只保留原曲平台，同一来源出现不同绑定即拒绝。客户端省略与显式提交相同默认值生成同一下载意图，但幂等请求哈希仍按各自输入判定。临时句柄、token／URL、授权版本、request_id、task_id、时间和 duplicate_policy 不进入下载指纹；凭证刷新不会单独制造一个新下载意图。
 
-默认 duplicate_policy=reuse：只复用规范化意图相同的活动任务或合格的已完成结果，不跨不同策略“猜测兼容”。完成结果还要满足当前文件访问权限、文件存在性、原曲／手动目标、品质／试听限制与 metadata_policy；best_effort 可复用带相同报告的部分结果，required 不能复用未满足必需产物的文件。检查文件和结果证据后，在提交事务内重验相关版本；不合格完成结果不复用，正常创建新任务。force 可绕过完成结果，但相同活动意图仍返回 409 ACTIVE_DUPLICATE。
+默认 duplicate_policy=reuse：只复用规范化意图相同的活动任务或合格的已完成结果，不跨不同策略“猜测兼容”。完成结果还要满足当前文件访问权限、文件存在性、原曲、品质／试听限制与 metadata_policy；best_effort 可复用带相同报告的部分结果，required 不能复用未满足必需产物的文件。检查文件和结果证据后，在提交事务内重验相关版本；不合格完成结果不复用，正常创建新任务。force 可绕过完成结果，但相同活动意图仍返回 409 ACTIVE_DUPLICATE。
 
 不同任务可能得到相同展示文件名，输出路径必须单独预留并自动加确定性后缀；不覆盖另一个任务的临时文件。终态任务历史至少在首版保留，暂不开放删除任务接口；后续清理策略不能破坏文件资产索引。
 
@@ -170,7 +169,7 @@ auto 来源顺序有语义，保留首次出现顺序去重并移除原曲来源
 | 模型 | 关键规则 |
 | --- | --- |
 | `DownloadBatch` | batch_id、有序 task_ids、创建计数与复用计数、状态统计；items 数量受 API 和 download_limits 约束，创建事务全有或全无，执行结果各自独立 |
-| `FileAsset` | file_id、owner、track（实际音频曲目）、实际品质、相对目标路径、大小、容器、ETag、available／missing、创建任务；原曲及匹配链保留在各关联任务，复用文件不覆盖它们；对外不返回服务器绝对路径 |
+| `FileAsset` | file_id、owner、track（实际音频曲目）、实际品质、相对目标路径、大小、容器、ETag、available／missing、创建任务；原曲保留在各关联任务，复用文件不覆盖它们；对外不返回服务器绝对路径 |
 | `MediaAccessDescriptor` | target（file／asset）、delivery、url、auth、expires_at 与媒体属性；不分配新的播放 ID，不保存播放器状态 |
 | `MediaTicket` | 随机高熵 token 的哈希、owner、目标 kind/id、到期时刻；默认有效期使用 lifetimes，申请范围见 API |
 | `Destination` | destination_id、名称、可用性、accept_new_tasks 与允许的 principal；根目录首次注册后与 ID 永久绑定，见[目标目录规则](configuration-and-deployment.md#目标目录绑定与变更) |

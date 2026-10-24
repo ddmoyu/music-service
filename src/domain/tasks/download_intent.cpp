@@ -5,54 +5,12 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <type_traits>
 #include <utility>
 #include <variant>
 
 namespace music_service::domain {
 
 namespace {
-
-// Sources whose accounts the selection needs, in a stable order.
-std::vector<SourceId> required_sources(const TrackRef& original, const SourceSelection& selection) {
-    std::vector<SourceId> sources{original.source};
-    if (const auto* manual = std::get_if<ManualTarget>(&selection)) {
-        sources.push_back(manual->target.source);
-    } else if (const auto* fallback = std::get_if<AutoFallback>(&selection)) {
-        sources.insert(sources.end(), fallback->candidate_sources.begin(),
-                       fallback->candidate_sources.end());
-    }
-    std::sort(sources.begin(), sources.end());
-    sources.erase(std::unique(sources.begin(), sources.end()), sources.end());
-    return sources;
-}
-
-Result<SourceSelection> normalize_selection(const TrackRef& original, SourceSelection selection) {
-    if (auto* manual = std::get_if<ManualTarget>(&selection)) {
-        if (manual->target == original) {
-            return SourceSelection{SameSource{}};
-        }
-        return selection;
-    }
-    if (auto* fallback = std::get_if<AutoFallback>(&selection)) {
-        if (fallback->strategy_version == 0) {
-            return Error::validation("fallback.strategy_version", "must be set");
-        }
-        std::vector<SourceId> unique;
-        for (auto& source : fallback->candidate_sources) {
-            if (source != original.source &&
-                std::find(unique.begin(), unique.end(), source) == unique.end()) {
-                unique.push_back(std::move(source));
-            }
-        }
-        if (unique.empty()) {
-            return Error::validation("fallback.sources",
-                                     "needs a candidate source other than the original");
-        }
-        fallback->candidate_sources = std::move(unique);
-    }
-    return selection;
-}
 
 Result<std::vector<AccountBinding>> normalize_bindings(const std::string& owner_id,
                                                        const std::vector<SourceId>& needed,
@@ -159,11 +117,7 @@ Result<NormalizedDownloadIntent> NormalizedDownloadIntent::normalize(DownloadInt
         return Error::validation("product", "configuration versions must be set");
     }
 
-    auto selection = normalize_selection(draft.original_track, std::move(draft.selection));
-    if (!selection) {
-        return std::move(selection).error();
-    }
-    const auto needed = required_sources(draft.original_track, selection.value());
+    const std::vector<SourceId> needed{draft.original_track.source};
     auto bindings = normalize_bindings(draft.owner_id, needed, std::move(draft.account_bindings));
     if (!bindings) {
         return std::move(bindings).error();
@@ -171,7 +125,7 @@ Result<NormalizedDownloadIntent> NormalizedDownloadIntent::normalize(DownloadInt
 
     return NormalizedDownloadIntent{std::move(draft.owner_id),
                                     std::move(draft.original_track),
-                                    std::move(selection).value(),
+                                    SourceSelection{SameSource{}},
                                     std::move(bindings).value(),
                                     draft.requirement,
                                     draft.metadata_policy,
@@ -184,24 +138,7 @@ DownloadFingerprint fingerprint(const NormalizedDownloadIntent& intent) {
         .field("owner", std::string_view{intent.owner_id()});
     write_ref(writer, "orig", intent.original_track());
 
-    std::visit(
-        [&writer](const auto& selection) {
-            using T = std::decay_t<decltype(selection)>;
-            if constexpr (std::is_same_v<T, SameSource>) {
-                writer.field("sel", std::string_view{"same"});
-            } else if constexpr (std::is_same_v<T, ManualTarget>) {
-                writer.field("sel", std::string_view{"manual"});
-                write_ref(writer, "target", selection.target);
-            } else {
-                writer.field("sel", std::string_view{"auto"})
-                    .number("auto.strategy", selection.strategy_version)
-                    .number("auto.count", selection.candidate_sources.size());
-                for (const auto& source : selection.candidate_sources) {
-                    writer.field("auto.src", std::string_view{source.value()});
-                }
-            }
-        },
-        intent.selection());
+    writer.field("sel", std::string_view{"same"});
 
     writer.number("acct.count", intent.account_bindings().size());
     for (const auto& binding : intent.account_bindings()) {

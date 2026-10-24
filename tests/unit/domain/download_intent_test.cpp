@@ -2,6 +2,7 @@
 
 #include "domain/tasks/download_intent.hpp"
 #include "infrastructure/storage/intent_codec.hpp"
+#include <nlohmann/json.hpp>
 
 using namespace music_service::domain;
 using music_service::test::anonymous;
@@ -77,6 +78,18 @@ TEST_CASE("output settings survive storage and isolate reuse from legacy product
     CHECK(decoded.product().output == OutputOptions{});
 }
 
+TEST_CASE("stored cross-source selections fail without becoming same-source downloads", "[domain][intent]") {
+    namespace storage = music_service::infrastructure::storage;
+    const auto intent = unwrap(NormalizedDownloadIntent::normalize(base_draft()));
+    auto document = nlohmann::json::parse(storage::encode_intent(intent));
+    for (const auto kind : {"manual", "auto"}) {
+        document["selection"] = {{"kind", kind}, {"target", {{"source", "qq"}, {"id", "different"}}}};
+        const auto restored = storage::decode_intent(document.dump());
+        REQUIRE_FALSE(restored);
+        CHECK(restored.error().message.find("source switching has been removed") != std::string::npos);
+    }
+}
+
 TEST_CASE("the same intent produces the same fingerprint", "[domain][intent]") {
     const auto a = fp(base_draft());
     const auto b = fp(base_draft());
@@ -123,30 +136,6 @@ TEST_CASE("quality, destination and product configuration are part of the intent
     CHECK_FALSE(fp(naming) == base);
 }
 
-// A36: different manual targets differ; the same target reached through different
-// short-lived match handles is the same intent because handles are never stored.
-TEST_CASE("manual targets are stored by their verified track", "[domain][intent]") {
-    auto to_qq_1 = base_draft();
-    to_qq_1.selection = ManualTarget{track("qq", "song_1")};
-    to_qq_1.account_bindings.push_back(user("prn_a", "qq", "cre_1"));
-
-    auto to_qq_1_again = to_qq_1;
-    auto to_qq_2 = to_qq_1;
-    to_qq_2.selection = ManualTarget{track("qq", "song_2")};
-
-    CHECK(fp(to_qq_1) == fp(to_qq_1_again));
-    CHECK_FALSE(fp(to_qq_1) == fp(to_qq_2));
-    CHECK_FALSE(fp(to_qq_1) == fp(base_draft()));
-}
-
-TEST_CASE("a manual target equal to the original is the same source", "[domain][intent]") {
-    auto manual_self = base_draft();
-    manual_self.selection = ManualTarget{track("kuwo", "MUSIC_1")};
-    const auto intent = unwrap(NormalizedDownloadIntent::normalize(manual_self));
-    CHECK(std::holds_alternative<SameSource>(intent.selection()));
-    CHECK(fingerprint(intent) == fp(base_draft()));
-}
-
 TEST_CASE("account bindings are fixed and part of the intent", "[domain][intent]") {
     auto with_user = base_draft();
     with_user.account_bindings = {user("prn_a", "kuwo", "cre_1")};
@@ -183,46 +172,6 @@ TEST_CASE("binding errors are rejected", "[domain][intent]") {
     auto duplicate = base_draft();
     duplicate.account_bindings.push_back(anonymous("prn_a", "kuwo"));
     CHECK(NormalizedDownloadIntent::normalize(duplicate));
-}
-
-TEST_CASE("auto fallback keeps candidate order and removes duplicates", "[domain][intent]") {
-    auto draft = base_draft();
-    draft.account_bindings.push_back(anonymous("prn_a", "qq"));
-    draft.account_bindings.push_back(anonymous("prn_a", "migu"));
-
-    auto qq_first = draft;
-    qq_first.selection = AutoFallback{{source("qq"), source("kuwo"), source("migu"), source("qq")}, 1};
-    auto qq_first_clean = draft;
-    qq_first_clean.selection = AutoFallback{{source("qq"), source("migu")}, 1};
-    auto migu_first = draft;
-    migu_first.selection = AutoFallback{{source("migu"), source("qq")}, 1};
-    auto newer_strategy = draft;
-    newer_strategy.selection = AutoFallback{{source("qq"), source("migu")}, 2};
-
-    const auto intent = unwrap(NormalizedDownloadIntent::normalize(qq_first));
-    const auto& fallback = std::get<AutoFallback>(intent.selection());
-    REQUIRE(fallback.candidate_sources.size() == 2);
-    CHECK(fallback.candidate_sources[0] == source("qq"));
-    CHECK(fallback.candidate_sources[1] == source("migu"));
-
-    CHECK(fp(qq_first) == fp(qq_first_clean));
-    CHECK_FALSE(fp(qq_first) == fp(migu_first));
-    CHECK_FALSE(fp(qq_first) == fp(newer_strategy));
-}
-
-TEST_CASE("auto fallback needs a real candidate and a strategy version", "[domain][intent]") {
-    auto only_original = base_draft();
-    only_original.selection = AutoFallback{{source("kuwo")}, 1};
-    CHECK_FALSE(NormalizedDownloadIntent::normalize(only_original));
-
-    auto no_strategy = base_draft();
-    no_strategy.account_bindings.push_back(anonymous("prn_a", "qq"));
-    no_strategy.selection = AutoFallback{{source("qq")}, 0};
-    CHECK_FALSE(NormalizedDownloadIntent::normalize(no_strategy));
-
-    auto no_binding = base_draft();
-    no_binding.selection = AutoFallback{{source("qq")}, 1};
-    CHECK_FALSE(NormalizedDownloadIntent::normalize(no_binding));
 }
 
 TEST_CASE("invalid owners and product settings are rejected", "[domain][intent]") {

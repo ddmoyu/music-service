@@ -136,7 +136,6 @@ info.data 示例：
     "file_access": true,
     "media_proxy": false,
     "direct_media_urls": false,
-    "automatic_fallback": false,
     "progress_polling": true,
     "progress_sse": true
   }
@@ -250,23 +249,16 @@ v1 为单实体解析契约；文本含多个不同的已识别实体时返回 4
 
 原文、翻译和罗马音时间轴独立保留，`romanized_lrc` 缺失为 null。YRC 损坏部分跳过并返回 `YRC_MALFORMED`，不影响有效 LRC。服务配置 `downloads.output.lyrics_variant` 控制标签写入，缺少选定变体时回退原文，任务的 `result.warnings` 返回 `LYRICS_VARIANT_FALLBACK`。
 
-## 8. 音源解析、探测与换源候选
+## 8. 音源解析与探测
 
 | 方法与路径 | 输入 | 成功结果 |
 | --- | --- | --- |
-| `POST /api/v1/assets/resolve` | track、context_ref、quality、quality_policy、allow_preview、fallback、可选 match_selection | 200 AssetDescriptor |
+| `POST /api/v1/assets/resolve` | track、context_ref、quality、quality_policy、allow_preview | 200 AssetDescriptor |
 | `POST /api/v1/assets/probe` | asset_id | 200 探测报告及证据，过期 410 |
-| `POST /api/v1/tracks/matches` | track、context_ref、sources、limit、timeout_ms | 200 match_id、expires_at、candidates、逐源状态 |
 
-均需要 catalog:read，属于有额度的昂贵控制操作。resolve 中的 track 为 TrackRef，客户端提供 title 等展示字段不作为平台身份或匹配证据；后端先读取可信元信息。默认 standard、strict、allow_preview=false、fallback.mode=disabled。
+均需要 catalog:read，属于有额度的昂贵控制操作。resolve 中的 track 为 TrackRef，默认 standard、strict、allow_preview=false。音频只从该 TrackRef 指定的平台解析，目录型来源没有 resolve_audio 能力时返回 422 CAPABILITY_UNSUPPORTED，下载同样在创建前拒绝。
 
-match 请求默认最多返回 5 个候选、上限 10 个，候选包含 candidate_id、Track、score、reasons、availability 和 completeness；score 是排序分数，不宣称统计概率。匹配上下文期限使用 lifetimes 配置。
-
-手动选择时提交 `match_selection: {match_id, candidate_id}`，track 仍是原曲；服务校验上下文的 owner、原曲、原曲及候选的完整授权身份，以及隐式默认选择的 selection_version，再以候选作为实际歌曲。match_selection 与 auto fallback 互斥。上下文过期、授权身份或默认选择版本变化返回 410 RESOURCE_EXPIRED，不能信任客户端自行填的 matchedFrom 字段。接受下载前保存已验证的稳定目标 TrackRef、证据和必要上下文，后续排队、恢复与任务 retry 不再读取该短期句柄。
-
-自动换源必须同时被服务启用、请求明确允许，且满足最低匹配条件。网络失败不会任意触发替曲；返回 actual_track、quality 与 warnings。解析结果不给普通客户端原始 CDN URL、秘密请求头或解密密钥；播放与文件获取使用后面的媒体契约。
-
-目录型来源可支持搜索／详情而不支持同源 resolve_audio。未指定 match_selection 且 fallback.mode=disabled 时，resolve 返回 422 CAPABILITY_UNSUPPORTED；下载创建同样在接受任务前拒绝这类没有执行路径的请求。手动选择先验证原曲与匹配上下文，再检查候选的音源能力，不要求原平台也支持音频。显式 auto 模式可把目录源能力缺失作为受控匹配入口，仍须满足上述服务开关与阈值，候选无结果则明确失败。original_track 与 actual_track 始终分别保存，不将目录元信息误报为该目录来源的实际音频。
+2026-10-24 已取消跨平台匹配与换源，`/api/v1/tracks/matches` 路由不存在。旧客户端的 `fallback: {"mode":"disabled"}` 与 null match_selection 仅作兼容忽略；下载还允许 disabled 对象携带空 sources。其他换源或匹配参数返回 400 VALIDATION_FAILED。解析结果不公开原始 CDN URL、秘密请求头或解密密钥。
 
 示例 resolve.data：
 
@@ -300,7 +292,6 @@ match 请求默认最多返回 5 个候选、上限 10 个，候选包含 candid
   "quality": "high",
   "quality_policy": "allow_lower",
   "allow_preview": false,
-  "fallback": {"mode": "disabled", "sources": []},
   "destination_id": "dst_default",
   "metadata_policy": "best_effort",
   "duplicate_policy": "reuse"
@@ -309,11 +300,11 @@ match 请求默认最多返回 5 个候选、上限 10 个，候选包含 candid
 
 可选 credential_id 只选择 original_track.source 对应的本人账号；未提供时使用本人的默认凭证，或该能力明确允许的 application／anonymous 模式。手动及 auto 目标来源使用调用方在各来源的默认选择，绝不转交原曲的凭证。接收任务时固定所需 AccountBinding；auto 候选来源的可用绑定固定保存，无可用绑定的来源排除并记录原因，不能在排队后静默改用新默认账号。执行时租用已固定绑定的最新有效版本。destination_id 缺省为调用方默认目标；不接受任意绝对路径、文件名模板或完整歌曲私有扩展。
 
-quality／策略默认见模型，duplicate_policy 为 reuse（默认）或 force；force 仅允许绕过已完成结果，相同活动任务仍 409。match_selection 可按候选接口的规则附加。
+quality／策略默认见模型，duplicate_policy 为 reuse（默认）或 force；force 仅允许绕过已完成结果，相同活动任务仍 409。仅支持同源下载。
 
 新任务及手动 retry 要求 destination 存在、本人有权使用且 accept_new_tasks=true；目标无权访问返回 404，已停用新任务入口返回 422 DESTINATION_UNAVAILABLE。旧任务恢复与已发布文件读取使用原 destination 的持久根及当前 ACL，不跟随新的默认目录。
 
-去重按[规范下载意图](data-models.md#幂等与下载去重)，包含 allow_preview、metadata_policy、稳定手动目标、固定账号绑定及影响产物的有效策略。不同标签要求、试听要求或手动目标不互相复用；同一目标由不同 match 句柄选出可形成相同意图。完成结果必须仍满足权限、文件与策略条件才返回 reused=true；不合格结果按新任务处理。force 不改变指纹，也不能绕过活动唯一约束。
+去重按[规范下载意图](data-models.md#幂等与下载去重)，包含 allow_preview、metadata_policy、固定账号绑定及影响产物的有效策略。不同标签要求、试听要求不互相复用。完成结果必须仍满足权限、文件与策略条件才返回 reused=true；不合格结果按新任务处理。force 不改变指纹，也不能绕过活动唯一约束。
 
 新任务事务提交后返回 202，Location 指向任务查询；去重命中返回 200 和既有 task_id，data.reused=true。返回不等待上游解析与整首下载。
 
@@ -368,7 +359,7 @@ waiting_retry 的 wait_reason 为 admission（本地额度／已知冷却）或 
 
 再次取消 canceling／canceled 返回当前状态，不重复施加副作用。finalizing 返回 409 TASK_FINALIZING；completed／failed 返回 409 TASK_TERMINAL。取消不会隐含删除已发布文件。
 
-retry body 可为空，沿用原 normalized_intent、稳定手动目标和账号绑定，重新校验当前权限、能力与目标可用性，并租用新的授权版本；不重放已过期 match/context 句柄，不重新选择默认账号。若要改变品质／目标／账号则创建普通新任务。返回 202 新 task_id 和 retry_of，不改变旧任务终态；相同活动意图存在时返回 409 ACTIVE_DUPLICATE。原任务未终态返回 409。
+retry body 可为空，沿用原 normalized_intent 和账号绑定，重新校验当前权限、能力与目标可用性，并租用新的授权版本；不重放已过期 context 句柄，不重新选择默认账号。若要改变品质／目标／账号则创建普通新任务。返回 202 新 task_id 和 retry_of，不改变旧任务终态；相同活动意图存在时返回 409 ACTIVE_DUPLICATE。原任务未终态返回 409。
 
 ### 9.3 批量任务
 
@@ -538,6 +529,8 @@ kind 支持 cookie、oauth2、api_key，只有平台声明并已实现的 kind�
 | `PATCH /api/v1/admin/download-policy` | admin | body `{paused: true/false}`，200 返回新策略 |
 
 paused 只停止领取新任务，已有任务继续；取消活动任务仍走明确任务接口。首版没有任意远程修改根目录、监听端口、TLS 后端或执行系统命令的管理路由，相关配置在启动时加载。
+
+管理员还可读取 `GET /api/v1/admin/metrics`（默认 JSON）与 `GET /api/v1/admin/metrics?format=prometheus`（Prometheus 0.0.4 文本）。两种格式均需要 admin scope，未认证 401、无权限 403、未知 format 或参数 400。计数从进程启动累计，重启清零，延迟单位为秒；维度固定，详见[运维观测](../../../operations-observability.md)。
 
 ## 13. 前端最小接入流程
 

@@ -176,9 +176,6 @@ void check_features(const cfg::ServiceConfig& c, const BuildCapabilities& build,
     if (f.direct_media_urls && !build.direct_media_urls) {
         p.add("/features/direct_media_urls", "is not supported by this build");
     }
-    if (f.automatic_fallback && !build.automatic_fallback) {
-        p.add("/features/automatic_fallback", "is not supported by this build");
-    }
     if (f.transcoding && !build.transcoding) {
         p.add("/features/transcoding", "is not supported by this build");
     }
@@ -188,6 +185,9 @@ void check_features(const cfg::ServiceConfig& c, const BuildCapabilities& build,
     if (c.logging.format != "json" && c.logging.format != "text") {
         p.add("/logging/format", "must be json or text");
     }
+    if (c.logging.max_file_bytes < 64 * cfg::kib || c.logging.max_file_bytes > cfg::gib)
+        p.add("/logging/max_file_bytes", "must be between 65536 and 1073741824");
+    if (c.logging.retained_files > 20) p.add("/logging/retained_files", "must be between 0 and 20");
     static const std::set<std::string> levels{"trace", "debug", "info", "warn", "error"};
     if (levels.find(c.logging.level) == levels.end()) {
         p.add("/logging/level", "must be trace, debug, info, warn or error");

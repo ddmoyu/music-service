@@ -123,6 +123,7 @@ TEST_CASE("saturated upstream requests leave health queries and cancellation res
     REQUIRE(global);
     CHECK(global->status == 503);
     CHECK(service.client().Get("/health/live")->status == 200);
+    CHECK(admin.Get("/api/v1/admin/metrics?format=prometheus")->status == 200);
     CHECK(admin.Get(("/api/v1/downloads/" + task).c_str())->status == 200);
     const auto canceled = admin.Post(("/api/v1/downloads/" + task + "/cancel").c_str());
     REQUIRE(canceled);
@@ -133,6 +134,123 @@ TEST_CASE("saturated upstream requests leave health queries and cancellation res
     CHECK(first.get()->status == 200);
     CHECK(second.get()->status == 200);
     CHECK(service.client(tokens[2]).Get("/api/v1/search/tracks?q=after&sources=cat")->status == 200);
+}
+
+TEST_CASE("admin metrics export counters and bounded resource state", "[server][observability]") {
+    Deployment d{"metrics"};
+    REQUIRE(d.run({"init"}).code == server::exit_ok);
+    const auto token = d.read(d.bootstrap());
+    const auto reader_path = d.dir / "out" / "reader-token";
+    REQUIRE(d.run({"token", "issue", "--principal", "prn_local", "--scopes", "catalog:read",
+                   "--output", path_to_utf8(reader_path)}).code == server::exit_ok);
+    RunningService service{d, std::make_shared<infrastructure::observability::MemorySink>()};
+    auto admin = service.client(token);
+    CHECK(service.client().Get("/api/v1/admin/metrics")->status == 401);
+    CHECK(service.client(d.read(reader_path)).Get("/api/v1/admin/metrics?format=prometheus")->status == 403);
+    CHECK(admin.Get("/api/v1/admin/metrics?format=bad")->status == 400);
+    CHECK(admin.Get("/api/v1/admin/metrics?extra=secret")->status == 400);
+    CHECK(admin.Get("/api/v1/search/tracks?q=private-query&sources=cat")->status == 200);
+    const auto metrics = body(admin.Get("/api/v1/admin/metrics"))["data"];
+    CHECK(metrics["instance_id"] == service.report.instance_id);
+    const auto& ops = metrics["operations"];
+    CHECK(ops.size() == 8);
+    CHECK(ops["control_request"]["outcomes"]["failure"].get<int>() >= 4);
+    CHECK(ops["control_request"]["outcomes"]["success"].get<int>() >= 1);
+    CHECK(ops["storage_read"]["count"].get<int>() > 0);
+    CHECK(ops["storage_write"]["count"].get<int>() > 0);
+    for (const auto& op : ops) {
+        const auto& buckets = op["duration_seconds"]["buckets"];
+        CHECK(buckets.size() == 13);
+        CHECK(buckets.back()["le_seconds"].is_null());
+        CHECK(buckets.back()["count"] == op["count"]);
+        std::uint64_t previous = 0;
+        for (const auto& bucket : buckets) {
+            const auto count = bucket["count"].get<std::uint64_t>();
+            CHECK(count >= previous);
+            previous = count;
+        }
+    }
+    const auto exported = admin.Get("/api/v1/admin/metrics?format=prometheus");
+    REQUIRE(exported);
+    REQUIRE(exported->status == 200);
+    CHECK(exported->get_header_value("Content-Type") == "text/plain; version=0.0.4; charset=utf-8");
+    CHECK(exported->get_header_value("Cache-Control").find("no-store") != std::string::npos);
+    CHECK(exported->body.find("# TYPE music_service_operations_total counter") != std::string::npos);
+    CHECK(exported->body.find("# TYPE music_service_operation_duration_seconds histogram") != std::string::npos);
+    CHECK(exported->body.find("le=\"+Inf\"") != std::string::npos);
+    CHECK(exported->body.find("music_service_ready 1") != std::string::npos);
+    CHECK(exported->body.find("music_service_pool_queued{pool=\"catalog\"}") != std::string::npos);
+    CHECK(exported->body.find(token) == std::string::npos);
+    CHECK(exported->body.find("private-query") == std::string::npos);
+    const auto status = body(admin.Get("/api/v1/admin/status"))["data"];
+    CHECK(status["worker_pools"].contains("catalog"));
+    CHECK(status["logging"].contains("queued_records"));
+    CHECK(status["events"]["subscriptions"] == 0);
+    CHECK_FALSE(body(admin.Get("/api/v1/info"))["data"]["features"].contains("automatic_fallback"));
+}
+
+TEST_CASE("removed matching and source switching are rejected before task creation", "[server][downloads]") {
+    Deployment d{"no-switching"};
+    REQUIRE(d.run({"init"}).code == server::exit_ok);
+    RunningService service{d, std::make_shared<infrastructure::observability::MemorySink>()};
+    auto admin = service.client(d.read(d.bootstrap()));
+    const httplib::Headers key{{"Idempotency-Key", "removed-feature"}};
+    for (const auto& extra : {json{{"fallback", {{"mode", "auto"}}}},
+                             json{{"fallback", {{"mode", "disabled"}, {"sources", {"aud"}}}}},
+                             json{{"match_selection", {{"match_id", "mat_old"}, {"candidate_id", "x"}}}}}) {
+        json request{{"track", {{"source", "aud"}, {"id", "one"}}}};
+        request.update(extra);
+        CHECK(admin.Post("/api/v1/downloads", key, request.dump(), "application/json")->status == 400);
+        CHECK(admin.Post("/api/v1/assets/resolve", request.dump(), "application/json")->status == 400);
+    }
+    CHECK(admin.Post("/api/v1/tracks/matches", "{}", "application/json")->status == 404);
+    CHECK(body(admin.Get("/api/v1/downloads"))["data"]["items"].empty());
+}
+
+TEST_CASE("Windows service logging uses bounded rotating files through command hooks", "[server][observability][rotation]") {
+    Deployment d{"service-file-logs"};
+    d.config["logging"] = {{"max_file_bytes", 65536}, {"retained_files", 1}};
+    d.write_config();
+    REQUIRE(d.run({"init"}).code == server::exit_ok);
+    server::CommandHooks hooks;
+    hooks.log_to_file = true;
+    hooks.should_stop = [] { return true; };
+    const auto result = d.run({"serve"}, hooks);
+    INFO(result.err);
+    CHECK(result.code == server::exit_ok);
+    CHECK(result.out.empty());
+    std::ifstream in(d.dir / "data" / "logs" / "music-service.log", std::ios::binary);
+    REQUIRE(in);
+    bool ready = false, stopped = false;
+    std::string line;
+    while (std::getline(in, line)) {
+        const auto record = json::parse(line);
+        ready = ready || record["event"] == "startup.ready";
+        stopped = stopped || record["event"] == "shutdown.lock_released";
+    }
+    CHECK(ready);
+    CHECK(stopped);
+}
+
+TEST_CASE("a rejected second instance cannot write into the active file log", "[server][observability][rotation]") {
+    Deployment d{"file-log-lock"};
+    d.config["logging"] = {{"file_enabled", true}};
+    d.write_config();
+    REQUIRE(d.run({"init"}).code == server::exit_ok);
+    RunningService service{d, nullptr};
+    const auto duplicate = d.run({"serve"});
+    CHECK(duplicate.code == server::exit_failed);
+    CHECK(service.stop().code == server::exit_ok);
+    std::ifstream in(d.dir / "data" / "logs" / "music-service.log", std::ios::binary);
+    REQUIRE(in);
+    int ready = 0;
+    std::string line;
+    while (std::getline(in, line)) {
+        const auto record = json::parse(line);
+        CHECK(record["event"] != "startup.failed");
+        if (record["event"] == "startup.ready") ++ready;
+    }
+    CHECK(ready == 1);
 }
 
 TEST_CASE("sources all fits the nine built-in source count by default", "[stability][server]") {

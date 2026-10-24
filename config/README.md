@@ -39,15 +39,23 @@
 | `media_limits` | `global`、`per_principal`、`upstream`、`local_files` |
 | `media_upstream` | `workers` |
 | `media_stream` | `bridge_buffer_bytes`、`connect_timeout_seconds`、`idle_seconds`、`max_stream_seconds` |
-| `lifetimes` | `asset_seconds`、`cursor_seconds`、`match_seconds`、`media_access_seconds` |
+| `lifetimes` | `asset_seconds`、`cursor_seconds`、`media_access_seconds` |
 | `storage` | `writer_queue`、`read_connections`、`wait_budget_ms` |
 | `cache` | `catalog_entries`、`catalog_bytes`、`catalog_ttl_seconds` |
-| `handles` | `contexts`、`cursors`、`assets`、`matches`、`media_tickets`、`total_bytes` |
+| `handles` | `contexts`、`cursors`、`assets`、`media_tickets`、`total_bytes` |
 | `shutdown` | `soft_seconds` |
 | `filesystem` | `failed_work_retention_hours` |
-| `features` | `file_access`（未设置时跟随 media.enabled）、`media_proxy`、`direct_media_urls`、`automatic_fallback`、`transcoding` |
-| `logging` | `format`（json／text）、`level`（trace／debug／info／warn／error） |
+| `features` | `file_access`（未设置时跟随 media.enabled）、`media_proxy`、`direct_media_urls`、`transcoding` |
+| `logging` | `format`（json／text）、`level`（trace／debug／info／warn／error）、`file_enabled`、`max_file_bytes`、`retained_files` |
 | `destinations[]` | `id`、`name`、`root`、`principals`、`accept_new_tasks` |
+
+## 运维观测与日志轮转
+
+`GET /api/v1/admin/metrics` 提供 JSON 指标，`?format=prometheus` 导出 Prometheus 文本，均需 admin scope。`admin/status` 同时返回线程池、事件订阅和异步日志队列状态。计数和延迟覆盖控制请求、上游、下载执行、音频处理、存储读写、媒体及事件，详细口径见[运维观测](../docs/operations-observability.md)。
+
+`logging.file_enabled` 默认 false（前台输出到 stderr），Windows 服务模式自动开启文件日志。文件为 `data_dir/logs/music-service.log`；`max_file_bytes` 默认 10 MiB，允许 64 KiB～1 GiB；`retained_files` 默认 5，允许 0～20。默认最多保留当前文件与 5 个编号归档。写入、刷新和轮转由有界后台队列执行。
+
+跨平台匹配、手动与自动换源已取消。旧配置的 `features.automatic_fallback=false` 兼容忽略，true 拒绝启动；`lifetimes.match_seconds` 和 `handles.matches` 仅校验旧值范围后忽略，已无对应运行对象。
 
 ## 容量与超时的实际行为
 
@@ -129,7 +137,7 @@ music-service --config config.json import-ncm --input "D:\音乐\歌曲.ncm" --p
 
 ## 启动前的组合检查
 
-- 构建中没有的功能（媒体／事件入口、在线代理、直链、自动换源、转码、外部工具、未编入的平台）不能启用。
+- 构建中没有的功能（媒体／事件入口、在线代理、直链、转码、外部工具、未编入的平台）不能启用。
 - 已启用的监听不能端口冲突；端口 0 只允许 loopback；监听非 loopback 地址必须配置对应 `public_urls`，远程 http 地址需显式 `security.allow_insecure_remote`。
 - 事件订阅与媒体响应的全局额度至少比各自 workers 少 2；每 principal 额度不超过全局额度。
 - `catalog.default_sources` 必须是已配置且启用的平台，数量不超过 `max_sources_per_request`。

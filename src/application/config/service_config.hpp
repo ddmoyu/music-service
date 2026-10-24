@@ -165,7 +165,6 @@ struct MediaStream {
 struct Lifetimes {
     seconds asset{300};
     seconds cursor{600};
-    seconds match{300};
     seconds media_access{60};
 };
 
@@ -185,7 +184,6 @@ struct Handles {
     std::uint32_t contexts{10000};
     std::uint32_t cursors{5000};
     std::uint32_t assets{1000};
-    std::uint32_t matches{1000};
     std::uint32_t media_tickets{2000};
     std::uint64_t total_bytes{32 * mib};
 };
@@ -202,13 +200,15 @@ struct Features {
     bool file_access{false};
     bool media_proxy{false};
     bool direct_media_urls{false};
-    bool automatic_fallback{false};
     bool transcoding{false};
 };
 
 struct Logging {
     std::string format{"json"}; // json | text
     std::string level{"info"};  // trace | debug | info | warn | error
+    bool file_enabled{false}; // Windows service always enables the file sink
+    std::uint64_t max_file_bytes{10 * mib};
+    std::uint32_t retained_files{5};
 };
 
 struct DestinationConfig {

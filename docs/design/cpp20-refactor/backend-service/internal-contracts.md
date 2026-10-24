@@ -27,9 +27,8 @@
 | DiscoveryService.list/get_items | source、目录类型／id、分页 → 目录／页 | 保留 catalog_kind 和平台顺序 |
 | LyricsService.get | TrackRef、context_ref → 统一歌词 | 私有格式解析限定在 Provider 内 |
 | LinkParseService.parse | 分享文本 → matched、kind、ref | 只展开允许平台的有限短链 |
-| ResolveService.resolve | 原曲、策略、可选匹配选择 → 内部资源与公开描述 | 可保存有限期 asset 句柄，不启动下载 |
+| ResolveService.resolve | 原曲、品质策略 → 内部资源与公开描述 | 可保存有限期 asset 句柄，不启动下载 |
 | ProbeService.probe | 已授权内部资源、预算 → 探测证据 | 有界读取，不修改已发布文件 |
-| MatchService.find | 原曲、目标来源、限额 → 匹配上下文与候选 | 搜索／探测占共享上游预算 |
 | DownloadCommandService.create/create_batch | 创建请求、幂等 key、上下文 → 任务／批次结果 | 一个创建事务，提交后调度唤醒 |
 | DownloadCommandService.cancel | owner、task_id → 当前状态／接受结果 | 状态条件转换，提交后通知 Runner |
 | DownloadCommandService.retry | owner、旧 task_id、新幂等 key → 新 task_id | 复制请求并重新校验，不重开旧终态 |
@@ -66,7 +65,7 @@ Provider 输入仅使用统一查询和自己的内部解析上下文；输出�
 
 ProviderBundle 的声明必须与能力工厂一致；Registry 启动冻结。Context 与 task 私有快照记录 schema／implementation 版本；变更后通过受控迁移或重新解析恢复，不能盲读旧结构。Provider 不拥有任务队列、数据库或最终文件发布职责。
 
-目录型平台的匹配由 MatchService／ResolveService 编排，不通过平台内部跨源递归调用。ResolveService 先处理合法的 match_selection，再检查实际目标 IAssetResolver；原曲无音源能力不妨碍手动选择目标。
+目录型平台没有 IAssetResolver 时，ResolveService 和 DownloadService 返回 CAPABILITY_UNSUPPORTED。资源解析与下载没有跨源编排入口。
 
 ICredentialVerifier、ICredentialRefresher、IApplicationTokenProvider 是可选的小端口，以 source + auth_profile + kind 由 ProviderBundle 注册。输入为只读授权快照和操作上下文，输出为校验结果或待提交的秘密候选；平台工厂不得取得 Repository 或可写 SecretStore。CredentialService 负责刷新合并与条件提交，详见[授权注册与调用](provider-extensibility.md#授权能力注册与调用)。
 
@@ -154,7 +153,7 @@ version 用于状态与进度并发控制，execution_id 用于区分执行世�
 
 所有任务所属批次关系以 batch_items 为准；task 不使用一个可变 batch_id 列来表达多对多关系。批次统计实时按其条目关联任务快照计算；条目重复时计数按条目，取消时按唯一 task_id 执行。
 
-fingerprint 在同一事务中检查与插入，不能只先 SELECT 再在另一个事务 INSERT。规范化字段与完成结果适配规则以[下载意图](data-models.md#幂等与下载去重)为准；Repository 不自行补默认值或解释 match_selection。已完成结果复用须在事务外核验文件、权限与策略证据，事务内再次核对相关任务／资产版本；不能把一次旧检查当成永久存在保证。未通过复用检查的完成任务不占活动指纹，新任务可以正常创建。
+fingerprint 在同一事务中检查与插入，不能只先 SELECT 再在另一个事务 INSERT。规范化字段与完成结果适配规则以[下载意图](data-models.md#幂等与下载去重)为准；Repository 不自行补默认值。已完成结果复用须在事务外核验文件、权限与策略证据，事务内再次核对相关任务／资产版本；不能把一次旧检查当成永久存在保证。未通过复用检查的完成任务不占活动指纹，新任务可以正常创建。
 
 ### 6.1 事务边界
 
@@ -221,7 +220,6 @@ Finalizer 的输入是通过验证的临时产物和已确认策略，输出是�
 | 搜索单源超时 | SearchService | 按逐源结果返回部分成功／整体超时 |
 | Provider JSON 变化 | Provider 解析器 | 上游协议错误，不伪造空数据 |
 | 同曲 URL 失效 | Resolve／Resume 策略 | 重新解析并核对资源，不盲目追加 |
-| 跨平台候选选择 | Match／Resolve 策略 | 必须满足明确换源策略，记录 actual_track |
 | 用户取消与 finalizing 竞争 | TaskRepository | 事务决定接受取消或 409 |
 | 标签 best_effort 失败 | AudioProcessor + Runner | 音频可完成，结果保留 warnings |
 | SQLite 提交失败 | Repository + Runner | 不发布假版本；保留材料，进入恢复处理 |

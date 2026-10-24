@@ -720,8 +720,6 @@ TEST_CASE("resolve applies the quality and preview rules and binds the asset", "
 
     // No same-source audio and no automatic fallback: no execution path.
     CHECK(c.assets->resolve({owner, track("meta", "1"), {}}).error().code == ErrorCode::capability_unsupported);
-    CHECK(c.assets->resolve({owner, song, {}, true, false}).error().code == ErrorCode::capability_unsupported);
-    CHECK(c.assets->resolve({owner, song, {}, false, true}).error().code == ErrorCode::capability_unsupported);
 
     // Assets belong to their owner.
     CHECK(c.assets->probe(other, asset.asset_id).error().code == ErrorCode::not_found);

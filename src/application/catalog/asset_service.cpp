@@ -90,12 +90,6 @@ AssetService::AssetService(config::Lifetimes lifetimes, config::Handles handles,
 void AssetService::collect_expired() { assets_->collect_expired(clock_->now()); }
 
 domain::Result<AssetDescriptor> AssetService::resolve(const ResolveRequest& request) {
-    if (request.match_selection) {
-        return Error{ErrorCode::capability_unsupported, "match selection is not available yet", false, {}};
-    }
-    if (request.automatic_fallback) {
-        return Error{ErrorCode::capability_unsupported, "automatic fallback is not enabled", false, {}};
-    }
     const auto& source = request.track.source.value();
     if (auto known = providers_->check_source(source); !known) {
         return known.error();

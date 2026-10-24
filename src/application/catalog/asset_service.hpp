@@ -25,8 +25,6 @@ struct ResolveRequest {
     std::string owner_id;
     domain::TrackRef track;
     domain::ResourceRequirement requirement;
-    bool automatic_fallback{false}; // fallback.mode=auto
-    bool match_selection{false};    // a match_selection was given
 };
 
 // The public AssetDescriptor: never the upstream URL or request headers.
@@ -103,7 +101,7 @@ struct DeliveryFacts {
 // asset_id is bound to its owner and to the authorization identity that produced
 // it; it lives lifetimes.asset seconds, never past a known upstream expiry minus a
 // safety margin. No automatic fallback: a track whose source cannot resolve audio is
-// CAPABILITY_UNSUPPORTED, and matching (T33) is not available yet.
+// CAPABILITY_UNSUPPORTED. Audio is always resolved from the requested source.
 class AssetService {
 public:
     static constexpr std::chrono::seconds expiry_margin{30};

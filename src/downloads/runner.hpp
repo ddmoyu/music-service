@@ -74,6 +74,7 @@ std::string_view to_string(RunOutcome outcome) noexcept;
 struct RunReport {
     RunOutcome outcome{RunOutcome::left};
     std::string detail; // error code or reason, no secrets
+    std::chrono::nanoseconds elapsed{}; // one claimed execution, including retries and processing
 };
 
 struct RunnerServices {

@@ -21,7 +21,10 @@
 #include "event_server/httplib/event_server.hpp"
 #include "media_server/httplib/media_server.hpp"
 #include "infrastructure/auth/access_tokens.hpp"
+#include "infrastructure/observability/metrics.hpp"
+#include "infrastructure/observability/instrumented_ports.hpp"
 #include "infrastructure/filesystem/destination_files.hpp"
+#include "infrastructure/filesystem/files.hpp"
 #include "infrastructure/filesystem/paths.hpp"
 #include "infrastructure/secrets/file_secret_store.hpp"
 #include "infrastructure/transport/httplib_transport.hpp"
@@ -94,6 +97,8 @@ struct ProcessHost::State {
     std::unique_ptr<Instance> instance;
     observability::Logger log;
     std::shared_ptr<observability::AsyncLogSink> async_log;
+    std::shared_ptr<observability::InMemoryMetrics> metrics = std::make_shared<observability::InMemoryMetrics>();
+    std::chrono::steady_clock::time_point started_steady = std::chrono::steady_clock::now();
     std::shared_ptr<infrastructure::secrets::FileSecretStore> secrets;
     std::shared_ptr<infrastructure::auth::MbedTlsTokenCodec> codec;
     std::shared_ptr<application::accounts::AccessTokenAuthenticator> authenticator;
@@ -139,6 +144,8 @@ struct ProcessHost::State {
         s.instance_id = report.instance_id;
         s.version = std::string{service_version};
         s.started_at = started_at;
+        s.uptime_seconds = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - started_steady).count());
         s.storage_available = instance && instance->database != nullptr;
         s.providers_registered = registry ? registry->size() : 0;
         s.destinations = destinations.size();
@@ -161,10 +168,18 @@ struct ProcessHost::State {
             s.log_dropped = logging.dropped;
             s.log_failures = logging.failures;
             s.log_queued_bytes = logging.bytes;
+            s.log_written = logging.written;
+            s.log_queued_records = logging.queued;
         }
         if (media) {
             s.media_listening = true;
             s.media_responses = media->active();
+        }
+        if (events_hub) s.event_subscriptions = events_hub->subscriptions();
+        for (const auto& pool : {catalog_executor, download_executor, processing_executor, media_upstream_executor}) {
+            if (!pool) continue;
+            const auto stats = pool->stats();
+            s.worker_pools.push_back({pool->name(), stats.queued, stats.running, stats.completed, stats.failed, stats.rejected});
         }
         return s;
     }
@@ -357,12 +372,26 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
     };
 
     state->started_at = clock->now();
-    auto instance = open_instance(config);
+    auto instance = open_instance(config, state->metrics);
     if (!instance) {
         return fail(std::move(instance).error(), "instance");
     }
     state->instance = std::move(instance).value();
     auto& inst = *state->instance;
+    // The instance lock owns the log series too: a second process must not rotate it.
+    if (!options.log_sink && config.logging.file_enabled) {
+        if (auto created = infrastructure::filesystem::create_directories(inst.layout.logs, infrastructure::filesystem::Privacy::normal); !created)
+            return fail(created.error(), "logging");
+        try {
+            sink = std::make_shared<observability::AsyncLogSink>(std::make_shared<observability::RotatingFileSink>(
+                inst.layout.logs / "music-service.log", config.logging.format == "text",
+                observability::LogRotation{config.logging.max_file_bytes, config.logging.retained_files}));
+            state->async_log = std::dynamic_pointer_cast<observability::AsyncLogSink>(sink);
+            state->log = observability::Logger{sink, level ? level.value() : observability::LogLevel::info, clock};
+        } catch (...) {
+            return fail(domain::Error{domain::ErrorCode::internal, "cannot initialize the rotating log file", false, {}}, "logging");
+        }
+    }
     state->report.instance_id = inst.ids->next("inst_");
     state->log.info("startup.database_ready",
                     {{"data_dir", infrastructure::filesystem::path_to_utf8(inst.layout.root)}});
@@ -451,6 +480,7 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
         }
         state->transport = std::move(transport).value();
     }
+    state->transport = std::make_shared<observability::ObservedTransport>(state->transport, state->metrics);
     state->upstream = std::make_shared<application::transport::UpstreamClient>(state->admission, state->transport, clock,
         application::transport::TrafficTimeouts{config.download_timeouts.connect, config.download_timeouts.read_idle,
                                                config.media_stream.connect_timeout, config.media_stream.idle});
@@ -521,8 +551,12 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
     runner_services.work_files = state->files;
     runner_services.files = state->files;
     runner_services.finalizer = std::make_shared<downloads::Finalizer>(publications, state->files);
-    runner_services.processors = [processors](const application::ports::ProcessingPlan& plan) {
-        return processors->find(plan);
+    runner_services.processors = [processors, metrics = state->metrics](const application::ports::ProcessingPlan& plan)
+        -> domain::Result<std::shared_ptr<application::ports::AudioProcessor>> {
+        auto processor = processors->find(plan);
+        if (!processor) return processor.error();
+        return std::shared_ptr<application::ports::AudioProcessor>{
+            std::make_shared<observability::ObservedProcessor>(*processor, metrics)};
     };
     runner_services.processing = state->processing_executor;
     runner_services.clock = clock;
@@ -534,6 +568,11 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
     state->scheduler = std::make_shared<downloads::DownloadScheduler>(
         downloads::SchedulerOptions{download_slots}, tasks, state->admission, runner, state->download_executor, clock,
         [host](const application::ports::TaskRecord& claimed, const downloads::RunReport& report) {
+            using application::ports::MetricOutcome;
+            const auto outcome = report.outcome == downloads::RunOutcome::completed ? MetricOutcome::success
+                : report.outcome == downloads::RunOutcome::failed ? MetricOutcome::failure
+                : report.outcome == downloads::RunOutcome::canceled ? MetricOutcome::canceled : MetricOutcome::deferred;
+            host->metrics->record(application::ports::MetricOperation::download, outcome, report.elapsed);
             host->log.info("download.run", {{"task_id", claimed.task_id},
                                             {"outcome", std::string{downloads::to_string(report.outcome)}},
                                             {"detail", report.detail}});
@@ -582,6 +621,8 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
                                                      {"path", path},
                                                      {"status", status},
                                                      {"elapsed_ms", static_cast<std::int64_t>(elapsed.count())}});
+                    raw->metrics->record(application::ports::MetricOperation::events,
+                        application::ports::http_metric_outcome(status), elapsed);
                 }});
         auto events_port = state->events->bind();
         if (!events_port) {
@@ -636,6 +677,8 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
                                                     {"path", path},
                                                     {"status", status},
                                                     {"elapsed_ms", static_cast<std::int64_t>(elapsed.count())}});
+                    raw->metrics->record(application::ports::MetricOperation::media,
+                        application::ports::http_metric_outcome(status), elapsed);
                 }});
         auto media_port = state->media->bind();
         if (!media_port) {
@@ -686,10 +729,13 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
                                            {"path", path},
                                            {"status", status},
                                            {"elapsed_ms", static_cast<std::int64_t>(elapsed.count())}});
+            raw->metrics->record(application::ports::MetricOperation::control,
+                application::ports::http_metric_outcome(status), elapsed);
         },
         std::make_shared<SchedulerPolicy>(state->scheduler),
         state->file_access,
-        state->media_access};
+        state->media_access,
+        state->metrics};
     state->control = std::make_unique<api::ControlApi>(std::move(api_options), std::move(services));
     state->control_workers = config.control.workers;
     auto port = state->control->bind();

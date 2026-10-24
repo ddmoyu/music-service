@@ -13,6 +13,10 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
+#include <fstream>
+#include <filesystem>
+#include "infrastructure/filesystem/paths.hpp"
 
 using namespace music_service::infrastructure;
 using namespace music_service::infrastructure::observability;
@@ -143,17 +147,118 @@ TEST_CASE("manual clock moves only when told", "[observability][clock]") {
     CHECK(clock.now() < wall);
 }
 
-TEST_CASE("metrics aggregate counters and latencies", "[observability][metrics]") {
-    InMemoryMetrics metrics;
-    metrics.increment("upstream.requests");
-    metrics.increment("upstream.requests", 2);
-    metrics.observe("admission.wait", std::chrono::milliseconds{3});
-    metrics.observe("admission.wait", std::chrono::milliseconds{7});
+namespace {
+namespace ports = music_service::application::ports;
+namespace fs = std::filesystem;
+struct LogDirectory {
+    fs::path path = fs::temp_directory_path() / filesystem::path_from_utf8("music-log-轮转-" + IdGenerator{}.next("tmp_"));
+    LogDirectory() { fs::create_directories(path); }
+    ~LogDirectory() { std::error_code ec; fs::remove_all(path, ec); }
+};
+}
 
-    CHECK(metrics.counter("upstream.requests") == 3);
-    CHECK(metrics.counter("missing") == 0);
-    const auto wait = metrics.latency("admission.wait");
-    CHECK(wait.count == 2);
-    CHECK(wait.total == std::chrono::milliseconds{10});
-    CHECK(wait.max == std::chrono::milliseconds{7});
+TEST_CASE("metrics retain fixed dimensions and exact concurrent totals", "[observability][metrics]") {
+    InMemoryMetrics metrics;
+    std::vector<std::jthread> workers;
+    for (int i = 0; i < 4; ++i) workers.emplace_back([&] {
+        for (int n = 0; n < 1000; ++n)
+            metrics.record(ports::MetricOperation::upstream, ports::MetricOutcome::success, std::chrono::milliseconds{5});
+    });
+    workers.clear();
+    metrics.record(ports::MetricOperation::upstream, ports::MetricOutcome::failure, std::chrono::milliseconds{8});
+    metrics.record(ports::MetricOperation::upstream, ports::MetricOutcome::canceled, std::chrono::nanoseconds{-1});
+    metrics.record(ports::MetricOperation::upstream, ports::MetricOutcome::deferred, std::chrono::seconds{400});
+    const auto snapshot = metrics.snapshot();
+    const auto& item = snapshot.operations[static_cast<std::size_t>(ports::MetricOperation::upstream)];
+    CHECK(item.count == 4003);
+    CHECK(item.outcomes == std::array<std::uint64_t, 4>{4000, 1, 1, 1});
+    CHECK(item.duration_ns == 420008000000ULL);
+    CHECK(item.max_duration_ns == 400000000000ULL);
+    CHECK(item.durations[0] == 1);
+    CHECK(item.durations[1] == 4000);
+    CHECK(item.durations[2] == 1);
+    CHECK(item.durations.back() == 1);
+    CHECK(snapshot.operations[0].count == 0);
+}
+
+TEST_CASE("metric timers count exceptions without changing their outcome", "[observability][metrics]") {
+    auto metrics = std::make_shared<InMemoryMetrics>();
+    CHECK_THROWS_AS(([&] {
+        ports::MetricTimer timer{metrics, ports::MetricOperation::processing};
+        throw std::runtime_error("failed");
+    }()), std::runtime_error);
+    CHECK(metrics->snapshot().operations[static_cast<std::size_t>(ports::MetricOperation::processing)].outcomes[1] == 1);
+}
+
+TEST_CASE("file logs rotate within limits and retain redacted complete records", "[observability][logger][rotation]") {
+    LogDirectory dir;
+    const auto file = dir.path / "music-service.log";
+    const LogRotation limits{512, 2};
+    for (int session = 0; session < 2; ++session) {
+        auto target = std::make_shared<RotatingFileSink>(file, false, limits);
+        auto sink = std::make_shared<AsyncLogSink>(target);
+        Logger logger{sink, LogLevel::info, std::make_shared<ManualClock>()};
+        for (int i = 0; i < 20; ++i)
+            logger.info("rotation.check", {{"sequence", session * 20 + i}, {"cookie", "private-cookie"}});
+        sink->close();
+        CHECK(sink->stats().written == 20);
+        CHECK(sink->stats().failures == 0);
+    }
+    int files = 0;
+    int last_sequence = -1;
+    for (const auto& entry : fs::directory_iterator(dir.path)) {
+        ++files;
+        CHECK(entry.file_size() <= limits.max_file_bytes);
+        std::ifstream in(entry.path(), std::ios::binary);
+        std::string line;
+        while (std::getline(in, line)) {
+            const auto record = nlohmann::json::parse(line);
+            CHECK(record["cookie"] == "[REDACTED]");
+            CHECK(line.find("private-cookie") == std::string::npos);
+            last_sequence = std::max(last_sequence, record["sequence"].get<int>());
+        }
+    }
+    CHECK(files == 3);
+    CHECK(last_sequence == 39);
+}
+
+TEST_CASE("rotation failures are counted and cannot grow the active file", "[observability][logger][rotation]") {
+    LogDirectory dir;
+    const auto file = dir.path / "music-service.log";
+    const LogRotation limits{128, 1};
+    auto target = std::make_shared<RotatingFileSink>(file, false, limits);
+    const LogRecord record{{}, LogLevel::info, "write", {}};
+    target->write(record);
+    const auto previous_size = fs::file_size(file);
+    fs::create_directory(dir.path / "music-service.log.1");
+    {
+        AsyncLogSink sink{target};
+        sink.write(record);
+        sink.close();
+        CHECK(sink.stats().failures == 1);
+        CHECK(sink.stats().written == 0);
+    }
+    CHECK(fs::file_size(file) == previous_size);
+    fs::remove(dir.path / "music-service.log.1");
+    CHECK_NOTHROW(target->write(record));
+    CHECK(fs::is_regular_file(dir.path / "music-service.log.1"));
+    CHECK(fs::file_size(file) <= limits.max_file_bytes);
+    const LogRecord huge{{}, LogLevel::info, std::string(200, 'x'), {}};
+    CHECK_THROWS(target->write(huge));
+    CHECK(fs::file_size(file) <= limits.max_file_bytes);
+}
+
+TEST_CASE("text file logs support zero archives and reject non-files", "[observability][logger][rotation]") {
+    LogDirectory dir;
+    const auto file = dir.path / "music-service.log";
+    {
+        RotatingFileSink sink{file, true, {96, 0}};
+        for (int i = 0; i < 10; ++i) sink.write({{}, LogLevel::info, "a\nforged", {}});
+    }
+    CHECK_FALSE(fs::exists(dir.path / "music-service.log.1"));
+    CHECK(fs::file_size(file) <= 96);
+    std::ifstream in(file, std::ios::binary);
+    std::string line;
+    while (std::getline(in, line)) CHECK(line.find("a\\nforged") != std::string::npos);
+    CHECK_THROWS(RotatingFileSink(dir.path, false));
 }

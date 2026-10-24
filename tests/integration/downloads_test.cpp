@@ -90,7 +90,7 @@ struct Downloads {
     }
 
     DownloadRequest request(std::string_view source_name = "both", std::string_view id = "1") const {
-        return DownloadRequest{track(source_name, id), {}, false, false, std::nullopt, std::nullopt,
+        return DownloadRequest{track(source_name, id), {}, std::nullopt, std::nullopt,
                                domain::MetadataPolicy::best_effort, false};
     }
     std::string key(int n) const { return "idempotency-key-" + std::to_string(n); }
@@ -288,12 +288,11 @@ TEST_CASE("different product or content rules are different downloads", "[downlo
     explicit_defaults.destination_id = "dst_main";
     CHECK(d.create(explicit_defaults, 5, "explicit").view.task.task_id == plain.view.task.task_id);
 
-    // A36: manual targets are stable, verified refs (match handles never enter the intent).
+    // Same-source tracks preserve persisted fingerprints and reuse behavior.
     const auto binding = anonymous(d.owner, "both");
-    const auto target_binding = anonymous(d.owner, "aud");
     const auto intent_for = [&](std::string_view target_id) {
         return unwrap(domain::NormalizedDownloadIntent::normalize(
-            {d.owner, track("both", "x"), domain::ManualTarget{track("aud", target_id)}, {binding, target_binding},
+            {d.owner, track("both", target_id), domain::SameSource{}, {binding},
              {}, domain::MetadataPolicy::best_effort, {"dst_main", "v", "n", "m"}}));
     };
     CHECK(domain::fingerprint(intent_for("t1")) == domain::fingerprint(intent_for("t1")));
@@ -305,7 +304,7 @@ TEST_CASE("different product or content rules are different downloads", "[downlo
     CHECK(same.reused);
     CHECK(same.task.task_id == first.task.task_id);
     const auto stored = unwrap(d.tasks->get_intent(first.task.task_id));
-    CHECK(std::get<domain::ManualTarget>(stored.selection()).target == track("aud", "t1"));
+    CHECK(stored.original_track() == track("both", "t1"));
 }
 
 TEST_CASE("new quality and lyric semantics do not reuse older completed products", "[downloads][stage-e]") {
@@ -385,13 +384,6 @@ TEST_CASE("requests are checked before anything is stored", "[downloads]") {
     CHECK(d.create_error(d.request("cat"), 2).code == ErrorCode::capability_unsupported); // no audio
     CHECK(d.create_error(d.request("off"), 3).code == ErrorCode::provider_disabled);
     CHECK(d.create_error(d.request("aud"), 4).code == ErrorCode::credentials_required);
-    auto fallback = d.request();
-    fallback.automatic_fallback = true;
-    CHECK(d.create_error(fallback, 5).code == ErrorCode::capability_unsupported);
-    auto matched = d.request();
-    matched.match_selection = true;
-    CHECK(d.create_error(matched, 6).code == ErrorCode::capability_unsupported);
-
     auto destination = d.request();
     destination.destination_id = "dst_private"; // not this principal's
     CHECK(d.create_error(destination, 7).code == ErrorCode::not_found);

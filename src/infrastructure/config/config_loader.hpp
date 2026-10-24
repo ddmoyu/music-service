@@ -18,7 +18,6 @@ struct BuildCapabilities {
     bool event_server{false};
     bool media_proxy{false};
     bool direct_media_urls{false};
-    bool automatic_fallback{false};
     bool transcoding{false};
     bool app_profiles{false};
     std::set<std::string, std::less<>> providers;

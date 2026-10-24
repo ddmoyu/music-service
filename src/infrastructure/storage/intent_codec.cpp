@@ -2,7 +2,6 @@
 
 #include <nlohmann/json.hpp>
 
-#include <type_traits>
 #include <variant>
 
 namespace music_service::infrastructure::storage {
@@ -55,22 +54,7 @@ domain::Error corrupt(std::string_view reason) {
 } // namespace
 
 std::string encode_intent(const domain::NormalizedDownloadIntent& intent) {
-    json selection = std::visit(
-        [](const auto& s) -> json {
-            using T = std::decay_t<decltype(s)>;
-            if constexpr (std::is_same_v<T, domain::SameSource>) {
-                return {{"kind", "same"}};
-            } else if constexpr (std::is_same_v<T, domain::ManualTarget>) {
-                return {{"kind", "manual"}, {"target", ref_to_json(s.target)}};
-            } else {
-                json sources = json::array();
-                for (const auto& source : s.candidate_sources) {
-                    sources.push_back(source.value());
-                }
-                return {{"kind", "auto"}, {"sources", sources}, {"strategy_version", s.strategy_version}};
-            }
-        },
-        intent.selection());
+    const json selection{{"kind", "same"}};
 
     json accounts = json::array();
     for (const auto& binding : intent.account_bindings()) {
@@ -133,25 +117,8 @@ domain::Result<domain::NormalizedDownloadIntent> decode_intent(std::string_view 
         domain::SourceSelection selection{domain::SameSource{}};
         const auto& sel = doc.at("selection");
         const auto kind = sel.at("kind").get<std::string>();
-        if (kind == "manual") {
-            auto target = ref_from_json(sel.at("target"));
-            if (!target) {
-                return std::move(target).error();
-            }
-            selection = domain::ManualTarget{std::move(target).value()};
-        } else if (kind == "auto") {
-            domain::AutoFallback fallback;
-            fallback.strategy_version = sel.at("strategy_version").get<std::uint32_t>();
-            for (const auto& item : sel.at("sources")) {
-                auto source = domain::SourceId::parse(item.get<std::string>());
-                if (!source) {
-                    return std::move(source).error();
-                }
-                fallback.candidate_sources.push_back(std::move(source).value());
-            }
-            selection = std::move(fallback);
-        } else if (kind != "same") {
-            return corrupt("unknown selection kind");
+        if (kind != "same") {
+            return corrupt("source switching has been removed; only same-source intents are supported");
         }
 
         std::vector<domain::AccountBinding> bindings;

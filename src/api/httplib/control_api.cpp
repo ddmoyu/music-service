@@ -19,6 +19,9 @@
 #include <charconv>
 #include <ctime>
 #include <exception>
+#include <iomanip>
+#include <locale>
+#include <sstream>
 #include "application/ports/runtime/scope_exit.hpp"
 #include <mutex>
 #include <set>
@@ -535,7 +538,6 @@ json task_json(const application::tasks::TaskView& view) {
                 {"quality_policy", domain::to_string(requirement.policy)},
                 {"allow_preview", requirement.allow_preview},
                 {"actual_quality", execution_field(t, "actual_quality")},
-                {"fallback", {{"mode", "disabled"}, {"sources", json::array()}}},
                 {"metadata_policy", domain::to_string(intent.metadata_policy())},
                 {"attempt", t.attempt},
                 {"destination_id", t.destination_id},
@@ -584,7 +586,7 @@ domain::Result<application::tasks::DownloadRequest> parse_download(const json& b
     if (!source || !id) {
         return bad("track", "has an invalid source or id");
     }
-    application::tasks::DownloadRequest request{{std::move(source).value(), std::move(id).value()}, {}, false, false,
+    application::tasks::DownloadRequest request{{std::move(source).value(), std::move(id).value()}, {},
                                                 std::nullopt, std::nullopt, domain::MetadataPolicy::best_effort, false};
     const auto text = [&](const char* key, std::optional<std::string>& out) -> domain::Result<void> {
         const auto it = body.find(key);
@@ -639,7 +641,7 @@ domain::Result<application::tasks::DownloadRequest> parse_download(const json& b
     }
     if (const auto fallback = body.find("fallback"); fallback != body.end()) {
         if (!fallback->is_object() || !fallback->contains("mode") || !(*fallback)["mode"].is_string()) {
-            return bad("fallback", "must be {mode, sources}");
+            return bad("fallback", "legacy compatibility requires mode=disabled and optional empty sources");
         }
         for (const auto& [key, value] : fallback->items()) {
             if (key != "mode" && key != "sources") {
@@ -647,12 +649,16 @@ domain::Result<application::tasks::DownloadRequest> parse_download(const json& b
             }
         }
         const auto mode = (*fallback)["mode"].get<std::string>();
-        if (mode != "disabled" && mode != "auto") {
-            return bad("fallback.mode", "must be disabled or auto");
+        if (mode != "disabled") {
+            return bad("fallback.mode", "source switching has been removed");
         }
-        request.automatic_fallback = mode == "auto";
+        if (fallback->contains("sources") && (!(*fallback)["sources"].is_array() || !(*fallback)["sources"].empty())) {
+            return bad("fallback.sources", "source switching has been removed");
+        }
     }
-    request.match_selection = body.contains("match_selection") && !body["match_selection"].is_null();
+    if (body.contains("match_selection") && !body["match_selection"].is_null()) {
+        return bad("match_selection", "cross-source matching has been removed");
+    }
     return request;
 }
 
@@ -1079,6 +1085,8 @@ struct ControlApi::Impl {
 
         server.Get("/api/v1/admin/status",
                    guard(Access::scoped, accounts::scope::admin, [this](Call& call) { admin_status(call); }));
+        server.Get("/api/v1/admin/metrics",
+                   guard(Access::scoped, accounts::scope::admin, [this](Call& call) { admin_metrics(call); }));
         if (services.download_policy) {
             server.Get("/api/v1/admin/download-policy",
                        guard(Access::scoped, accounts::scope::admin, [this](Call& call) { get_download_policy(call); }));
@@ -1104,7 +1112,6 @@ struct ControlApi::Impl {
                    {"file_access", f.file_access},
                    {"media_proxy", f.media_proxy},
                    {"direct_media_urls", f.direct_media_urls},
-                   {"automatic_fallback", f.automatic_fallback},
                    {"progress_polling", f.progress_polling},
                    {"progress_sse", f.progress_sse}}}});
     }
@@ -1198,10 +1205,18 @@ struct ControlApi::Impl {
 
     void admin_status(Call& call) {
         const auto s = services.status();
+        json pools = json::object();
+        for (const auto& p : s.worker_pools) {
+            pools[p.name] = {{"queued", p.queued}, {"running", p.running}, {"completed", p.completed},
+                            {"failed", p.failed}, {"rejected", p.rejected}};
+        }
         call.ok({{"state", s.state},
                  {"instance_id", s.instance_id},
                  {"version", s.version},
                  {"started_at", utc(s.started_at)},
+                 {"uptime_seconds", s.uptime_seconds},
+                 {"worker_pools", pools},
+                 {"events", {{"subscriptions", s.event_subscriptions}}},
                  {"storage", {{"available", s.storage_available}}},
                  {"providers", {{"registered", s.providers_registered}}},
                  {"destinations", {{"configured", s.destinations}}},
@@ -1212,8 +1227,99 @@ struct ControlApi::Impl {
                    {"running", s.downloads_running},
                    {"paused", s.downloads_paused},
                    {"claimed", s.downloads_claimed}, {"scheduler_errors", s.scheduler_errors}}},
-                 {"logging", {{"dropped", s.log_dropped}, {"failures", s.log_failures}, {"queued_bytes", s.log_queued_bytes}}},
+                 {"logging", {{"written", s.log_written}, {"dropped", s.log_dropped}, {"failures", s.log_failures},
+                              {"queued_records", s.log_queued_records}, {"queued_bytes", s.log_queued_bytes}}},
                  {"media", {{"listening", s.media_listening}, {"responses", s.media_responses}}}});
+    }
+
+    void admin_metrics(Call& call) {
+        if (!only_params(call, {"format"})) return;
+        const auto format = call.req.has_param("format") ? call.req.get_param_value("format") : "json";
+        if (format != "json" && format != "prometheus") {
+            call.fail(bad_request("format", "must be json or prometheus"));
+            return;
+        }
+        const auto snapshot = services.metrics ? services.metrics->snapshot() : ports::MetricsSnapshot{};
+        const auto status = services.status();
+        if (format == "json") {
+            json operations = json::object();
+            for (std::size_t i = 0; i < ports::metric_operations.size(); ++i) {
+                const auto& item = snapshot.operations[i];
+                json outcomes = json::object();
+                for (std::size_t j = 0; j < ports::metric_outcomes.size(); ++j)
+                    outcomes[ports::metric_outcomes[j]] = item.outcomes[j];
+                json buckets = json::array();
+                std::uint64_t cumulative = 0;
+                for (std::size_t j = 0; j < item.durations.size(); ++j) {
+                    cumulative += item.durations[j];
+                    buckets.push_back({{"le_seconds", j < ports::duration_buckets_ms.size()
+                        ? json(static_cast<double>(ports::duration_buckets_ms[j]) / 1000.0) : json(nullptr)},
+                        {"count", cumulative}});
+                }
+                operations[ports::metric_operations[i]] = {{"count", item.count}, {"outcomes", outcomes},
+                    {"duration_seconds", {{"sum", static_cast<double>(item.duration_ns) / 1e9},
+                        {"max", static_cast<double>(item.max_duration_ns) / 1e9}, {"buckets", buckets}}}};
+            }
+            call.ok({{"instance_id", status.instance_id}, {"started_at", utc(status.started_at)},
+                     {"uptime_seconds", status.uptime_seconds}, {"operations", operations}});
+            return;
+        }
+        std::ostringstream out;
+        out.imbue(std::locale::classic());
+        out << std::setprecision(17);
+        out << "# TYPE music_service_operations_total counter\n";
+        for (std::size_t i = 0; i < ports::metric_operations.size(); ++i)
+            for (std::size_t j = 0; j < ports::metric_outcomes.size(); ++j)
+                out << "music_service_operations_total{operation=\"" << ports::metric_operations[i]
+                    << "\",outcome=\"" << ports::metric_outcomes[j] << "\"} " << snapshot.operations[i].outcomes[j] << '\n';
+        out << "# TYPE music_service_operation_duration_seconds histogram\n";
+        for (std::size_t i = 0; i < ports::metric_operations.size(); ++i) {
+            const auto& item = snapshot.operations[i];
+            std::uint64_t cumulative = 0;
+            for (std::size_t j = 0; j < item.durations.size(); ++j) {
+                cumulative += item.durations[j];
+                out << "music_service_operation_duration_seconds_bucket{operation=\"" << ports::metric_operations[i] << "\",le=\"";
+                if (j < ports::duration_buckets_ms.size()) out << static_cast<double>(ports::duration_buckets_ms[j]) / 1000.0;
+                else out << "+Inf";
+                out << "\"} " << cumulative << '\n';
+            }
+            out << "music_service_operation_duration_seconds_sum{operation=\"" << ports::metric_operations[i]
+                << "\"} " << static_cast<double>(item.duration_ns) / 1e9 << '\n';
+            out << "music_service_operation_duration_seconds_count{operation=\"" << ports::metric_operations[i]
+                << "\"} " << item.count << '\n';
+        }
+        out << "# TYPE music_service_operation_duration_max_seconds gauge\n";
+        for (std::size_t i = 0; i < ports::metric_operations.size(); ++i)
+            out << "music_service_operation_duration_max_seconds{operation=\"" << ports::metric_operations[i]
+                << "\"} " << static_cast<double>(snapshot.operations[i].max_duration_ns) / 1e9 << '\n';
+        const auto scalar = [&](std::string_view name, std::uint64_t value, std::string_view type = "gauge") {
+            out << "# TYPE music_service_" << name << ' ' << type << '\n' << "music_service_" << name << ' ' << value << '\n';
+        };
+        scalar("uptime_seconds", status.uptime_seconds);
+        scalar("ready", status.state == "ready" ? 1 : 0);
+        scalar("upstream_connections", status.upstream_connections_in_use);
+        scalar("upstream_cooldowns", status.upstream_cooldowns);
+        scalar("downloads_running", status.downloads_running);
+        scalar("downloads_paused", status.downloads_paused ? 1 : 0);
+        scalar("scheduler_errors_total", status.scheduler_errors, "counter");
+        scalar("media_responses", status.media_responses);
+        scalar("event_subscriptions", status.event_subscriptions);
+        scalar("log_written_total", status.log_written, "counter");
+        scalar("log_dropped_total", status.log_dropped, "counter");
+        scalar("log_failures_total", status.log_failures, "counter");
+        scalar("log_queued_bytes", status.log_queued_bytes);
+        scalar("log_queued_records", status.log_queued_records);
+        for (const auto name : {"queued", "running", "completed_total", "failed_total", "rejected_total"}) {
+            out << "# TYPE music_service_pool_" << name << (std::string_view{name}.ends_with("_total") ? " counter\n" : " gauge\n");
+            for (const auto& pool : status.worker_pools) {
+                const auto key = std::string_view{name};
+                const auto value = key == "queued" ? pool.queued : key == "running" ? pool.running
+                    : key == "completed_total" ? pool.completed : key == "failed_total" ? pool.failed : pool.rejected;
+                out << "music_service_pool_" << name << "{pool=\"" << pool.name << "\"} " << value << '\n';
+            }
+        }
+        call.res.status = 200;
+        call.res.set_content(out.str(), "text/plain; version=0.0.4; charset=utf-8");
     }
 
     // ------------------------------------------------------------- files
@@ -1732,7 +1838,7 @@ struct ControlApi::Impl {
             return;
         }
         application::catalog::ResolveRequest request{call.principal(), {std::move(source).value(), std::move(id).value()},
-                                                     {}, false, false};
+                                                     {}};
         std::optional<std::string> quality;
         std::optional<std::string> policy;
         if (!read_string(call, *body, "quality", quality) || !read_string(call, *body, "quality_policy", policy)) {
@@ -1762,18 +1868,21 @@ struct ControlApi::Impl {
             request.requirement.allow_preview = preview->get<bool>();
         }
         if (const auto fallback = body->find("fallback"); fallback != body->end()) {
-            if (!fallback->is_object() || !(*fallback)["mode"].is_string() || fallback->size() != 1) {
-                call.fail(bad_request("fallback", "must be {mode: disabled|auto}"));
+            if (!fallback->is_object() || !fallback->contains("mode") ||
+                !(*fallback)["mode"].is_string() || fallback->size() != 1) {
+                call.fail(bad_request("fallback", "must be {mode: disabled}"));
                 return;
             }
             const auto mode = (*fallback)["mode"].get<std::string>();
-            if (mode != "disabled" && mode != "auto") {
-                call.fail(bad_request("fallback.mode", "must be disabled or auto"));
+            if (mode != "disabled") {
+                call.fail(bad_request("fallback.mode", "source switching has been removed"));
                 return;
             }
-            request.automatic_fallback = mode == "auto";
         }
-        request.match_selection = body->contains("match_selection") && !(*body)["match_selection"].is_null();
+        if (body->contains("match_selection") && !(*body)["match_selection"].is_null()) {
+            call.fail(bad_request("match_selection", "cross-source matching has been removed"));
+            return;
+        }
         auto resolved = services.assets->resolve(request);
         resolved ? call.ok(asset_json(resolved.value())) : call.fail(resolved.error());
     }

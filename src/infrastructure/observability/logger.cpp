@@ -169,6 +169,76 @@ std::vector<LogRecord> MemorySink::records() const {
     return records_;
 }
 
+RotatingFileSink::RotatingFileSink(std::filesystem::path file, bool text_format, LogRotation options)
+    : file_(std::move(file)), text_(text_format), options_(options) {
+    if (options_.max_file_bytes == 0 || options_.retained_files > 20)
+        throw std::invalid_argument("invalid log rotation limits");
+    open();
+}
+
+void RotatingFileSink::open() {
+    stream_.close();
+    stream_.clear();
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(file_, ec);
+    if (ec && ec != std::errc::no_such_file_or_directory) throw std::runtime_error("cannot inspect log file");
+    if (std::filesystem::exists(status) && !std::filesystem::is_regular_file(status))
+        throw std::runtime_error("log path must be a regular file");
+    bytes_ = std::filesystem::exists(status) ? std::filesystem::file_size(file_) : 0;
+    stream_.open(file_, std::ios::app | std::ios::binary);
+    if (!stream_) throw std::runtime_error("cannot open log file");
+}
+
+std::filesystem::path RotatingFileSink::archive(std::uint32_t index) const {
+    auto path = file_;
+    path += "." + std::to_string(index);
+    return path;
+}
+
+void RotatingFileSink::rotate() {
+    stream_.close();
+    // Only these exact numbered files are retained or removed; never enumerate/delete a directory.
+    const auto remove_file = [](const std::filesystem::path& path) {
+        std::error_code ec;
+        const auto status = std::filesystem::symlink_status(path, ec);
+        if (ec == std::errc::no_such_file_or_directory) return;
+        if (ec) throw std::runtime_error("cannot inspect log archive");
+        if (!std::filesystem::exists(status)) return;
+        if (!std::filesystem::is_regular_file(status)) throw std::runtime_error("log archive must be a regular file");
+        std::filesystem::remove(path);
+    };
+    if (options_.retained_files == 0) {
+        remove_file(file_);
+    } else {
+        remove_file(archive(options_.retained_files));
+        for (auto index = options_.retained_files; index > 1; --index) {
+            const auto previous = archive(index - 1);
+            if (std::filesystem::exists(previous)) {
+                if (!std::filesystem::is_regular_file(std::filesystem::symlink_status(previous)))
+                    throw std::runtime_error("log archive must be a regular file");
+                std::filesystem::rename(previous, archive(index));
+            }
+        }
+        if (std::filesystem::exists(file_)) std::filesystem::rename(file_, archive(1));
+    }
+    open();
+}
+
+void RotatingFileSink::write(const LogRecord& record) {
+    std::ostringstream buffer;
+    if (text_) TextSink{buffer}.write(record);
+    else JsonLineSink{buffer}.write(record);
+    const auto line = buffer.str();
+    if (line.size() > options_.max_file_bytes) throw std::runtime_error("log record exceeds file limit");
+    const std::lock_guard lock{mutex_};
+    if (!stream_.is_open() || !stream_) open();
+    if (bytes_ > options_.max_file_bytes - line.size()) rotate();
+    stream_.write(line.data(), static_cast<std::streamsize>(line.size()));
+    stream_.flush();
+    if (!stream_) throw std::runtime_error("log write failed");
+    bytes_ += line.size();
+}
+
 Logger::Logger(std::shared_ptr<LogSink> sink, LogLevel minimum,
                std::shared_ptr<const application::ports::Clock> clock)
     : sink_(std::move(sink)), minimum_(minimum), clock_(std::move(clock)) {}

@@ -190,6 +190,22 @@ TEST_CASE("features the build lacks cannot be enabled", "[config]") {
     CHECK(has_problem(error, "/app_profiles"));
 }
 
+TEST_CASE("logging bounds and removed source switching are validated", "[config][observability]") {
+    const auto config = load(R"({"logging":{"file_enabled":true,"max_file_bytes":65536,"retained_files":2},
+        "features":{"automatic_fallback":false}, "lifetimes":{"match_seconds":300},"handles":{"matches":1000}})");
+    REQUIRE(config);
+    CHECK(config->logging.file_enabled);
+    CHECK(config->logging.max_file_bytes == 65536);
+    CHECK(config->logging.retained_files == 2);
+    const auto removed = load(R"({"features":{"automatic_fallback":true}})");
+    REQUIRE_FALSE(removed);
+    CHECK(has_problem(removed.error(), "/features/automatic_fallback"));
+    const auto invalid = load(R"({"logging":{"max_file_bytes":1,"retained_files":21}})");
+    REQUIRE_FALSE(invalid);
+    CHECK(has_problem(invalid.error(), "/logging/max_file_bytes"));
+    CHECK(has_problem(invalid.error(), "/logging/retained_files"));
+}
+
 TEST_CASE("listener conflicts and capacity rules are checked", "[config]") {
     const auto conflict = load(R"({
         "media": {"enabled": true, "port": 17632},

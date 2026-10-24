@@ -1,71 +1,42 @@
 #pragma once
 
-#include <chrono>
-#include <cstdint>
-#include <functional>
-#include <map>
+#include "application/ports/observability/metrics.hpp"
+#include <algorithm>
+#include <limits>
 #include <mutex>
-#include <string>
-#include <string_view>
 
 namespace music_service::infrastructure::observability {
 
-// Collection points for counters and latencies. Names are dotted, e.g.
-// "upstream.requests" or "admission.wait"; areas follow the design: control, provider,
-// download, processing, db, media, sse. No secrets or per-user values in names.
-class Metrics {
+class InMemoryMetrics final : public application::ports::Metrics {
 public:
-    virtual ~Metrics() = default;
-    virtual void increment(std::string_view name, std::uint64_t by = 1) = 0;
-    virtual void observe(std::string_view name, std::chrono::nanoseconds duration) = 0;
-};
-
-class NoopMetrics final : public Metrics {
-public:
-    void increment(std::string_view, std::uint64_t) override {}
-    void observe(std::string_view, std::chrono::nanoseconds) override {}
-};
-
-struct LatencySummary {
-    std::uint64_t count{0};
-    std::chrono::nanoseconds total{0};
-    std::chrono::nanoseconds max{0};
-};
-
-// Thread-safe in-process aggregation, read by admin/status and tests.
-class InMemoryMetrics final : public Metrics {
-public:
-    void increment(std::string_view name, std::uint64_t by = 1) override {
+    void record(application::ports::MetricOperation operation, application::ports::MetricOutcome outcome,
+                std::chrono::nanoseconds elapsed) noexcept override {
+        const auto op = static_cast<std::size_t>(operation);
+        const auto result = static_cast<std::size_t>(outcome);
+        if (op >= data_.operations.size() || result >= application::ports::metric_outcomes.size()) return;
+        const auto ns = static_cast<std::uint64_t>(std::max<std::int64_t>(0, elapsed.count()));
         const std::lock_guard lock{mutex_};
-        counters_[std::string{name}] += by;
-    }
-
-    void observe(std::string_view name, std::chrono::nanoseconds duration) override {
-        const std::lock_guard lock{mutex_};
-        auto& summary = latencies_[std::string{name}];
-        ++summary.count;
-        summary.total += duration;
-        if (duration > summary.max) {
-            summary.max = duration;
+        auto& item = data_.operations[op];
+        add(item.count, 1);
+        add(item.outcomes[result], 1);
+        add(item.duration_ns, ns);
+        item.max_duration_ns = std::max(item.max_duration_ns, ns);
+        std::size_t bucket = 0;
+        for (const auto bound : application::ports::duration_buckets_ms) {
+            if (ns <= bound * 1'000'000) break;
+            ++bucket;
         }
+        add(item.durations[bucket], 1);
     }
-
-    [[nodiscard]] std::uint64_t counter(std::string_view name) const {
+    [[nodiscard]] application::ports::MetricsSnapshot snapshot() const override {
         const std::lock_guard lock{mutex_};
-        const auto it = counters_.find(name);
-        return it == counters_.end() ? 0 : it->second;
+        return data_;
     }
-
-    [[nodiscard]] LatencySummary latency(std::string_view name) const {
-        const std::lock_guard lock{mutex_};
-        const auto it = latencies_.find(name);
-        return it == latencies_.end() ? LatencySummary{} : it->second;
-    }
-
 private:
+    static void add(std::uint64_t& value, std::uint64_t amount) noexcept {
+        value += std::min(amount, std::numeric_limits<std::uint64_t>::max() - value);
+    }
     mutable std::mutex mutex_;
-    std::map<std::string, std::uint64_t, std::less<>> counters_;
-    std::map<std::string, LatencySummary, std::less<>> latencies_;
+    application::ports::MetricsSnapshot data_;
 };
-
 } // namespace music_service::infrastructure::observability

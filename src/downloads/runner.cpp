@@ -500,12 +500,7 @@ std::optional<RunReport> Execution::prepare() {
         return fail(error(ErrorCode::upstream_failed, "no download attempts are left", false));
     }
 
-    const auto& selection = intent_->selection();
-    if (std::holds_alternative<domain::AutoFallback>(selection)) {
-        return fail(error(ErrorCode::capability_unsupported, "automatic fallback is not enabled", false));
-    }
-    actual_ = std::holds_alternative<domain::ManualTarget>(selection) ? std::get<domain::ManualTarget>(selection).target
-                                                                      : intent_->original_track();
+    actual_ = intent_->original_track();
     const auto& bindings = intent_->account_bindings();
     const auto bound = std::find_if(bindings.begin(), bindings.end(),
                                     [&](const domain::AccountBinding& b) { return b.source() == actual_->source; });
@@ -1293,36 +1288,42 @@ DownloadRunner::DownloadRunner(RunnerOptions options, RunnerServices services)
     : options_(options), services_(std::move(services)) {}
 
 RunReport DownloadRunner::run(const ports::TaskRecord& claimed, ExecutionControl& control) {
-    try {
-        return Execution{options_, services_, claimed, control}.run();
-    } catch (...) {
-        // Execution has unwound: all local I/O is closed before changing its
-        // persistent status. Use the latest version, never an obsolete claim.
+    const auto started = std::chrono::steady_clock::now();
+    const auto execute = [&]() -> RunReport {
         try {
-            auto current = services_.tasks->get(claimed.owner_id, claimed.task_id);
-            if (!current || current->execution_id != claimed.execution_id) {
-                return {RunOutcome::left, "execution changed"};
-            }
-            const bool canceled = current->status == TaskStatus::canceling;
-            if (!canceled && !domain::is_running(current->status)) {
-                return {RunOutcome::left, "recovery owns execution"};
-            }
-            // A finalizing task may already have published its file; recovery,
-            // never an exception handler, decides that publication's outcome.
-            if (current->status == TaskStatus::finalizing) {
-                return {RunOutcome::left, "publication requires recovery"};
-            }
-            if (canceled) (void)services_.files->remove_workspace(current->destination_id, current->task_id);
-            ports::TransitionCommand command{current->task_id, current->execution_id.value_or(""), current->version,
-                canceled ? TaskStatus::canceled : TaskStatus::failed, {}, {}, {}};
-            if (!canceled) command.error_json = error_json(error(ErrorCode::internal, "download failed unexpectedly", false));
-            auto saved = services_.tasks->transition(command);
-            return saved ? RunReport{canceled ? RunOutcome::canceled : RunOutcome::failed, "INTERNAL_ERROR"}
-                         : RunReport{RunOutcome::left, "exception state could not be saved"};
+            return Execution{options_, services_, claimed, control}.run();
         } catch (...) {
-            return {RunOutcome::left, "exception state could not be saved"};
+            // Execution has unwound: all local I/O is closed before changing its
+            // persistent status. Use the latest version, never an obsolete claim.
+            try {
+                auto current = services_.tasks->get(claimed.owner_id, claimed.task_id);
+                if (!current || current->execution_id != claimed.execution_id) {
+                    return {RunOutcome::left, "execution changed"};
+                }
+                const bool canceled = current->status == TaskStatus::canceling;
+                if (!canceled && !domain::is_running(current->status)) {
+                    return {RunOutcome::left, "recovery owns execution"};
+                }
+                // A finalizing task may already have published its file; recovery,
+                // never an exception handler, decides that publication's outcome.
+                if (current->status == TaskStatus::finalizing) {
+                    return {RunOutcome::left, "publication requires recovery"};
+                }
+                if (canceled) (void)services_.files->remove_workspace(current->destination_id, current->task_id);
+                ports::TransitionCommand command{current->task_id, current->execution_id.value_or(""), current->version,
+                    canceled ? TaskStatus::canceled : TaskStatus::failed, {}, {}, {}};
+                if (!canceled) command.error_json = error_json(error(ErrorCode::internal, "download failed unexpectedly", false));
+                auto saved = services_.tasks->transition(command);
+                return saved ? RunReport{canceled ? RunOutcome::canceled : RunOutcome::failed, "INTERNAL_ERROR"}
+                             : RunReport{RunOutcome::left, "exception state could not be saved"};
+            } catch (...) {
+                return {RunOutcome::left, "exception state could not be saved"};
+            }
         }
-    }
+    };
+    auto report = execute();
+    report.elapsed = std::chrono::steady_clock::now() - started;
+    return report;
 }
 
 } // namespace music_service::downloads

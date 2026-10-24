@@ -6,6 +6,8 @@
 #include <chrono>
 #include <cstdint>
 #include <initializer_list>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <ostream>
@@ -85,6 +87,29 @@ public:
 private:
     mutable std::mutex mutex_;
     std::vector<LogRecord> records_;
+};
+
+struct LogRotation {
+    std::uint64_t max_file_bytes{10 * 1024 * 1024};
+    std::uint32_t retained_files{5}; // active file plus this many numbered archives
+};
+
+// Owns the stream; put behind AsyncLogSink so disk I/O never blocks request threads.
+// Rotation errors fail the write instead of allowing the active file to grow unbounded.
+class RotatingFileSink final : public LogSink {
+public:
+    RotatingFileSink(std::filesystem::path file, bool text_format, LogRotation options = {});
+    void write(const LogRecord& record) override;
+private:
+    void open();
+    void rotate();
+    std::filesystem::path archive(std::uint32_t index) const;
+    std::mutex mutex_;
+    std::filesystem::path file_;
+    bool text_;
+    LogRotation options_;
+    std::ofstream stream_;
+    std::uint64_t bytes_{0};
 };
 
 // Owns its output sink. Producers never wait for output I/O; queue size, bytes and

@@ -53,7 +53,8 @@ void Instance::close() noexcept {
     lock.release();
 }
 
-domain::Result<std::unique_ptr<Instance>> open_instance(const application::config::ServiceConfig& config) {
+domain::Result<std::unique_ptr<Instance>> open_instance(const application::config::ServiceConfig& config,
+    std::shared_ptr<application::ports::Metrics> metrics) {
     auto layout = infrastructure::filesystem::prepare_data_dir(config.data_dir);
     if (!layout) {
         return std::move(layout).error();
@@ -70,6 +71,7 @@ domain::Result<std::unique_ptr<Instance>> open_instance(const application::confi
     options.read_connections = config.storage.read_connections;
     options.writer_queue = config.storage.writer_queue;
     options.wait_budget = config.storage.wait_budget;
+    options.metrics = std::move(metrics);
     auto database = sqlite::Database::open(instance->layout.database, options);
     if (!database) {
         return std::move(database).error();

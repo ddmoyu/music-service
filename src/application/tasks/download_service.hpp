@@ -30,8 +30,6 @@ struct DestinationRule {
 struct DownloadRequest {
     domain::TrackRef track;
     domain::ResourceRequirement requirement;
-    bool automatic_fallback{false};
-    bool match_selection{false};
     std::optional<std::string> credential_id;
     std::optional<std::string> destination_id;
     domain::MetadataPolicy metadata_policy{domain::MetadataPolicy::best_effort};
@@ -93,8 +91,8 @@ struct BatchCancelResult {
 // write transaction: idempotent replays are answered first, then the account binding
 // is fixed, the destination checked and defaults filled; the repository re-checks
 // idempotency, active duplicates, quotas and any completed result in one transaction.
-// Matching and automatic fallback are not available yet (CAPABILITY_UNSUPPORTED). After a
-// commit the download queue is woken, and a cancel of a running task signals its runner.
+// Downloads always use the requested source. After a commit the download queue is
+// woken, and a cancel of a running task signals its runner.
 class DownloadService {
 public:
     static constexpr std::string_view create_route = "/api/v1/downloads";

@@ -8,6 +8,7 @@
 #include "application/media/media_access.hpp"
 #include "application/tasks/download_service.hpp"
 #include "application/ports/providers/directory.hpp"
+#include "application/ports/observability/metrics.hpp"
 #include "domain/result.hpp"
 
 #include <chrono>
@@ -32,7 +33,6 @@ struct ServiceInfo {
         bool file_access{false};
         bool media_proxy{false};
         bool direct_media_urls{false};
-        bool automatic_fallback{false};
         bool progress_polling{false};
         bool progress_sse{false};
     } features;
@@ -48,6 +48,10 @@ struct DestinationView {
 
 // GET /api/v1/admin/status: process state without secrets.
 struct AdminStatus {
+    struct WorkerPool {
+        std::string name;
+        std::uint64_t queued{0}, running{0}, completed{0}, failed{0}, rejected{0};
+    };
     std::string state; // starting | ready | stopping
     std::string instance_id;
     std::string version;
@@ -68,6 +72,8 @@ struct AdminStatus {
     std::uint64_t log_queued_bytes{0};
     bool media_listening{false};
     std::uint32_t media_responses{0}; // file responses holding a slot
+    std::uint64_t uptime_seconds{0}, event_subscriptions{0}, log_written{0}, log_queued_records{0};
+    std::vector<WorkerPool> worker_pools;
 };
 
 // admin/download-policy: whether the scheduler claims new tasks.
@@ -110,6 +116,7 @@ struct ControlApiServices {
     // File metadata and media-access (T19); empty or with file_access off they answer 501.
     std::shared_ptr<application::media::FileAccessService> files{};
     std::shared_ptr<application::media::MediaAccessService> media{};
+    std::shared_ptr<application::ports::Metrics> metrics{};
 };
 
 // The control HTTP entry (/health, /api/v1) on cpp-httplib: Bearer authentication with

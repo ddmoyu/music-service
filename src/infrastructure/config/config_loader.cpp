@@ -468,7 +468,8 @@ void read_document(Reader& r, const json& doc, const std::filesystem::path& base
                                {
                                    {"asset_seconds", [&](const json& x, const std::string& q) { r.duration(x, q, l.asset, 10, 86400); }},
                                    {"cursor_seconds", [&](const json& x, const std::string& q) { r.duration(x, q, l.cursor, 10, 86400); }},
-                                   {"match_seconds", [&](const json& x, const std::string& q) { r.duration(x, q, l.match, 10, 86400); }},
+                                   // Removed matching settings are inert compatibility keys.
+                                   {"match_seconds", [&](const json& x, const std::string& q) { cfg::seconds ignored{}; r.duration(x, q, ignored, 10, 86400); }},
                                    {"media_access_seconds", [&](const json& x, const std::string& q) { r.duration(x, q, l.media_access, 15, 300); }},
                                });
                   }},
@@ -500,7 +501,7 @@ void read_document(Reader& r, const json& doc, const std::filesystem::path& base
                                    {"contexts", [&](const json& x, const std::string& q) { r.number(x, q, h.contexts, 1, u32_max); }},
                                    {"cursors", [&](const json& x, const std::string& q) { r.number(x, q, h.cursors, 1, u32_max); }},
                                    {"assets", [&](const json& x, const std::string& q) { r.number(x, q, h.assets, 1, u32_max); }},
-                                   {"matches", [&](const json& x, const std::string& q) { r.number(x, q, h.matches, 1, u32_max); }},
+                                   {"matches", [&](const json& x, const std::string& q) { std::uint32_t ignored{}; r.number(x, q, ignored, 1, u32_max); }},
                                    {"media_tickets", [&](const json& x, const std::string& q) { r.number(x, q, h.media_tickets, 1, u32_max); }},
                                    {"total_bytes", [&](const json& x, const std::string& q) { r.number(x, q, h.total_bytes, 1 * cfg::mib, 4 * cfg::gib); }},
                                });
@@ -521,7 +522,7 @@ void read_document(Reader& r, const json& doc, const std::filesystem::path& base
                                    {"file_access", [&](const json& x, const std::string& q) { r.boolean(x, q, f.file_access); }},
                                    {"media_proxy", [&](const json& x, const std::string& q) { r.boolean(x, q, f.media_proxy); }},
                                    {"direct_media_urls", [&](const json& x, const std::string& q) { r.boolean(x, q, f.direct_media_urls); }},
-                                   {"automatic_fallback", [&](const json& x, const std::string& q) { r.boolean(x, q, f.automatic_fallback); }},
+                                   {"automatic_fallback", [&](const json& x, const std::string& q) { bool enabled = false; r.boolean(x, q, enabled); if (enabled) r.fail(q, "source switching has been removed"); }},
                                    {"transcoding", [&](const json& x, const std::string& q) { r.boolean(x, q, f.transcoding); }},
                                });
                   }},
@@ -531,6 +532,9 @@ void read_document(Reader& r, const json& doc, const std::filesystem::path& base
                                {
                                    {"format", [&](const json& x, const std::string& q) { r.string(x, q, c.logging.format); }},
                                    {"level", [&](const json& x, const std::string& q) { r.string(x, q, c.logging.level); }},
+                                   {"file_enabled", [&](const json& x, const std::string& q) { r.boolean(x, q, c.logging.file_enabled); }},
+                                   {"max_file_bytes", [&](const json& x, const std::string& q) { r.number(x, q, c.logging.max_file_bytes, 64 * cfg::kib, cfg::gib); }},
+                                   {"retained_files", [&](const json& x, const std::string& q) { r.number(x, q, c.logging.retained_files, 0, 20); }},
                                });
                   }},
                  {"destinations", [&](const json& v, const std::string& p) { read_destinations(r, v, p, base, c.destinations); }},

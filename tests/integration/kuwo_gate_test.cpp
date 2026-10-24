@@ -421,6 +421,19 @@ TEST_CASE("S1 gate: Kuwo search to a published file over HTTP, SSE and media", "
     // Restart: a new instance, the same durable task and file; another principal, created
     // while the service is stopped, sees none of it (A06, A23).
     stream.close();
+    json observed;
+    const auto metrics_deadline = std::chrono::steady_clock::now() + 2s;
+    do {
+        observed = body(api.Get("/api/v1/admin/metrics"))["data"]["operations"];
+        if (observed["download_execution"]["outcomes"]["success"].get<int>() > 0 &&
+            observed["event_request"]["count"].get<int>() > 0) break;
+        std::this_thread::sleep_for(5ms);
+    } while (std::chrono::steady_clock::now() < metrics_deadline);
+    CHECK(observed["download_execution"]["outcomes"]["success"].get<int>() == 1);
+    CHECK(observed["upstream_call"]["outcomes"]["success"].get<int>() > 0);
+    CHECK(observed["audio_processing"]["outcomes"]["success"].get<int>() == 1);
+    CHECK(observed["media_request"]["count"].get<int>() > 0);
+    CHECK(observed["event_request"]["count"].get<int>() > 0);
     service->stop();
     service.reset();
     const auto created = g.d.run({"principal", "create", "--name", "other"}, Gate::hooks());
@@ -485,6 +498,14 @@ TEST_CASE("S1 gate: a cancel stops the transfer, a shutdown checkpoint resumes a
     CHECK(body(cancel)["data"]["status"] == "canceling");
     const auto canceled = wait_status(api, canceled_id, "canceled");
     CHECK(canceled["result"].is_null());
+    json cancellation_metrics;
+    const auto cancellation_deadline = std::chrono::steady_clock::now() + 2s;
+    do {
+        cancellation_metrics = body(api.Get("/api/v1/admin/metrics"))["data"]["operations"];
+        if (cancellation_metrics["download_execution"]["outcomes"]["canceled"].get<int>() == 1) break;
+        std::this_thread::sleep_for(5ms);
+    } while (std::chrono::steady_clock::now() < cancellation_deadline);
+    CHECK(cancellation_metrics["download_execution"]["outcomes"]["canceled"].get<int>() == 1);
     CHECK_FALSE(fs::exists(g.root / ".music-service-work" / canceled_id));
     std::vector<std::string> statuses;
     for (auto frame = stream.next_event(2s); frame; frame = stream.next_event(2s)) {

@@ -47,7 +47,8 @@ std::filesystem::path new_backup_path(const std::filesystem::path& backups, cons
 
 // Prepares data_dir, takes the instance lock (INSTANCE_LOCKED while the service or
 // another command runs), opens the database and applies migrations.
-domain::Result<std::unique_ptr<Instance>> open_instance(const application::config::ServiceConfig& config);
+domain::Result<std::unique_ptr<Instance>> open_instance(const application::config::ServiceConfig& config,
+    std::shared_ptr<application::ports::Metrics> metrics = {});
 
 struct DestinationState {
     application::config::DestinationConfig config;

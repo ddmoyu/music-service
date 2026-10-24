@@ -1,5 +1,7 @@
 # music-service
 
+0.1.23 增加管理员 JSON／Prometheus 指标、资源占用状态及有界异步文件日志轮转，配置和口径见[运维观测](docs/operations-observability.md)。跨平台匹配、手动与自动换源已取消；解析与下载只使用请求指定的平台。
+
 跨平台的纯后端音乐服务，通过 HTTP API 提供音乐搜索、音源解析、下载与任务管理。本仓库只包含后端：GUI、网页、桌面等前端在各自独立的仓库中开发，通过版本化 API 接入。服务支持原生进程、系统服务和 Docker 部署，系统与架构范围见[配置与部署](docs/design/cpp20-refactor/backend-service/configuration-and-deployment.md)。
 
 命名约定：项目与仓库名为 `music-service`；CMake 项目与库目标前缀为 `music_service`，C++ 命名空间为 `music_service`，服务可执行程序为 `music-service`，环境变量前缀为 `MUSIC_SERVICE_`，`/api/v1/info` 的 service 字段为 `music-service`。

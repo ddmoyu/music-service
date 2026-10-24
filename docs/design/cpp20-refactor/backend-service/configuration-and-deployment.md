@@ -39,7 +39,7 @@
 | `media_limits` | 全局响应 10／每 principal 4，其中播放上游最多 6、本地文件最多 8；播放器拖动时新 Range 请求常在旧连接关闭前到达，每 principal 额度需容纳“播放 + 拖动重叠 + 另存文件” |
 | `media_upstream` | workers=6；仅在线代理启用时建立，已取得媒体额度才派发，不排长队 |
 | `media_stream` | bridge_buffer=256 KiB，connect_timeout=5 秒，read/write idle=30 秒，单流最长 30 分钟 |
-| `lifetimes` | 解析描述 5 分钟，游标 10 分钟，匹配上下文 5 分钟，媒体访问／票据默认 60 秒；不设播放会话寿命 |
+| `lifetimes` | 解析描述 5 分钟，游标 10 分钟，媒体访问／票据默认 60 秒；不设播放会话寿命 |
 | `storage` | SQLite WAL，单 writer、队列 128、读取连接最多 2、数据库等待预算 500 ms |
 | `cache` | catalog 128 项／总估算 16 MiB／60 秒，失败不缓存；未实现的失败抑制和应用 token 缓存配置拒绝加载；其他短期句柄另有总量限制 |
 | `shutdown` | 在途工作软收尾预算 15 秒，之后保存检查点并请求停止 |
@@ -55,7 +55,7 @@ T03 已按本表实现加载与校验（`src/infrastructure/config`），JSON �
 
 app_profile 的 version 是管理配置中的正整数，应用身份或授权配置变化必须递增；SecretStore 引用不可原地覆盖秘密而维持同一版本。下载意图中的目标／命名／元数据配置版本则由加载后的有效配置和规则 schema 生成确定性摘要，保存对应非秘密快照；不使用整个配置文件的时间戳，也不让无关日志配置变化导致重复下载。
 
-短期内存句柄另设实例上限：context 10000、cursor 5000、asset 1000、match 1000、media_ticket 2000，总估算额外 32 MiB；每 principal 不超过实例上限的可配置份额。到期优先清理，正在传输的请求持有独立资源引用直到结束；无法接收新句柄时返回 SERVICE_BUSY。媒体访问描述不另建句柄表，不保存播放器状态。
+短期内存句柄另设实例上限：context 10000、cursor 5000、asset 1000、media_ticket 2000，总估算额外 32 MiB；每 principal 不超过实例上限的可配置份额。到期优先清理，正在传输的请求持有独立资源引用直到结束；无法接收新句柄时返回 SERVICE_BUSY。媒体访问描述不另建句柄表，不保存播放器状态。
 
 平台注册数量与每次查询来源数分开。default_sources 必须是已注册且启用的来源，数量不超过 max_sources_per_request；S0 无平台时可以为空，搜索返回明确的能力不可用。新增平台不会自动加入默认搜索，不为每个平台创建专属线程池。provider options 按各实现声明校验，未知 source／配置键失败；项目不接入外部独立工具；新增依赖库须先经用户评审。扩展规则见[多平台适配](provider-extensibility.md)。
 
@@ -93,7 +93,7 @@ app_profile 的 version 是管理配置中的正整数，应用身份或授权�
       "embed_cover": true, "embed_lyrics": true, "cover_max_bytes": 8388608,
       "metadata_timeout_seconds": 10, "lyrics_variant": "lrc",
       "export_lyrics": false, "export_cover": false, "sidecars_required": false}},
-  "features": {"file_access": true, "media_proxy": false, "direct_media_urls": false, "automatic_fallback": false, "transcoding": false},
+  "features": {"file_access": true, "media_proxy": false, "direct_media_urls": false, "transcoding": false},
   "logging": {"format": "json", "level": "info"}
 }
 ```
@@ -256,7 +256,7 @@ SSE 退出时停止接受订阅，唤醒等待并关闭现有流，注销订阅�
 
 日志最少带时间、级别、request_id／task_id、principal 的非秘密标识、source、操作、耗时、错误码。区分入场等待、平台网络、处理、持久化时间，避免只看到一个总延迟。
 
-管理状态提供控制／短请求／下载／媒体／DB 队列占用、超时／重试／取消计数、任务终态数量与恢复异常。健康接口不联网测所有音乐平台，避免探测本身触发账号或平台压力。
+管理状态提供短请求／下载／处理／媒体上游线程池占用、连接、媒体响应、事件订阅与日志队列状态。管理员 metrics 接口提供操作计数与延迟直方图，存储统计包括连接等待和事务耗时；下载按每次执行计量，区别完成、失败、取消与延后，不代表去重后的任务总数。详细口径和日志轮转见[运维观测](../../../operations-observability.md)。健康接口不联网测所有音乐平台，避免探测本身触发账号或平台压力。
 
 备份 SQLite 使用一致性备份方式，并协调需要保留的资产和秘密；不能在 WAL 活动时只随意复制主 DB 文件。临时文件清理先核对活动任务与发布意图，不能因为看到旧扩展名就删除仍被恢复流程使用的文件。
 

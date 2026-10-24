@@ -3,6 +3,7 @@
 #include "infrastructure/storage/sqlite/connection.hpp"
 
 #include "domain/result.hpp"
+#include "application/ports/observability/metrics.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -21,6 +22,7 @@ struct DatabaseOptions {
     std::uint32_t read_connections{2};
     std::uint32_t writer_queue{128};
     std::chrono::milliseconds wait_budget{500};
+    std::shared_ptr<application::ports::Metrics> metrics{};
 };
 
 // Single SQLite database in WAL mode with exactly one writer and a small pool of
@@ -37,19 +39,25 @@ public:
                                                           DatabaseOptions options);
 
     template <class F> auto write(F&& function) -> std::invoke_result_t<F, Connection&> {
+        application::ports::MetricTimer timer{options_.metrics, application::ports::MetricOperation::storage_write};
         auto lease = acquire_writer();
         if (!lease) {
             return std::move(lease).error();
         }
-        return in_transaction(*writer_, "BEGIN IMMEDIATE", std::forward<F>(function));
+        auto result = in_transaction(*writer_, "BEGIN IMMEDIATE", std::forward<F>(function));
+        timer.outcome = result ? application::ports::MetricOutcome::success : application::ports::metric_outcome(result.error());
+        return result;
     }
 
     template <class F> auto read(F&& function) -> std::invoke_result_t<F, Connection&> {
+        application::ports::MetricTimer timer{options_.metrics, application::ports::MetricOperation::storage_read};
         auto lease = acquire_reader();
         if (!lease) {
             return std::move(lease).error();
         }
-        return in_transaction(*lease.value().connection, "BEGIN", std::forward<F>(function));
+        auto result = in_transaction(*lease.value().connection, "BEGIN", std::forward<F>(function));
+        timer.outcome = result ? application::ports::MetricOutcome::success : application::ports::metric_outcome(result.error());
+        return result;
     }
 
     [[nodiscard]] const std::filesystem::path& file() const noexcept { return file_; }
