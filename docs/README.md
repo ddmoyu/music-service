@@ -2,8 +2,15 @@
 
 服务定位与主要功能见[项目简介](../README.md)。外部项目源码统一存放在 [third_party](../third_party/README.md)，研究与设计文档保留在本目录。
 
+- [Docker 使用教程](../packaging/docker/README.md)：从源码构建、初始化与认证、持久化、端口、Compose 示例及日常管理。
+- [macOS 使用说明](../packaging/macos/README.md)：独立运行库、配置、launchd 启停与签名／公证边界。
+- [发布说明](../packaging/RELEASING.md)：当前交付状态、预览发行范围、二进制和镜像发布前的准备与验证。
+- [发布与部署验证](../packaging/README.md)：各平台打包、系统服务与容器检查脚本的范围。
 - [功能完成情况](feature-status.md)：平台功能勾选表、Windows 闭环、音质实测、公共下载能力及待开发／待验收项目。
+- [平台账号与 Cookie 接入指南](account-management.md)：两个 QQ 账号的创建、切换、单个／全部停用、重新启用、状态与到期精度显示、错误及重试。
+- [Cookie 自动校验与会员识别验收](research/credential-membership-acceptance.md)：后台登录校验、VIP／SVIP 与到期时间、真实账号验证；账号启停、秘密清理失败恢复、并发与进程重启验收。
 - [跨系统验收](research/cross-platform-ci.md)：Linux、macOS、Docker 双架构与 Windows 的 CI、运行验证、修复及交付边界。
+- [macOS 独立包验收](research/macos-package-acceptance.md)：运行库、双架构原生打包、launchd、下载校验与签名边界。
 - [酷狗接入验收](research/kugou-acceptance.md)：21 项匿名能力、歌手资料与完整作品分页、标准整曲、歌词／封面输出、复用及重启回读；包含审查修复记录，高品质和账号能力单列边界。
 - [酷我歌手与封面验收](research/kuwo-artists-acceptance.md)：0.1.8 直接 JSON 接口、歌手资料与完整分页、MP3／FLAC 封面嵌入和导出、复用与重启回读。
 - [酷我黑胶原生接入验收](research/kuwo-vinyl-acceptance.md)：黑胶映射 hires、C++ 完整 FLAC 校验、尾部附加数据处理、实际音质判定及 Windows 下载闭环。

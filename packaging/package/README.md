@@ -9,7 +9,8 @@ repository.
 bin/music-service[.exe]                   the program
 share/music-service/config.example.json  configuration example
 share/music-service/licenses/            third-party licenses (THIRD-PARTY.md)
-share/music-service/service/             Windows service or systemd integration
+lib/music-service/                       bundled LLVM runtime (macOS only)
+share/music-service/service/             Windows service, systemd or launchd integration
 ```
 
 ## Requirements
@@ -18,7 +19,15 @@ share/music-service/service/             Windows service or systemd integration
 | --- | --- | --- |
 | windows-x86_64 | Windows 10 1809 / Server 2019 or later, x64 | Microsoft runtime linked in; uses the system certificate store |
 | linux-x86_64 | glibc at least the one of the build system (printed by `ldd --version` there), x86_64 | libstdc++/libgcc linked in; needs the distribution CA bundle (ca-certificates) |
-| linux-arm64 | as above, aarch64 | built only where an arm64 build host is available; not a supported package until verified on the target |
+| linux-arm64 | as above, aarch64 | validated on a native Ubuntu 24.04 ARM64 CI runner; other distributions and NAS devices are not covered |
+| macos-arm64 | macOS 15 target, Apple Silicon | LLVM C++ runtime included; see MACOS.md and macos-package.json |
+| macos-x86_64 | macOS 15 target, Intel | LLVM C++ runtime included; see MACOS.md and macos-package.json |
+
+Both Linux architectures were validated on Ubuntu 24.04. The tested systems and
+remaining distribution limits are recorded in the source repository's
+`docs/research/cross-platform-ci.md`. On macOS, keep the complete bin/lib/share layout;
+the archive's `macos-package.json` records the actual minimum OS and signing state.
+The default ad-hoc signature does not constitute Developer ID signing or notarization.
 
 ## Running in the foreground
 
@@ -58,3 +67,10 @@ The program goes to `/opt/music-service`, the configuration to
 `/etc/music-service/config.json`, data to `/var/lib/music-service`; it runs as the system
 user `music-service` with a hardened unit and logs to the journal
 (`journalctl -u music-service`).
+
+## On macOS
+
+Follow `share/music-service/MACOS.md` for foreground setup and the per-user launchd
+agent. Use `config.macos.example.json` instead of the Linux-oriented default example;
+it uses paths relative to the configuration file and enables rotating file logs.
+Homebrew, LLVM and Python are build-time tools and are not required to run the package.
