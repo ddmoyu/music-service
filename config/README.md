@@ -16,7 +16,7 @@
 
 | 组 | 键 |
 | --- | --- |
-| 顶层 | `config_version`（只能为 1）、`data_dir`、`destinations`、`providers`、`app_profiles`（当前只接受空对象，T24 启用） |
+| 顶层 | `config_version`（只能为 1）、`data_dir`、`destinations`、`providers`、`app_profiles`（正式服务仍只接受空对象；0.1.24 已有受构建能力约束的数据模型，完整登录流程待 T24） |
 | `control` | `host`、`port`、`workers`、`connection_queue` |
 | `media`、`events` | `enabled`、`host`、`port`、`workers`、`connection_queue`（构建包含媒体与 SSE 模块时两者默认启用，分别监听 17633 与 17634；info 声明 file_access／media_base_url 与 progress_sse／events_base_url，关闭时如实声明降级） |
 | `event_limits` | `global_subscriptions`、`per_principal_subscriptions`、`max_queued_events`、`max_queued_bytes`、`max_event_bytes` |

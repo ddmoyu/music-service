@@ -195,6 +195,25 @@ void check_features(const cfg::ServiceConfig& c, const BuildCapabilities& build,
 }
 
 void check_providers(const cfg::ServiceConfig& c, const BuildCapabilities& build, Problems& p) {
+    // Typed application configuration is groundwork; deployed builds must reject
+    // it until the account flow and secret loading are actually wired.
+    if (!c.app_profiles.empty() && !build.app_profiles) {
+        p.add("/app_profiles", "application profiles are not supported by this build yet");
+    }
+    if (c.app_profiles.size() > 32) p.add("/app_profiles", "must contain at most 32 profiles");
+    if (build.app_profiles) {
+        for (const auto& [id, app] : c.app_profiles) {
+            const auto field = "/app_profiles/" + id;
+            if (id.empty()) p.add(field, "application id must not be empty");
+            if (build.providers.find(app.source) == build.providers.end())
+                p.add(field + "/source", "must identify a built-in source");
+            if (app.auth_profile.empty()) p.add(field + "/auth_profile", "must not be empty");
+            if (app.version == 0) p.add(field + "/version", "must be positive");
+            if (app.client_id.empty()) p.add(field + "/client_id", "must not be empty");
+            if (app.client_secret_ref.empty()) p.add(field + "/client_secret_ref", "must not be empty");
+            if (app.redirect_uri.empty()) p.add(field + "/redirect_uri", "must not be empty");
+        }
+    }
     for (const auto& [source, provider] : c.providers) {
         const auto field = "/providers/" + source;
         if (build.providers.find(source) == build.providers.end()) {
@@ -206,6 +225,10 @@ void check_providers(const cfg::ServiceConfig& c, const BuildCapabilities& build
         }
         if (provider.app_profile_id && !build.app_profiles) {
             p.add(field + "/app_profile_id", "application profiles are not supported yet");
+        } else if (provider.app_profile_id) {
+            const auto app = c.app_profiles.find(*provider.app_profile_id);
+            if (app == c.app_profiles.end() || app->second.source != source)
+                p.add(field + "/app_profile_id", "must identify this source's application");
         }
     }
 

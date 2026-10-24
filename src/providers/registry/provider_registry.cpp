@@ -111,6 +111,8 @@ void check_auth_profiles(const ports::ProviderBundle& bundle, const std::string&
             }
         }
         check_names(profile.scopes, field + "/scopes", p);
+        if (profile.oauth && profile.kind != ports::CredentialKind::oauth2)
+            p.add(field + "/kind", "OAuth requires kind oauth2");
     }
 }
 
@@ -367,6 +369,7 @@ struct ProviderRegistry::Entry {
     struct Profile {
         ports::AuthProfileSpec spec;
         std::unique_ptr<Slot> slot;
+        std::unique_ptr<Slot> oauth_slot;
     };
     std::map<std::string, Profile, std::less<>> profiles;
 };
@@ -394,6 +397,20 @@ ProviderRegistry::build(std::vector<ports::ProviderBundle> bundles,
     for (const auto& bundle : bundles) {
         const auto it = config.find(bundle.source.value());
         check_bundle(bundle, it == config.end() ? defaults : it->second, problems);
+        if (it != config.end() && it->second.app_profile_id) {
+            const auto app = services.oauth_applications.find(*it->second.app_profile_id);
+            if (app == services.oauth_applications.end() || !app->second ||
+                app->second->id != *it->second.app_profile_id || app->second->source != bundle.source.value()) {
+                problems.add("providers/" + bundle.source.value() + "/app_profile_id", "must identify this source's application");
+            } else {
+                const auto profile = find_profile(bundle, app->second->auth_profile);
+                if (!profile || !profile->oauth)
+                    problems.add("providers/" + bundle.source.value() + "/app_profile_id", "auth profile does not implement OAuth");
+                if (app->second->version == 0 || app->second->client_id.empty() || app->second->redirect_uri.empty() ||
+                    !app->second->client_secret || app->second->client_secret->empty())
+                    problems.add("providers/" + bundle.source.value() + "/app_profile_id", "application settings are incomplete");
+            }
+        }
     }
     if (!problems.empty()) {
         return std::move(problems).error();
@@ -404,6 +421,7 @@ ProviderRegistry::build(std::vector<ports::ProviderBundle> bundles,
     for (auto& bundle : bundles) {
         const auto it = config.find(bundle.source.value());
         const auto& settings = it == config.end() ? defaults : it->second;
+        const auto app = settings.app_profile_id ? services.oauth_applications.at(*settings.app_profile_id) : nullptr;
 
         ProviderView view{bundle.source,
                           bundle.name,
@@ -422,7 +440,9 @@ ProviderRegistry::build(std::vector<ports::ProviderBundle> bundles,
         for (const auto& profile : bundle.auth_profiles) {
             view.auth_methods.push_back({profile.auth_profile, profile.kind, profile.version,
                                          profile.input_fields, profile.scopes,
-                                         static_cast<bool>(profile.verifier), false, false});
+                                         static_cast<bool>(profile.verifier), static_cast<bool>(profile.oauth), false,
+                                         static_cast<bool>(profile.oauth), !profile.oauth ||
+                                         (app && app->auth_profile == profile.auth_profile)});
         }
         std::sort(view.auth_methods.begin(), view.auth_methods.end(),
                   [](const auto& a, const auto& b) { return a.auth_profile < b.auth_profile; });
@@ -430,7 +450,7 @@ ProviderRegistry::build(std::vector<ports::ProviderBundle> bundles,
         auto entry = std::unique_ptr<Entry>(
             new Entry{std::move(view),
                       ports::ProviderSetup{bundle.source, settings.options_json, services.upstream,
-                                           settings.rate_limit_group.value_or("")},
+                                           settings.rate_limit_group.value_or(""), app},
                       std::move(bundle.plaintext_endpoints), {}, {}});
         for (auto& binding : bundle.bindings) {
             auto key = binding.key();
@@ -440,7 +460,7 @@ ProviderRegistry::build(std::vector<ports::ProviderBundle> bundles,
         for (auto& profile : bundle.auth_profiles) {
             auto key = profile.auth_profile;
             entry->profiles.emplace(std::move(key),
-                                    Entry::Profile{std::move(profile), std::make_unique<Slot>()});
+                                    Entry::Profile{std::move(profile), std::make_unique<Slot>(), std::make_unique<Slot>()});
         }
         auto source = bundle.source.value();
         registry->entries_.emplace(std::move(source), std::move(entry));
@@ -531,7 +551,7 @@ ProviderRegistry::describe_auth_profile(std::string_view source, std::string_vie
     }
     const auto& spec = profile->second.spec;
     return ports::AuthProfileInfo{spec.auth_profile, spec.kind, spec.version, spec.input_fields,
-                                  static_cast<bool>(spec.verifier)};
+                                  static_cast<bool>(spec.verifier), static_cast<bool>(spec.oauth)};
 }
 
 domain::Result<ports::CapabilitySpec> ProviderRegistry::describe_capability(std::string_view source,
@@ -646,6 +666,26 @@ ProviderRegistry::require_verifier(std::string_view source, std::string_view aut
         return std::move(made).error();
     }
     return std::static_pointer_cast<ports::ICredentialVerifier>(std::move(made).value());
+}
+
+domain::Result<std::shared_ptr<ports::IOAuth2>> ProviderRegistry::require_oauth(
+    std::string_view source, std::string_view auth_profile) const {
+    auto entry = enabled_entry(source);
+    if (!entry) return entry.error();
+    const auto it = (*entry)->profiles.find(auth_profile);
+    if (it == (*entry)->profiles.end() || !it->second.spec.oauth)
+        return Error{ErrorCode::capability_unsupported, "this auth profile does not offer OAuth", false, {}};
+    const auto& app = (*entry)->setup.oauth_application;
+    if (!app || app->auth_profile != auth_profile)
+        return Error{ErrorCode::credentials_required, "administrator has not configured this OAuth profile", false, {}};
+    const auto& profile = it->second;
+    auto made = get_or_create(*profile.oauth_slot, instantiated_, [&]() -> domain::Result<std::shared_ptr<void>> {
+        auto oauth = profile.spec.oauth((*entry)->setup);
+        if (!oauth) return oauth.error();
+        return std::shared_ptr<void>{std::move(oauth).value()};
+    });
+    if (!made) return made.error();
+    return std::static_pointer_cast<ports::IOAuth2>(std::move(made).value());
 }
 
 } // namespace music_service::providers

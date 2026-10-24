@@ -363,8 +363,20 @@ void read_document(Reader& r, const json& doc, const std::filesystem::path& base
                   [&](const json& v, const std::string& p) {
                       if (!v.is_object()) {
                           r.fail(p, "must be an object");
-                      } else if (!v.empty()) {
-                          r.fail(p, "application profiles are not supported by this build yet");
+                      } else if (v.size() > 32) {
+                          r.fail(p, "must contain at most 32 profiles");
+                      } else {
+                          for (const auto& [id, value] : v.items()) {
+                              auto& a = c.app_profiles[id];
+                              r.object(value, p + "/" + id, {
+                                  {"source", [&](const json& x, const std::string& q) { r.string(x, q, a.source); }},
+                                  {"auth_profile", [&](const json& x, const std::string& q) { r.string(x, q, a.auth_profile); }},
+                                  {"version", [&](const json& x, const std::string& q) { r.number(x, q, a.version, 1, json_safe_max); }},
+                                  {"client_id", [&](const json& x, const std::string& q) { r.string(x, q, a.client_id); }},
+                                  {"client_secret_ref", [&](const json& x, const std::string& q) { r.string(x, q, a.client_secret_ref); }},
+                                  {"redirect_uri", [&](const json& x, const std::string& q) { r.string(x, q, a.redirect_uri); }}
+                              });
+                          }
                       }
                   }},
                  {"downloads",

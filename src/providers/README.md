@@ -14,7 +14,27 @@
 - migu：匿名四类搜索、实时推荐／分类／榜单、普通与数字专辑、歌单分页、歌词、试听识别及原生音源，见 [migu/README.md](migu/README.md)。
 - 其他平台：在实际接入时创建，不预建空平台包，不调用外部 helper。
 
-平台需要凭证校验时，在自身 auth 目录实现可选 ICredentialVerifier，并通过 bundle 的 auth_profiles 绑定。当前 9 个平台未使用应用令牌交换或 OAuth 刷新，对应端口与缓存留待 T24 按实际平台需求实现。平台协议只返回校验结果；账号选择和凭证存储属于 application/accounts。所有上游请求共用入场端口，不建立平台私有线程池或 semaphore。
+平台需要凭证校验时，在自身 auth 目录实现可选 ICredentialVerifier，并通过 bundle 的 auth_profiles 绑定。当前 9 个平台未使用应用令牌交换或 OAuth 刷新；0.1.24 已提供下述 OAuth 协议端口，完整授权协调与缓存仍待 T24。平台协议只返回校验结果；账号选择和凭证存储属于 application/accounts。所有上游请求共用入场端口，不建立平台私有线程池或 semaphore。
+
+## OAuth 授权基础（0.1.24）
+
+这部分是可测试的原生协议扩展接口，当前没有真实平台绑定，不能据此宣称已支持 OAuth 登录。
+
+| 组成 | 已实现范围 |
+| --- | --- |
+| AppProfile | 类型化 source、auth_profile、version、client_id、client_secret_ref、redirect_uri；最多 32 项。未启用构建能力时拒绝非空配置，启用的测试环境校验必需字段和平台绑定 |
+| OAuthApplication／OAuthGrant | 只读应用快照和授权结果；秘密使用现有可清零的 SecretBytes，协议端口不直接持久化 |
+| IOAuth2 | 授权 URL、授权码交换、刷新接口；工厂绑定在平台的 oauth2 授权配置上 |
+| ProviderRegistry | 注入应用快照，核对应用 ID、source、auth_profile 及必要配置；按授权配置惰性初始化并共享实例，失败不缓存，不允许使用另一配置的应用凭证 |
+| HttpRequest.allow_redirects | 默认为 true；设 false 后，301／302／303／307／308 均明确失败，传输层与上游协调层共同禁止跟随，防止 POST 令牌正文被转发 |
+
+工厂须为并发调用安全；用户授权码、令牌和刷新状态只保存在本次调用内，不放入共享实例。令牌交换与刷新请求须设置 allow_redirects=false，结果由未来账号协调层进行版本比较、持久化与并发刷新合并。
+
+正式服务没有启用 app_profiles 构建能力，也没有授权会话、回调路由、实际秘密装配或刷新协调；当前仍只接受空 app_profiles。注册表的 supports_authorization_code／configured 描述内部协议工厂，不新增对外授权路由。当前 9 个平台没有 OAuth 工厂，公开 supports_refresh 仍为 false。应用令牌缓存、真实平台协议和在线登录验收继续属于 T24。
+
+离线验证覆盖应用配置能力开关、必需字段、跨平台／跨授权配置隔离、并发单次初始化、失败后重试，以及本地 TLS 上同源／跨源的禁止重定向；不包含真实账号登录。
+
+2026-10-24 验证：Windows MSVC Debug／Release 构建通过，全量 CTest 599 项中 593 通过、6 个在线／样本用例按配置跳过、0 失败；此前 app_profiles 误放行导致的配置测试失败已修复。Release 0.1.24 实际运行 check-config：空应用配置退出码 0，非空未启用配置退出码 2。日志为 out/oauth-foundation-debug-build.log、out/oauth-foundation-release-build.log、out/oauth-foundation-ctest.log 和 out/oauth-foundation-release-check.json。
 
 ## 注册规则（T07）
 

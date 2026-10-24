@@ -104,6 +104,9 @@ domain::Error transport_error(std::string category, std::string message, bool re
 domain::Result<ports::HttpRequest> next_redirect(const ports::HttpRequest& current, const Url& current_url,
                                                  int status, std::string_view location,
                                                  std::uint32_t redirect_max) {
+    if (!current.allow_redirects) {
+        return transport_error("redirect_rejected", "redirects are disabled for this request", false);
+    }
     if (current.redirects_followed + 1 > redirect_max) {
         return transport_error("too_many_redirects", "redirect limit reached", false);
     }

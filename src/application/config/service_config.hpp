@@ -117,6 +117,15 @@ struct Downloads {
     domain::OutputOptions output{};
 };
 
+struct AppProfile {
+    std::string source;
+    std::string auth_profile;
+    std::uint64_t version{1};
+    std::string client_id;
+    std::string client_secret_ref;
+    std::string redirect_uri;
+};
+
 struct Retry {
     milliseconds initial_backoff{1000};
     std::uint32_t multiplier{2};
@@ -238,6 +247,7 @@ struct ServiceConfig {
     Upstream upstream;
     Catalog catalog;
     std::map<std::string, ProviderConfig> providers;
+    std::map<std::string, AppProfile> app_profiles;
     Downloads downloads;
     Retry retry;
     DownloadLimits download_limits;

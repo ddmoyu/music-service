@@ -23,6 +23,7 @@ namespace ports = application::ports;
 // Shared services handed to every factory.
 struct ProviderServices {
     std::shared_ptr<ports::UpstreamHttp> upstream;
+    std::map<std::string, std::shared_ptr<const ports::OAuthApplication>> oauth_applications{};
 };
 
 // The listing types live with the ProviderDirectory port.
@@ -107,6 +108,9 @@ public:
     [[nodiscard]] domain::Result<std::shared_ptr<ports::ICredentialVerifier>>
     require_verifier(std::string_view source, std::string_view auth_profile,
                      ports::CredentialKind kind) const override;
+
+    domain::Result<std::shared_ptr<ports::IOAuth2>> require_oauth(
+        std::string_view source, std::string_view auth_profile) const override;
 
     domain::Result<void> validate_secret(std::string_view source, std::string_view auth_profile,
                                          ports::CredentialKind kind, const ports::SecretBytes&) const override;

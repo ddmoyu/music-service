@@ -328,6 +328,91 @@ TEST_CASE("HTTPS GET and POST reach a trusted upstream and return the lease", "[
     CHECK(h.ledger->usage().total == 0);
 }
 
+TEST_CASE("confidential requests cannot follow same or cross origin redirects", "[transport][oauth]") {
+    bool cross_origin = false;
+    SECTION("same origin") {}
+    SECTION("cross origin") { cross_origin = true; }
+    TestServer a{TestServer::Kind::trusted_tls};
+    TestServer b{TestServer::Kind::trusted_tls};
+    const auto landing = [](const httplib::Request&, httplib::Response& res) { res.set_content("landed", "text/plain"); };
+    a.routes().Get("/landing", landing);
+    a.routes().Post("/landing", landing);
+    b.routes().Get("/landing", landing);
+    b.routes().Post("/landing", landing);
+    b.start();
+    for (const auto status : {301, 302, 303, 307, 308}) {
+        const auto destination = cross_origin ? b.url("/landing") : std::string{"/landing"};
+        a.routes().Post("/token-" + std::to_string(status), [status, destination](const auto&, auto& res) {
+            res.set_redirect(destination, status);
+        });
+    }
+    a.start();
+    Harness h;
+    for (const auto status : {301, 302, 303, 307, 308}) {
+        auto request = get(a.url("/token-" + std::to_string(status)));
+        request.method = ports::HttpMethod::post;
+        request.operation = "search";
+        request.body = "client_secret=test-only-secret";
+        request.allow_redirects = false;
+        const auto result = h.fetch(request);
+        REQUIRE_FALSE(result);
+        CHECK(category(result.error()) == "redirect_rejected");
+        CHECK_FALSE(result.error().retryable);
+        bool head_seen = false, chunk_seen = false;
+        const auto streamed = h.client->stream(request, h.base(), Harness::context(),
+            [&](const auto&) { head_seen = true; return true; },
+            [&](const auto&) { chunk_seen = true; return true; });
+        REQUIRE_FALSE(streamed);
+        CHECK(category(streamed.error()) == "redirect_rejected");
+        CHECK_FALSE(head_seen);
+        CHECK_FALSE(chunk_seen);
+        CHECK_FALSE(a.seen.saw("/landing"));
+        CHECK_FALSE(b.seen.saw("/landing"));
+        CHECK(h.ledger->usage().total == 0);
+    }
+}
+
+TEST_CASE("the upstream coordinator independently enforces no redirect requests", "[transport][oauth]") {
+    class ReturningRedirect final : public ports::HttpTransport {
+    public:
+        int calls{0};
+        domain::Result<ports::HttpResponse> request(const ports::HttpRequest& request,
+            const ports::UpstreamLease&, const ports::OperationContext&) override {
+            return ports::HttpResponse{redirect(request), {}};
+        }
+        domain::Result<ports::HttpResponseHead> receive(const ports::HttpRequest& request,
+            const ports::UpstreamLease&, const ports::OperationContext&,
+            const ports::HeadConsumer&, const ports::ChunkConsumer&) override {
+            return redirect(request);
+        }
+        ports::HttpResponseHead redirect(const ports::HttpRequest& request) {
+            ++calls;
+            auto next = request;
+            next.url = "https://other.example/landing";
+            next.allow_redirects = true; // An adapter cannot override the caller's restriction.
+            ports::HttpResponseHead head;
+            head.status = 307;
+            head.redirect = std::make_shared<ports::HttpRequest>(std::move(next));
+            return head;
+        }
+    };
+    Harness h;
+    auto transport = std::make_shared<ReturningRedirect>();
+    UpstreamClient client{h.ledger, transport, h.clock};
+    auto request = get("https://auth.example/token");
+    request.allow_redirects = false;
+    const auto response = client.fetch(request, h.base(), Harness::context());
+    REQUIRE_FALSE(response);
+    CHECK(category(response.error()) == "redirect_rejected");
+    CHECK(transport->calls == 1);
+    const auto streamed = client.stream(request, h.base(), Harness::context(),
+        [](const auto&) { return true; }, [](const auto&) { return true; });
+    REQUIRE_FALSE(streamed);
+    CHECK(category(streamed.error()) == "redirect_rejected");
+    CHECK(transport->calls == 2);
+    CHECK(h.ledger->usage().total == 0);
+}
+
 TEST_CASE("encoded HTTP bodies require explicit wire preservation and remain bounded", "[transport]") {
     // gzip("hello"), generated independently with Python gzip and a fixed timestamp.
     const std::string wire{"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x02\xff\xcb\x48\xcd\xc9\xc9\x07\x00\x86\xa6\x10\x36\x05\x00\x00\x00", 25};

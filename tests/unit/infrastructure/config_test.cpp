@@ -190,6 +190,42 @@ TEST_CASE("features the build lacks cannot be enabled", "[config]") {
     CHECK(has_problem(error, "/app_profiles"));
 }
 
+TEST_CASE("application profiles stay gated and validate their source binding", "[config][oauth]") {
+    const auto document = R"({
+      "app_profiles":{"shared_app":{"source":"kuwo","auth_profile":"web","version":2,
+        "client_id":"test-client","client_secret_ref":"sec_test","redirect_uri":"https://service.example/callback"}},
+      "providers":{"kuwo":{"app_profile_id":"shared_app"}}
+    })";
+    const auto disabled = load(document);
+    REQUIRE_FALSE(disabled);
+    CHECK(has_problem(disabled.error(), "/app_profiles"));
+    CHECK(has_problem(disabled.error(), "/providers/kuwo/app_profile_id"));
+
+    auto caps = full_build();
+    caps.app_profiles = true; // Only a harness opts in; the service does not.
+    const auto enabled = load(document, options({}, caps));
+    REQUIRE(enabled);
+    const auto& app = enabled->app_profiles.at("shared_app");
+    CHECK(app.source == "kuwo");
+    CHECK(app.auth_profile == "web");
+    CHECK(app.version == 2);
+    CHECK(app.client_secret_ref == "sec_test");
+    const auto empty = load(R"({"app_profiles":{"shared_app":{}}})", options({}, caps));
+    REQUIRE_FALSE(empty);
+    CHECK(has_problem(empty.error(), "/app_profiles/shared_app/source"));
+    CHECK(has_problem(empty.error(), "/app_profiles/shared_app/client_id"));
+    CHECK(has_problem(empty.error(), "/app_profiles/shared_app/client_secret_ref"));
+    CHECK(has_problem(empty.error(), "/app_profiles/shared_app/redirect_uri"));
+    const auto missing = load(R"({"providers":{"kuwo":{"app_profile_id":"missing"}}})", options({}, caps));
+    REQUIRE_FALSE(missing);
+    CHECK(has_problem(missing.error(), "/providers/kuwo/app_profile_id"));
+    auto wrong_source = *enabled;
+    wrong_source.app_profiles.at("shared_app").source = "other";
+    const auto invalid = infrastructure::config::validate_service_config(wrong_source, caps);
+    REQUIRE_FALSE(invalid);
+    CHECK(has_problem(invalid.error(), "/providers/kuwo/app_profile_id"));
+}
+
 TEST_CASE("logging bounds and removed source switching are validated", "[config][observability]") {
     const auto config = load(R"({"logging":{"file_enabled":true,"max_file_bytes":65536,"retained_files":2},
         "features":{"automatic_fallback":false}, "lifetimes":{"match_seconds":300},"handles":{"matches":1000}})");

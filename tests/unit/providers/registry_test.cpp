@@ -12,6 +12,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <filesystem>
 #include <map>
 #include <string>
@@ -114,6 +115,126 @@ TEST_CASE("the built-in manifest registers Kuwo", "[providers]") {
     }
     CAPTURE(problems);
     CHECK(problems.empty());
+}
+
+namespace {
+class TestOAuth final : public ports::IOAuth2 {
+public:
+    domain::Result<std::string> authorize_url(std::string_view state) const override {
+        return "https://auth.example/authorize?state=" + std::string{state};
+    }
+    domain::Result<ports::OAuthGrant> exchange(std::string_view, const ports::SecretBytes&,
+        const ports::OperationContext&) override {
+        return ports::OAuthGrant{ports::SecretBytes{"test-token"}, std::chrono::seconds{60}, {"read"}};
+    }
+    domain::Result<ports::OAuthGrant> refresh(const ports::CredentialSnapshot&,
+        const ports::OperationContext&) override {
+        return domain::Error{domain::ErrorCode::canceled, "test canceled", false, {}};
+    }
+};
+std::shared_ptr<ports::OAuthApplication> test_oauth_app() {
+    return std::make_shared<ports::OAuthApplication>(ports::OAuthApplication{
+        "app_test", "authsrc", "web", 1, "client", "https://service.example/callback",
+        std::make_shared<ports::SecretBytes>("test-client-secret")});
+}
+ports::ProviderBundle test_oauth_bundle(ports::ProviderFactory<ports::IOAuth2> factory) {
+    auto bundle = mock_catalog("authsrc");
+    ports::AuthProfileSpec profile;
+    profile.auth_profile = "web";
+    profile.kind = ports::CredentialKind::oauth2;
+    profile.oauth = std::move(factory);
+    bundle.auth_profiles.push_back(profile);
+    profile.auth_profile = "mobile";
+    bundle.auth_profiles.push_back(std::move(profile));
+    return bundle;
+}
+ports::ProviderFactory<ports::IOAuth2> test_oauth_factory() {
+    return [](const ports::ProviderSetup&) -> domain::Result<std::shared_ptr<ports::IOAuth2>> {
+        return std::shared_ptr<ports::IOAuth2>{std::make_shared<TestOAuth>()};
+    };
+}
+}
+
+TEST_CASE("OAuth factories are lazy shared and bound to the configured profile", "[providers][oauth]") {
+    auto calls = std::make_shared<std::atomic<int>>(0);
+    auto bundle = test_oauth_bundle([calls](const ports::ProviderSetup& setup)
+        -> domain::Result<std::shared_ptr<ports::IOAuth2>> {
+        ++*calls;
+        if (!setup.oauth_application || setup.oauth_application->auth_profile != "web")
+            return domain::Error{domain::ErrorCode::internal, "wrong application", false, {}};
+        return std::shared_ptr<ports::IOAuth2>{std::make_shared<TestOAuth>()};
+    });
+    ProviderConfig configured;
+    configured.app_profile_id = "app_test";
+    const auto registry = unwrap(ProviderRegistry::build({bundle}, {{"authsrc", configured}},
+        {nullptr, {{"app_test", test_oauth_app()}}}));
+    CHECK(*calls == 0);
+    CHECK(registry->require_oauth("authsrc", "mobile").error().code == domain::ErrorCode::credentials_required);
+    CHECK(*calls == 0);
+    CHECK(registry->require_oauth("authsrc", "absent").error().code == domain::ErrorCode::capability_unsupported);
+    CHECK(registry->require_oauth("absent", "web").error().code == domain::ErrorCode::unknown_provider);
+    const auto view = unwrap(registry->describe("authsrc"));
+    for (const auto& method : view.auth_methods) {
+        CHECK(method.supports_authorization_code);
+        CHECK(method.supports_refresh);
+        CHECK(method.configured == (method.auth_profile == "web"));
+    }
+    std::vector<std::shared_ptr<ports::IOAuth2>> instances(8);
+    std::vector<std::jthread> workers;
+    for (std::size_t i = 0; i < instances.size(); ++i) workers.emplace_back([&, i] {
+        const auto made = registry->require_oauth("authsrc", "web");
+        if (made) instances[i] = *made;
+    });
+    workers.clear();
+    CHECK(*calls == 1);
+    REQUIRE(instances.front());
+    for (const auto& instance : instances) CHECK(instance == instances.front());
+    CHECK(unwrap(instances.front()->authorize_url("nonce")) == "https://auth.example/authorize?state=nonce");
+    const auto grant = unwrap(instances.front()->exchange("prn_a", ports::SecretBytes{"code"},
+        {std::chrono::steady_clock::now() + std::chrono::seconds{1}, {}}));
+    CHECK(grant.expires_in == std::chrono::seconds{60});
+    CHECK(grant.secret.reveal() == "test-token");
+}
+
+TEST_CASE("OAuth registration rejects inconsistent applications and credential kinds", "[providers][oauth]") {
+    auto bundle = test_oauth_bundle(test_oauth_factory());
+    auto app = test_oauth_app();
+    ProviderConfig configured;
+    configured.app_profile_id = "app_test";
+    SECTION("map identity") { app->id = "wrong"; }
+    SECTION("source") { app->source = "other"; }
+    SECTION("profile") { app->auth_profile = "absent"; }
+    SECTION("version") { app->version = 0; }
+    SECTION("client") { app->client_id.clear(); }
+    SECTION("redirect") { app->redirect_uri.clear(); }
+    SECTION("secret") { app->client_secret.reset(); }
+    SECTION("empty secret") { app->client_secret = std::make_shared<ports::SecretBytes>(); }
+    SECTION("kind") { bundle.auth_profiles[0].kind = ports::CredentialKind::cookie; }
+    const auto invalid = ProviderRegistry::build({bundle}, {{"authsrc", configured}}, {nullptr, {{"app_test", app}}});
+    REQUIRE_FALSE(invalid);
+    CHECK(invalid.error().code == domain::ErrorCode::validation_failed);
+}
+
+TEST_CASE("OAuth factories reject unavailable setup and recover after initialization failure", "[providers][oauth]") {
+    auto bundle = test_oauth_bundle(test_oauth_factory());
+    const auto unconfigured = build({bundle});
+    CHECK(unconfigured->require_oauth("authsrc", "web").error().code == domain::ErrorCode::credentials_required);
+    ProviderConfig disabled;
+    disabled.enabled = false;
+    CHECK(build({bundle}, {{"authsrc", disabled}})->require_oauth("authsrc", "web").error().code ==
+        domain::ErrorCode::provider_disabled);
+    auto calls = std::make_shared<std::atomic<int>>(0);
+    bundle = test_oauth_bundle([calls](const ports::ProviderSetup&) -> domain::Result<std::shared_ptr<ports::IOAuth2>> {
+        if (++*calls == 1) return std::shared_ptr<ports::IOAuth2>{};
+        return std::shared_ptr<ports::IOAuth2>{std::make_shared<TestOAuth>()};
+    });
+    ProviderConfig configured;
+    configured.app_profile_id = "app_test";
+    const auto registry = unwrap(ProviderRegistry::build({bundle}, {{"authsrc", configured}},
+        {nullptr, {{"app_test", test_oauth_app()}}}));
+    CHECK(registry->require_oauth("authsrc", "web").error().code == domain::ErrorCode::internal);
+    CHECK(registry->require_oauth("authsrc", "web"));
+    CHECK(*calls == 2);
 }
 
 TEST_CASE("catalog, audio and link sources register side by side", "[providers]") {

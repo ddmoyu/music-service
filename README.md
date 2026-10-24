@@ -1,5 +1,7 @@
 # music-service
 
+0.1.24 整理 OAuth 2.0 协议端口、应用配置模型与按授权配置隔离的工厂注册，并落实敏感请求禁用重定向。当前平台尚未接入 OAuth 登录、回调或自动刷新，正式服务继续拒绝非空 app_profiles；实现范围见[授权基础](src/providers/README.md#oauth-授权基础0124)。
+
 0.1.23 增加管理员 JSON／Prometheus 指标、资源占用状态及有界异步文件日志轮转，配置和口径见[运维观测](docs/operations-observability.md)。跨平台匹配、手动与自动换源已取消；解析与下载只使用请求指定的平台。
 
 跨平台的纯后端音乐服务，通过 HTTP API 提供音乐搜索、音源解析、下载与任务管理。本仓库只包含后端：GUI、网页、桌面等前端在各自独立的仓库中开发，通过版本化 API 接入。服务支持原生进程、系统服务和 Docker 部署，系统与架构范围见[配置与部署](docs/design/cpp20-refactor/backend-service/configuration-and-deployment.md)。

@@ -23,6 +23,7 @@ struct AuthProfileInfo {
     std::uint32_t version{1};
     std::vector<AuthField> input_fields;
     bool supports_verify{false};
+    bool supports_refresh{false};
 };
 
 // Secret-free description of one registered capability.
@@ -39,8 +40,10 @@ struct AuthMethodView {
     std::vector<AuthField> input_fields;
     std::vector<std::string> scopes;
     bool supports_verify{false};
-    bool supports_refresh{false};           // refresh ports arrive with T24
-    bool supports_application_token{false}; // application token ports arrive with T24
+    bool supports_refresh{false};
+    bool supports_application_token{false};
+    bool supports_authorization_code{false};
+    bool configured{true};
 };
 
 struct ProviderView {
@@ -125,6 +128,12 @@ public:
     virtual domain::Result<std::shared_ptr<ICredentialVerifier>>
     require_verifier(std::string_view source, std::string_view auth_profile,
                      CredentialKind kind) const = 0;
+
+    virtual domain::Result<std::shared_ptr<IOAuth2>> require_oauth(
+        std::string_view, std::string_view) const {
+        return domain::Error{domain::ErrorCode::capability_unsupported,
+            "this auth profile does not offer OAuth", false, {}};
+    }
 
     virtual domain::Result<void> validate_secret(std::string_view, std::string_view, CredentialKind kind,
                                                  const SecretBytes&) const {

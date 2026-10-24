@@ -54,6 +54,8 @@ struct HttpRequest {
     // Set by the service's traffic-class policy; redirects retain these limits.
     std::optional<std::chrono::milliseconds> connect_timeout{};
     std::optional<std::chrono::milliseconds> idle_timeout{};
+    // Token exchanges must not forward a confidential POST body through redirects.
+    bool allow_redirects{true};
 };
 
 struct HttpResponseHead {

@@ -1,6 +1,7 @@
 #include "application/transport/upstream_client.hpp"
 
 #include "application/transport/url.hpp"
+#include "application/transport/http_rules.hpp"
 
 #include <charconv>
 #include <chrono>
@@ -106,6 +107,9 @@ domain::Result<HopResult<T>> UpstreamClient::run(ports::HttpRequest request, con
         report(admitted, *head);
         if (!head->redirect) {
             return HopResult<T>{std::move(result).value()};
+        }
+        if (!request.allow_redirects) {
+            return transport_error("redirect_rejected", "redirects are disabled for this request", false);
         }
         request = *head->redirect;
     }

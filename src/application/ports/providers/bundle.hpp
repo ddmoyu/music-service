@@ -103,6 +103,7 @@ struct ProviderSetup {
     std::shared_ptr<UpstreamHttp> upstream{};
     // providers.<source>.rate_limit_group; empty means the source itself.
     std::string rate_limit_group{};
+    std::shared_ptr<const OAuthApplication> oauth_application{};
 };
 
 template <class Interface>
@@ -117,6 +118,7 @@ struct AuthProfileSpec {
     ProviderFactory<ICredentialVerifier> verifier{}; // empty: this profile cannot verify
     // 只校验秘密结构，不联网。未绑定时仍只允许传统 Cookie 输入。
     std::function<domain::Result<void>(const SecretBytes&)> validate_secret{};
+    ProviderFactory<IOAuth2> oauth{};
 };
 
 // Type-erased capability factory that remembers the interface it produces, so a factory
