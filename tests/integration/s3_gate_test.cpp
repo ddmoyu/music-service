@@ -709,11 +709,16 @@ TEST_CASE("T32: a restart under load resumes every transfer without repeating an
     auto api = service->client(g.token);
     const auto until = Clock::now() + std::chrono::seconds{30};
     std::size_t done = 0;
+    json observed = json::object();
     while (done < tasks.size()) {
+        INFO("last restart task states: " << observed.dump());
+        INFO("CDN requests: " << cdn->served().size() << ", bytes sent: " << cdn->bytes_sent()
+                              << ", held transfers: " << cdn->holding());
         REQUIRE(Clock::now() < until);
         done = 0;
         for (const auto& id : tasks) {
             const auto task = body(api.Get("/api/v1/downloads/" + id))["data"];
+            observed[id] = task;
             done += terminal.count(task["status"].get<std::string>());
         }
         std::this_thread::sleep_for(std::chrono::milliseconds{20});
