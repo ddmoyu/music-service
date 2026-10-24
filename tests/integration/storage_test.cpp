@@ -53,7 +53,7 @@ struct Store {
         repos_reset();
         database.reset();
         database = Database::open(dir / "service.sqlite3", db_options).value();
-        REQUIRE(*migrate(*database, clock->now()) == 2);
+        REQUIRE(*migrate(*database, clock->now()) == 3);
         const RepositoryContext ctx{database.get(), clock, ids};
         identity = std::make_unique<SqliteIdentityRepository>(ctx);
         credentials = std::make_unique<SqliteCredentialRepository>(ctx);
@@ -118,7 +118,7 @@ ports::TaskRecord step(Store& s, const ports::TaskRecord& task, TaskStatus to) {
 
 TEST_CASE("migrations run once and reopen cleanly", "[storage][migrations]") {
     Store s{"migrate"};
-    CHECK(*migrate(*s.database, s.clock->now()) == 2);
+    CHECK(*migrate(*s.database, s.clock->now()) == 3);
 
     const auto mode = s.database->read([](Connection& db) -> domain::Result<std::string> {
         auto stmt = db.prepare("PRAGMA journal_mode");
@@ -129,7 +129,7 @@ TEST_CASE("migrations run once and reopen cleanly", "[storage][migrations]") {
     CHECK(*mode == "wal");
 
     s.reopen();
-    CHECK(*migrate(*s.database, s.clock->now()) == 2);
+    CHECK(*migrate(*s.database, s.clock->now()) == 3);
 }
 
 TEST_CASE("a newer or altered schema is refused", "[storage][migrations]") {

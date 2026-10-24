@@ -90,6 +90,13 @@ domain::Result<application::ports::SecretBytes> MbedTlsTokenCodec::generate() {
     return application::ports::SecretBytes{std::move(token)};
 }
 
+domain::Result<std::string> MbedTlsTokenCodec::pkce_challenge(std::string_view verifier) const {
+    std::array<unsigned char, 32> digest{};
+    if (mbedtls_sha256(reinterpret_cast<const unsigned char*>(verifier.data()), verifier.size(), digest.data(), 0) != 0)
+        return crypto_error("PKCE digest failed");
+    return base64url(digest.data(), digest.size());
+}
+
 std::string MbedTlsTokenCodec::hash(std::string_view token) const {
     std::array<unsigned char, 32> digest{};
     mbedtls_sha256(reinterpret_cast<const unsigned char*>(token.data()), token.size(), digest.data(), 0);

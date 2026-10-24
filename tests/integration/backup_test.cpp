@@ -54,7 +54,7 @@ TEST_CASE("a backup taken while serving restores offline, keeping the replaced d
         const auto saved = d.run({"backup", "--output", utf8(backup)});
         INFO(saved.err);
         REQUIRE(saved.code == server::exit_ok);
-        CHECK(saved.out.find("schema_version=2") != std::string::npos);
+        CHECK(saved.out.find("schema_version=3") != std::string::npos);
         // Restoring needs the lock: refused while serving, nothing changed.
         const auto locked = d.run({"restore", "--input", utf8(backup)});
         CHECK(locked.code == server::exit_failed);
@@ -64,7 +64,7 @@ TEST_CASE("a backup taken while serving restores offline, keeping the replaced d
     }
     const auto info = sqlite::verify_backup(backup);
     REQUIRE(info);
-    CHECK(info->schema_version == 2);
+    CHECK(info->schema_version == 3);
     CHECK_FALSE(fs::exists(d.dir / "out" / "备份.sqlite3.partial"));
     // An existing file is never replaced.
     const auto again = d.run({"backup", "--output", utf8(backup)});
@@ -153,14 +153,14 @@ TEST_CASE("a failing migration leaves the database at its previous version", "[s
     {
         auto database = sqlite::Database::open(file, {});
         REQUIRE(database);
-        REQUIRE(*sqlite::migrate(*database.value(), clock->now()) == 2U);
+        REQUIRE(*sqlite::migrate(*database.value(), clock->now()) == 3U);
         REQUIRE(database.value()->write([](sqlite::Connection& db) {
             return db.exec("INSERT INTO principals (id, display_name, role, enabled, created_at)"
                            " VALUES ('prn_kept', 'kept', 'user', 1, 0)");
         }));
 
         std::vector<sqlite::Migration> list(sqlite::builtin_migrations().begin(), sqlite::builtin_migrations().end());
-        list.push_back({3, "ALTER TABLE principals ADD COLUMN note TEXT; INSERT INTO no_such_table VALUES (1);"});
+        list.push_back({list.back().version + 1, "ALTER TABLE principals ADD COLUMN note TEXT; INSERT INTO no_such_table VALUES (1);"});
         const auto failed = sqlite::migrate(*database.value(), clock->now(), list);
         CHECK_FALSE(failed);
         // Each migration is one transaction: the half that ran is rolled back.
@@ -177,9 +177,9 @@ TEST_CASE("a failing migration leaves the database at its previous version", "[s
                    std::to_string(kept->integer(0));
         });
         REQUIRE(state);
-        CHECK(*state == "2/0/1");
+        CHECK(*state == std::to_string(sqlite::builtin_migrations().back().version) + "/0/1");
         // This build still opens it.
-        CHECK(*sqlite::migrate(*database.value(), clock->now()) == 2U);
+        CHECK(*sqlite::migrate(*database.value(), clock->now()) == 3U);
     }
     std::error_code ec;
     fs::remove_all(dir, ec);

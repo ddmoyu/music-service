@@ -3,6 +3,7 @@
 add_library(music_service_application STATIC
     accounts/credential_service.cpp
     accounts/identity_admin.cpp
+    accounts/oauth_service.cpp
     catalog/asset_service.cpp
     catalog/catalog_entities.cpp
     catalog/catalog_service.cpp

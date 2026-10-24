@@ -31,7 +31,11 @@ struct CredentialRecord {
     std::chrono::system_clock::time_point created_at;
     std::optional<std::chrono::system_clock::time_point> last_verified_at;
     std::optional<VerifyOutcome> last_verify_result;
-    std::vector<std::string> scopes; // scope evidence of the last verification
+    std::vector<std::string> scopes; // 最近一次校验或 OAuth grant 的 scope 证据
+    std::string refresh_state{"idle"}; // idle | pending | reauthorization_required
+    std::optional<std::string> oauth_application_id;
+    std::uint64_t oauth_application_version{0};
+    std::optional<std::chrono::system_clock::time_point> refresh_after{};
 };
 
 struct NewCredential {
@@ -42,6 +46,10 @@ struct NewCredential {
     std::string auth_profile;
     std::string secret_ref;
     std::optional<std::chrono::system_clock::time_point> expires_at;
+    std::vector<std::string> scopes{};
+    std::optional<std::string> oauth_application_id{};
+    std::uint64_t oauth_application_version{0};
+    std::optional<std::chrono::system_clock::time_point> refresh_after{};
 };
 
 // What a verification established about the checked version. Absent evidence keeps
@@ -95,6 +103,17 @@ public:
 
     // Every secret_ref a credential still points to, for reclaiming orphaned secrets.
     virtual domain::Result<std::vector<std::string>> referenced_secret_refs() = 0;
+
+    // 轮换前必须提交 pending；重启后 pending 只能要求重新授权，不能重放旧 token。
+    virtual domain::Result<CredentialRecord> begin_refresh(const std::string& owner, const std::string& id,
+                                                           std::uint64_t version) = 0;
+    virtual domain::Result<SecretReplacement> finish_refresh(const std::string& owner, const std::string& id,
+        std::uint64_t version, const std::optional<std::string>& secret_ref,
+        std::chrono::system_clock::time_point expires_at, const std::vector<std::string>& scopes,
+        std::chrono::system_clock::time_point refresh_after = {}) = 0;
+    virtual domain::Result<void> recover_refreshes() = 0;
+    virtual domain::Result<std::vector<CredentialRecord>> due_refreshes(const std::string& application_id,
+        std::uint64_t application_version, std::chrono::system_clock::time_point before, std::uint32_t limit) = 0;
 
     // In one transaction: marks the credential revoked, advances its version, clears
     // any default pointing to it and advances that selection_version. Repeating the

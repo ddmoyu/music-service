@@ -2,6 +2,8 @@
 
 当前实现为 20 项匿名能力；新增发现能力及音质结论见[第二阶段](#第二阶段发现能力与音质核查)。下方先保留 14 项能力的首阶段验收基线。
 
+2026-10-24 补充：按用户要求确认“不授权、不登录能否获取歌曲和下载”。使用 Release 0.1.25、全新的隔离数据目录、空平台账号与空 app_profiles，歌曲 49292 的详情请求成功，匿名标准 MP3 下载任务 completed。文件 `Lover303 - Track 5 Nudel.mp3` 为 310,500 字节，SHA-256 `652a645bc4d08dcce3f8b4f44d4432256f64f107eb658a4ec8581090c83812b4`；本次 metadata_policy=skip。结果支持保留现有 Jamendo 匿名能力，没有为它增加 OAuth 登录要求。证据：out/oauth-release-smoke-report.json；不代表所有歌曲或其他音质均可匿名下载。
+
 日期：2026-10-23。用户明确要求开始 Jamendo，本轮按 N01 首阶段接入，并加入已在线确认的专辑、歌手和推荐歌单目录。实现入口为 [Jamendo 适配器](../../src/providers/jamendo/README.md)，独立客户端为 [jamendo_e2e.py](../../packaging/e2e/jamendo_e2e.py)。
 
 ## 协议依据

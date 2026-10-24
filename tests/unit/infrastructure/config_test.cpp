@@ -193,7 +193,7 @@ TEST_CASE("features the build lacks cannot be enabled", "[config]") {
 TEST_CASE("application profiles stay gated and validate their source binding", "[config][oauth]") {
     const auto document = R"({
       "app_profiles":{"shared_app":{"source":"kuwo","auth_profile":"web","version":2,
-        "client_id":"test-client","client_secret_ref":"sec_test","redirect_uri":"https://service.example/callback"}},
+        "client_id":"test-client","client_secret_ref":"sec_test","redirect_uri":"https://service.example/api/v1/oauth/callback/shared_app"}},
       "providers":{"kuwo":{"app_profile_id":"shared_app"}}
     })";
     const auto disabled = load(document);

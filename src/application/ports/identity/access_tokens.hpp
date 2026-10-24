@@ -20,6 +20,10 @@ public:
     virtual domain::Result<SecretBytes> generate() = 0;
     // Deterministic, one-way; the same token always gives the same hash.
     [[nodiscard]] virtual std::string hash(std::string_view token) const = 0;
+    // OAuth PKCE S256；随机 verifier 使用 generate()，只允许 URL 安全字符。
+    virtual domain::Result<std::string> pkce_challenge(std::string_view) const {
+        return domain::Error{domain::ErrorCode::capability_unsupported, "PKCE is unavailable", false, {}};
+    }
 };
 
 // Hands a token's plaintext to the operator through a new owner-only file. Never

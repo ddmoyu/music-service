@@ -20,6 +20,7 @@ public:
 
     domain::Result<application::ports::SecretBytes> generate() override;
     [[nodiscard]] std::string hash(std::string_view token) const override;
+    domain::Result<std::string> pkce_challenge(std::string_view verifier) const override;
 
 private:
     struct State;

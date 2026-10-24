@@ -265,6 +265,7 @@ json credential_json(const ports::CredentialRecord& c) {
                 {"expires_at", optional_time(c.expires_at)},
                 {"version", c.version},
                 {"status", to_string(c.status)},
+                {"refresh_state", c.refresh_state},
                 {"last_verified_at", optional_time(c.last_verified_at)},
                 {"last_verify_result", outcome_json(c.last_verify_result)},
                 {"created_at", utc(c.created_at)}};
@@ -708,6 +709,8 @@ json provider_json(const ports::ProviderView& view, json credentials) {
                            {"scopes", string_array(method.scopes)},
                            {"supports_verify", method.supports_verify},
                            {"supports_refresh", method.supports_refresh},
+                           {"supports_authorization_code", method.supports_authorization_code},
+                           {"configured", method.configured},
                            {"supports_application_token", method.supports_application_token}});
     }
     json qualities = json::array();
@@ -980,6 +983,12 @@ struct ControlApi::Impl {
         return [this, access, scope = std::string{scope}, route = std::move(route), upstream](const httplib::Request& req,
                                                                                    httplib::Response& res) {
             Call call{req, res, res.get_header_value("X-Request-Id"), std::nullopt};
+            if (req.path.starts_with("/api/v1/oauth/")) {
+                res.set_header("Cache-Control", "no-store");
+                res.set_header("Referrer-Policy", "no-referrer");
+                res.set_header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
+                res.set_header("X-Content-Type-Options", "nosniff");
+            }
             if (access != Access::open) {
                 res.set_header("Cache-Control", "no-store");
                 const auto header = req.get_header_value("Authorization");
@@ -1039,6 +1048,16 @@ struct ControlApi::Impl {
                    guard(Access::scoped, accounts::scope::downloads_read, [this](Call& call) { destinations(call); }));
 
         const auto credentials = accounts::scope::credentials_write;
+        if (services.oauth) {
+            server.Post("/api/v1/oauth/sessions", guard(Access::scoped, credentials, [this](Call& call) { create_oauth(call); }));
+            server.Get(R"(/api/v1/oauth/sessions/([A-Za-z0-9_]+))",
+                guard(Access::scoped, credentials, [this](Call& call) { get_oauth(call, false); }));
+            server.Delete(R"(/api/v1/oauth/sessions/([A-Za-z0-9_]+))",
+                guard(Access::scoped, credentials, [this](Call& call) { get_oauth(call, true); }));
+            server.Get("/api/v1/oauth/authorize", guard(Access::open, {}, [this](Call& call) { authorize_oauth(call); }));
+            server.Get(R"(/api/v1/oauth/callback/([A-Za-z0-9_-]+))",
+                guard(Access::open, {}, [this](Call& call) { callback_oauth(call); }));
+        }
         server.Get("/api/v1/credentials", guard(Access::scoped, credentials, [this](Call& call) { list_credentials(call); }));
         server.Post("/api/v1/credentials", guard(Access::scoped, credentials, [this](Call& call) { create_credential(call); }));
         server.Put(R"(/api/v1/credentials/([A-Za-z0-9_]+))",
@@ -2207,6 +2226,82 @@ struct ControlApi::Impl {
             return domain::Error::validation("auth_profile", "this source has several cookie profiles; name one");
         }
         return cookie_profiles.front();
+    }
+
+    static json oauth_json(const accounts::OAuthSessionView& s) {
+        return {{"session_id", s.id}, {"source", s.source}, {"auth_profile", s.auth_profile},
+            {"status", s.status}, {"expires_at", utc(s.expires_at)},
+            {"credential_id", optional_string(s.credential_id)}, {"error_code", optional_string(s.error_code)}};
+    }
+
+    void create_oauth(Call& call) {
+        if (!only_params(call, {})) return;
+        auto body = body_object(call, {"source", "auth_profile", "label"});
+        if (!body) return;
+        std::optional<std::string> source, profile, label;
+        if (!read_string(call, *body, "source", source) || !read_string(call, *body, "auth_profile", profile) ||
+            !read_string(call, *body, "label", label)) return;
+        if (!source || !profile || source->empty() || profile->empty()) {
+            call.fail(bad_request("source/auth_profile", "both fields are required")); return;
+        }
+        auto result = services.oauth->create(call.principal(),
+            std::string_view{call.req.get_header_value("Authorization")}.substr(7), *source, *profile, label.value_or(""));
+        if (!result) { call.fail(result.error()); return; }
+        auto data = oauth_json(result->session);
+        data["authorization_url"] = result->authorization_url;
+        call.res.set_header("Location", "/api/v1/oauth/sessions/" + result->session.id);
+        call.ok(std::move(data), 201);
+    }
+
+    void get_oauth(Call& call, bool cancel) {
+        if (!only_params(call, {}) || (cancel && !body_object(call, {}, true))) return;
+        auto result = cancel ? services.oauth->cancel(call.principal(), call.req.matches[1]) :
+            services.oauth->get(call.principal(), call.req.matches[1]);
+        if (!result) { call.fail(result.error()); return; }
+        call.ok(oauth_json(*result));
+    }
+
+    void authorize_oauth(Call& call) {
+        if (!unique_oauth_query(call)) return;
+        if (!only_params(call, {"session_id", "ticket"})) return;
+        if (call.req.get_param_value_count("session_id") != 1 || call.req.get_param_value_count("ticket") != 1) {
+            call.fail(bad_request("authorize", "one session_id and ticket are required")); return;
+        }
+        auto result = services.oauth->authorize(call.req.get_param_value("session_id"), call.req.get_param_value("ticket"));
+        if (!result) { call.fail(result.error()); return; }
+        call.res.set_header("Set-Cookie", result->cookie);
+        call.res.set_redirect(result->authorization_url, 303);
+    }
+
+    // httplib 会合并完全相同的查询项，必须同时核对原始项数，不能只看 params.count。
+    static bool unique_oauth_query(Call& call) {
+        const auto pos = call.req.target.find('?');
+        const auto query = pos == std::string::npos ? std::string_view{} : std::string_view{call.req.target}.substr(pos + 1);
+        const auto count = query.empty() ? 0 : static_cast<std::size_t>(std::count(query.begin(), query.end(), '&')) + 1;
+        if (count != call.req.params.size()) {
+            call.fail(bad_request("callback", "duplicate or empty OAuth query parameter")); return false;
+        }
+        for (const auto& [key, value] : call.req.params) {
+            if (call.req.get_param_value_count(key) != 1) {
+                call.fail(bad_request("callback", "duplicate OAuth query parameter")); return false;
+            }
+        }
+        return true;
+    }
+
+    void callback_oauth(Call& call) {
+        if (!unique_oauth_query(call)) return;
+        if (!only_params(call, {"state", "code", "error", "error_description", "error_uri"})) return;
+        if (call.req.get_param_value_count("state") != 1 ||
+            call.req.has_param("code") == call.req.has_param("error") ||
+            (call.req.has_param("error") && call.req.get_param_value("error").empty())) {
+            call.fail(bad_request("callback", "state and either code or error are required")); return;
+        }
+        auto result = services.oauth->callback(call.req.matches[1], call.req.get_param_value("state"),
+            call.req.get_header_value("Cookie"), ports::SecretBytes{call.req.get_param_value("code")}, call.req.get_param_value("error"));
+        if (!result) { call.fail(result.error()); return; }
+        call.res.status = 202;
+        call.res.set_content("OAuth response received. Return to your application to check the login result.", "text/plain; charset=utf-8");
     }
 
     void create_credential(Call& call) {

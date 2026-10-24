@@ -16,7 +16,7 @@
 
 | 组 | 键 |
 | --- | --- |
-| 顶层 | `config_version`（只能为 1）、`data_dir`、`destinations`、`providers`、`app_profiles`（正式服务仍只接受空对象；0.1.24 已有受构建能力约束的数据模型，完整登录流程待 T24） |
+| 顶层 | `config_version`（只能为 1）、`data_dir`、`destinations`、`providers`、`app_profiles`（OAuth 应用配置，仅对实际绑定 OAuth 工厂的平台有效） |
 | `control` | `host`、`port`、`workers`、`connection_queue` |
 | `media`、`events` | `enabled`、`host`、`port`、`workers`、`connection_queue`（构建包含媒体与 SSE 模块时两者默认启用，分别监听 17633 与 17634；info 声明 file_access／media_base_url 与 progress_sse／events_base_url，关闭时如实声明降级） |
 | `event_limits` | `global_subscriptions`、`per_principal_subscriptions`、`max_queued_events`、`max_queued_bytes`、`max_event_bytes` |
@@ -134,6 +134,40 @@ music-service --config config.json import-ncm --input "D:\音乐\歌曲.ncm" --p
 命令输出 task_id、file_id 与相对路径。相同输入、账号归属、目标和选项下的完整成品可复用；Ctrl+C 在发布前取消，进程异常退出后尚未发布的本地任务标为 LOCAL_IMPORT_INTERRUPTED，需重新执行命令。已经保存发布意图的任务由启动恢复继续完成。离线命令期间没有在线 SSE，但启动后的 HTTP 任务及文件查询可见其结果。
 
 文件描述的 `artifacts` 列出实际产物；在 `/media/v1/files/{file_id}` 或该文件的票据 URL 上加 `?part=lyrics`／`?part=cover` 取回侧文件，省略时返回音频。权限、范围请求和票据撤销沿用整个文件资产的规则；音源 asset 票据不接受 part。
+
+## OAuth 应用配置与秘密
+
+0.1.25 已接入通用流程，配置只用于实际实现 IOAuth2 的平台 profile。当前内置 9 个平台均未绑定 OAuth 工厂，不要给匿名平台添加虚构 profile；Jamendo 获取歌曲和下载无需此配置。下面的 `example_source` 是接入说明占位符。
+
+先停止服务，将 client_secret 的精确字节放入源码树之外、仅当前用户可读的文件，再执行：
+
+```powershell
+music-service --config C:\music-service\config.json secret-import --input C:\private\client-secret.txt
+```
+
+命令持有实例锁，不覆盖已有秘密，只输出 `sec_...` 引用，不输出秘密内容，不自动删除输入文件，也不裁剪换行。将返回引用写入配置后再启动服务；未被凭证或配置引用的秘密会被启动清理。
+
+```json
+{
+  "app_profiles": {
+    "my_app": {
+      "source": "example_source",
+      "auth_profile": "web_oauth",
+      "version": 1,
+      "client_id": "your-client-id",
+      "client_secret_ref": "sec_returned_by_import",
+      "redirect_uri": "https://music.example/api/v1/oauth/callback/my_app"
+    }
+  },
+  "providers": {"example_source": {"app_profile_id": "my_app"}}
+}
+```
+
+redirect_uri 必须与平台登记值一致，路径固定为 `/api/v1/oauth/callback/{application_id}`，不带查询或片段；远程只允许 HTTPS，本机允许 `http://127.0.0.1:端口` 或 `http://[::1]:端口`。HTTPS 由现有反向代理转发控制入口，浏览器入口与回调需保持相同来源。不要在代理访问日志中记录这些路由的查询参数或 Cookie。普通 API 请求仍使用服务 Bearer，与平台的 access_token 相互独立。
+
+应用 ID 只允许 1～64 个英文字母、数字、下划线、短横线。client_secret_ref 由 SecretStore 加载，配置文件不放明文 client_secret。变更应用身份时增加 version 并重新授权；原应用凭证不会使用新应用秘密尝试刷新。应用 client credentials token 缓存尚未接入。
+
+本版本启动会将数据库迁移到 schema 3，并把上次中断的 pending 刷新标记为需要重新授权。升级前保留数据库及 secrets 配套备份；旧版本不能直接打开升级后的数据库。使用步骤见 [API 契约](../docs/design/cpp20-refactor/backend-service/api-contract.md#oauth-登录会话)。
 
 ## 启动前的组合检查
 

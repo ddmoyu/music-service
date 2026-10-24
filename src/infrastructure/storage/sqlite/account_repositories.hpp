@@ -62,6 +62,15 @@ public:
                         std::uint64_t expected_version,
                         const application::ports::VerificationEvidence& evidence) override;
     domain::Result<std::vector<std::string>> referenced_secret_refs() override;
+    domain::Result<application::ports::CredentialRecord> begin_refresh(const std::string& owner,
+        const std::string& id, std::uint64_t version) override;
+    domain::Result<application::ports::SecretReplacement> finish_refresh(const std::string& owner,
+        const std::string& id, std::uint64_t version, const std::optional<std::string>& secret_ref,
+        std::chrono::system_clock::time_point expires_at, const std::vector<std::string>& scopes,
+        std::chrono::system_clock::time_point refresh_after = {}) override;
+    domain::Result<void> recover_refreshes() override;
+    domain::Result<std::vector<application::ports::CredentialRecord>> due_refreshes(const std::string& application_id,
+        std::uint64_t application_version, std::chrono::system_clock::time_point before, std::uint32_t limit) override;
     domain::Result<application::ports::SecretReplacement> revoke(const std::string& owner_id,
                                                                  const std::string& id) override;
     domain::Result<application::ports::DefaultSelection>

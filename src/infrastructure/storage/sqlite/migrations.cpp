@@ -188,7 +188,17 @@ ALTER TABLE download_tasks ADD COLUMN checkpoint TEXT;
 ALTER TABLE download_tasks ADD COLUMN attempt_used_ms INTEGER NOT NULL DEFAULT 0;
 )sql";
 
-constexpr std::array<Migration, 2> migrations{{{1, schema_v1}, {2, schema_v2}}};
+constexpr std::string_view schema_v3 = R"sql(
+ALTER TABLE credentials ADD COLUMN refresh_state TEXT NOT NULL DEFAULT 'idle'
+    CHECK (refresh_state IN ('idle', 'pending', 'reauthorization_required'));
+ALTER TABLE credentials ADD COLUMN oauth_application_id TEXT;
+ALTER TABLE credentials ADD COLUMN oauth_application_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE credentials ADD COLUMN refresh_after INTEGER;
+CREATE INDEX credentials_refresh_due ON credentials
+    (oauth_application_id, oauth_application_version, refresh_state, status, refresh_after);
+)sql";
+
+constexpr std::array<Migration, 3> migrations{{{1, schema_v1}, {2, schema_v2}, {3, schema_v3}}};
 
 std::string checksum(std::string_view text) {
     std::uint64_t hash = 14695981039346656037ULL;

@@ -2,6 +2,7 @@
 
 #include "application/accounts/identity_admin.hpp"
 #include "infrastructure/auth/access_tokens.hpp"
+#include "infrastructure/secrets/file_secret_store.hpp"
 #include "infrastructure/config/config_loader.hpp"
 #include "infrastructure/filesystem/data_layout.hpp"
 #include "infrastructure/filesystem/files.hpp"
@@ -96,6 +97,7 @@ void usage(std::ostream& out) {
            "  principal enable --id ID | principal disable --id ID\n"
            "  token issue --principal ID --scopes A,B --output FILE\n"
            "  token list --principal ID | token revoke --id ID\n"
+           "  secret-import --input FILE             import an OAuth application secret offline\n"
            "  backup --output FILE                   consistent database copy, also while serving\n"
            "  import-ncm --input FILE --principal ID --destination ID [--metadata-policy best_effort|required|skip]\n"
            "  restore --input FILE                   replace the database (service stopped)\n";
@@ -122,6 +124,7 @@ domain::Result<cfg::ServiceConfig> load_config(const Arguments& args, const Host
     options.build.media_server = true;
     options.build.media_proxy = true;
     options.build.direct_media_urls = true;
+    options.build.app_profiles = true;
     return infrastructure::config::load_service_config(options);
 }
 
@@ -509,14 +512,14 @@ int run_command(const std::vector<std::string>& args, Console console, CommandHo
     }
     const bool known = command == "serve" || command == "check-config" || command == "init" ||
                        command == "healthcheck" || command == "principal" || command == "token" ||
-                       command == "backup" || command == "restore" || command == "import-ncm";
+                       command == "backup" || command == "restore" || command == "import-ncm" || command == "secret-import";
     if (!known) {
         console.err << "error: unknown command " << command << '\n';
         usage(console.err);
         return exit_usage;
     }
     if (command != "principal" && command != "token") {
-        const bool takes_options = command == "backup" || command == "restore" || command == "import-ncm";
+        const bool takes_options = command == "backup" || command == "restore" || command == "import-ncm" || command == "secret-import";
         if (parsed->words.size() > 1 || (!takes_options && !parsed->options.empty())) {
             usage(console.err);
             return exit_usage;
@@ -529,6 +532,22 @@ int run_command(const std::vector<std::string>& args, Console console, CommandHo
     }
     if (command == "check-config") {
         return cmd_check_config(config.value(), console);
+    }
+    if (command == "secret-import") {
+        if (!only_options(*parsed, {"input"}, console)) return exit_usage;
+        auto input = required(*parsed, "input", console);
+        if (!input) return exit_usage;
+        auto instance = open_instance(*config);
+        if (!instance) { print_error(console, instance.error()); return exit_failed; }
+        auto content = infrastructure::filesystem::read_file(path_from_utf8(*input), ports::SecretStore::max_secret_bytes);
+        if (!content) { print_error(console, content.error()); return exit_failed; }
+        ports::SecretBytes secret{std::move(*content)};
+        if (secret.empty()) { console.err << "error: application secret is empty\n"; return exit_usage; }
+        infrastructure::secrets::FileSecretStore store{(*instance)->layout.credentials};
+        auto ref = store.put(secret);
+        if (!ref) { print_error(console, ref.error()); return exit_failed; }
+        console.out << *ref << '\n';
+        return exit_ok;
     }
     if (command == "init") {
         return cmd_init(config.value(), console);

@@ -1,6 +1,7 @@
 #include "application/accounts/credential_service.hpp"
 
 #include "domain/catalog/refs.hpp"
+#include "application/ports/runtime/scope_exit.hpp"
 
 #include <algorithm>
 #include <set>
@@ -64,6 +65,7 @@ Error credentials_required(std::string message) {
 // renewed account can become usable again.
 std::optional<std::string> unusable_reason(const ports::CredentialRecord& record,
                                            std::chrono::system_clock::time_point now) {
+    if (record.refresh_state == "reauthorization_required") return "requires OAuth authorization again";
     switch (record.status) {
     case ports::CredentialStatus::revoked:
         return "is revoked";
@@ -433,7 +435,98 @@ domain::Result<CredentialLease> CredentialService::lease(const domain::AccountBi
     return Error{ErrorCode::version_conflict, "credential kept changing while leasing", true, {}};
 }
 
-domain::Result<std::size_t> CredentialService::reclaim_orphan_secrets() {
+namespace {
+domain::Result<void> check_grant(const ports::OAuthGrant& grant) {
+    if (grant.expires_in <= std::chrono::seconds::zero() || grant.expires_in > std::chrono::hours{24 * 366})
+        return Error{ErrorCode::upstream_failed, "invalid OAuth token lifetime", false, {}};
+    if (auto valid = check_secret(ports::CredentialKind::oauth2, grant.secret); !valid) return valid;
+    if (grant.scopes.size() > 64) return Error::validation("scopes", "too many scopes");
+    for (const auto& scope : grant.scopes) {
+        if (scope.empty() || scope.size() > 128 || std::any_of(scope.begin(), scope.end(), [](unsigned char c) {
+            return c < 0x21 || c > 0x7e || c == '"' || c == '\\';
+        })) return Error::validation("scopes", "invalid OAuth scope");
+    }
+    return domain::ok();
+}
+std::chrono::system_clock::time_point refresh_after(std::chrono::system_clock::time_point issued_at,
+                                                   std::chrono::seconds lifetime) {
+    // 提前最多一分钟且不超过有效期的十分之一，避免短期 token 不断刷新。
+    return issued_at + lifetime - std::min(std::chrono::seconds{60}, lifetime / 10);
+}
+}
+
+domain::Result<ports::CredentialRecord> CredentialService::create_oauth(const std::string& owner,
+    const std::string& label, const ports::OAuthApplication& application, ports::OAuthGrant grant,
+    std::chrono::system_clock::time_point issued_at) {
+    if (auto valid = check_label(label); !valid) return valid.error();
+    if (auto valid = check_grant(grant); !valid) return valid.error();
+    if (issued_at + grant.expires_in <= clock_->now())
+        return Error{ErrorCode::upstream_failed, "OAuth token expired during exchange", false, {}};
+    if (auto valid = providers_->validate_secret(application.source, application.auth_profile,
+        ports::CredentialKind::oauth2, grant.secret); !valid) return valid.error();
+    auto ref = secrets_->put(grant.secret);
+    if (!ref) return ref.error();
+    auto stored = credentials_->insert({owner, application.source, label, "oauth2", application.auth_profile,
+        *ref, issued_at + grant.expires_in, grant.scopes, application.id, application.version,
+        refresh_after(issued_at, grant.expires_in)});
+    if (!stored) (void)secrets_->remove(*ref);
+    return stored;
+}
+
+domain::Result<ports::CredentialRecord> CredentialService::refresh_oauth(const ports::CredentialRecord& candidate,
+    const ports::OAuthApplication& application, const ports::OperationContext& context) {
+    if (context.stop.stop_requested() || context.expired(clock_->steady_now()))
+        return Error{ErrorCode::canceled, "OAuth refresh canceled before dispatch", false, {}};
+    if (candidate.kind != "oauth2" || candidate.oauth_application_id != application.id ||
+        candidate.oauth_application_version != application.version || candidate.source != application.source ||
+        candidate.auth_profile != application.auth_profile || !candidate.secret_ref)
+        return credentials_required("OAuth application changed; authorize again");
+    auto oauth = providers_->require_oauth(candidate.source, candidate.auth_profile);
+    if (!oauth) return oauth.error();
+    auto secret = secrets_->get(*candidate.secret_ref);
+    if (!secret) return secret.error();
+    auto source = domain::SourceId::parse(candidate.source);
+    if (!source) return source.error();
+    auto binding = domain::AccountBinding::make(candidate.owner_id, *source, domain::AccountMode::user,
+        candidate.auth_profile, candidate.id, std::nullopt);
+    if (!binding) return binding.error();
+    auto identity = domain::AuthIdentityKey::make(*binding, {candidate.version, {}, {}, {}});
+    if (!identity) return identity.error();
+    auto claimed = credentials_->begin_refresh(candidate.owner_id, candidate.id, candidate.version);
+    if (!claimed) return claimed.error();
+    // 任何异常、超时或存储失败都不能使旧 refresh token 再次进入自动刷新。
+    bool committed = false;
+    ports::ScopeExit failure{[&] {
+        try {
+            if (!committed) (void)credentials_->finish_refresh(candidate.owner_id, candidate.id,
+                candidate.version, std::nullopt, {}, {});
+        } catch (...) { /* pending 保留在数据库中，重启恢复也不重放 */ }
+    }};
+    try {
+        const auto issued_at = clock_->now();
+        auto grant = (*oauth)->refresh({*identity, *secret}, context);
+        if (!grant) return Error{grant.error().code, "OAuth refresh failed; authorize again", false, {}};
+        if (context.stop.stop_requested() || context.expired(clock_->steady_now()))
+            return Error{ErrorCode::canceled, "OAuth refresh did not finish within its budget", false, {}};
+        if (auto valid = check_grant(*grant); !valid) return valid.error();
+        if (issued_at + grant->expires_in <= clock_->now())
+            return Error{ErrorCode::upstream_failed, "OAuth token expired during refresh", false, {}};
+        if (auto valid = providers_->validate_secret(candidate.source, candidate.auth_profile,
+            ports::CredentialKind::oauth2, grant->secret); !valid) return valid.error();
+        auto ref = secrets_->put(grant->secret);
+        if (!ref) return ref.error();
+        auto result = credentials_->finish_refresh(candidate.owner_id, candidate.id, candidate.version,
+            *ref, issued_at + grant->expires_in, grant->scopes, refresh_after(issued_at, grant->expires_in));
+        if (!result) { (void)secrets_->remove(*ref); return result.error(); }
+        committed = true;
+        if (result->previous_secret_ref) (void)secrets_->remove(*result->previous_secret_ref);
+        return std::move(result->credential);
+    } catch (...) {
+        return Error{ErrorCode::upstream_failed, "OAuth refresh failed; authorize again", false, {}};
+    }
+}
+
+domain::Result<std::size_t> CredentialService::reclaim_orphan_secrets(const std::vector<std::string>& reserved) {
     auto stored = secrets_->list();
     if (!stored) {
         return std::move(stored).error();
@@ -442,7 +535,8 @@ domain::Result<std::size_t> CredentialService::reclaim_orphan_secrets() {
     if (!referenced) {
         return std::move(referenced).error();
     }
-    const std::set<std::string> in_use(referenced->begin(), referenced->end());
+    std::set<std::string> in_use(referenced->begin(), referenced->end());
+    in_use.insert(reserved.begin(), reserved.end());
     std::size_t removed = 0;
     for (const auto& ref : stored.value()) {
         if (in_use.count(ref) == 0) {

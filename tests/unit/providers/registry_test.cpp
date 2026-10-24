@@ -120,10 +120,10 @@ TEST_CASE("the built-in manifest registers Kuwo", "[providers]") {
 namespace {
 class TestOAuth final : public ports::IOAuth2 {
 public:
-    domain::Result<std::string> authorize_url(std::string_view state) const override {
+    domain::Result<std::string> authorize_url(std::string_view state, std::string_view) const override {
         return "https://auth.example/authorize?state=" + std::string{state};
     }
-    domain::Result<ports::OAuthGrant> exchange(std::string_view, const ports::SecretBytes&,
+    domain::Result<ports::OAuthGrant> exchange(std::string_view, const ports::SecretBytes&, const ports::SecretBytes&,
         const ports::OperationContext&) override {
         return ports::OAuthGrant{ports::SecretBytes{"test-token"}, std::chrono::seconds{60}, {"read"}};
     }
@@ -189,8 +189,8 @@ TEST_CASE("OAuth factories are lazy shared and bound to the configured profile",
     CHECK(*calls == 1);
     REQUIRE(instances.front());
     for (const auto& instance : instances) CHECK(instance == instances.front());
-    CHECK(unwrap(instances.front()->authorize_url("nonce")) == "https://auth.example/authorize?state=nonce");
-    const auto grant = unwrap(instances.front()->exchange("prn_a", ports::SecretBytes{"code"},
+    CHECK(unwrap(instances.front()->authorize_url("nonce", "challenge")) == "https://auth.example/authorize?state=nonce");
+    const auto grant = unwrap(instances.front()->exchange("prn_a", ports::SecretBytes{"code"}, ports::SecretBytes{"verifier"},
         {std::chrono::steady_clock::now() + std::chrono::seconds{1}, {}}));
     CHECK(grant.expires_in == std::chrono::seconds{60});
     CHECK(grant.secret.reveal() == "test-token");

@@ -115,7 +115,14 @@ public:
     // Removes stored secrets no credential references (left by failed commits or
     // cleanups). Run at startup before requests are served: a create in flight
     // would otherwise lose its new secret.
-    domain::Result<std::size_t> reclaim_orphan_secrets();
+    domain::Result<std::size_t> reclaim_orphan_secrets(const std::vector<std::string>& reserved = {});
+
+    domain::Result<ports::CredentialRecord> create_oauth(const std::string& owner, const std::string& label,
+        const ports::OAuthApplication& application, ports::OAuthGrant grant,
+        std::chrono::system_clock::time_point issued_at);
+    // 只能由独立的有界 OAuth 执行器调用；网络期间不持有数据库事务。
+    domain::Result<ports::CredentialRecord> refresh_oauth(const ports::CredentialRecord& candidate,
+        const ports::OAuthApplication& application, const ports::OperationContext& context);
 
 private:
     std::shared_ptr<ports::CredentialRepository> credentials_;

@@ -66,9 +66,10 @@ struct OAuthGrant {
 class IOAuth2 {
 public:
     virtual ~IOAuth2() = default;
-    virtual domain::Result<std::string> authorize_url(std::string_view state) const = 0;
+    virtual domain::Result<std::string> authorize_url(std::string_view state,
+                                                     std::string_view code_challenge) const = 0;
     virtual domain::Result<OAuthGrant> exchange(std::string_view principal_id,
-        const SecretBytes& code, const OperationContext& context) = 0;
+        const SecretBytes& code, const SecretBytes& code_verifier, const OperationContext& context) = 0;
     virtual domain::Result<OAuthGrant> refresh(const CredentialSnapshot& credential,
         const OperationContext& context) = 0;
 };

@@ -502,9 +502,27 @@ direct URL 是可能携带限时授权参数的敏感能力，仅在此显式访
 
 kind 支持 cookie、oauth2、api_key，只有平台声明并已实现的 kind／auth_profile 可写入。secret 分别为 `{cookie}`、`{access_token, refresh_token?, expires_at?, scopes?}` 或 `{api_key}`；平台可在已公布 schema 中约束必填字段，声明的 scopes 不能代替上游校验。保留原顶层 cookie 作为 kind=cookie 的简写，与 kind／auth_profile／secret 完整形式互斥；简写使用该平台默认 Cookie profile。OAuth 应用 client_secret 通过服务管理配置的 SecretStore 引用设置，不能由普通用户替换整个服务的应用身份。所有秘密仅写入、不回显。
 
-校验接口不替代账号登录。S1 使用外部提供的 Cookie；OAuth 凭证导入和按版本更新在需要的平台接入时实现，未实现时不声明对应 kind。auth_methods 公布对应 profile 的 supports_verify／supports_refresh／supports_application_token；没有验证工厂时 verify 返回 422 CAPABILITY_UNSUPPORTED，没有刷新工厂时要求外部更新凭证。扫码／短信／OAuth 授权跳转仍为独立能力；刷新由 CredentialService 调用平台注册的 ICredentialRefresher 并条件提交，规则见[扩展设计](provider-extensibility.md#6-凭证与账号)。删除凭证会阻止后续读取和重新解析，但已经交给在途请求的凭证不保证可被“收回”；需停止下载时调用任务取消。
+校验接口不替代账号登录。auth_methods 公布对应 profile 的 supports_verify／supports_refresh／supports_application_token／supports_authorization_code／configured，没有实际工厂不声明支持。没有验证工厂时 verify 返回 422 CAPABILITY_UNSUPPORTED。0.1.25 的 OAuth 用户刷新由 CredentialService 调用 IOAuth2 并条件提交；应用 token 仍未接入。删除凭证会阻止后续读取和重新解析，但已经交给在途请求的凭证不保证可被“收回”；需停止下载时调用任务取消。
 
 不能将任意他人的 Cookie 作为 query 参数覆盖整个服务的当前账号。用户默认选择通过下列接口写入 SQLite，配置文件不管理用户默认凭证。
+
+### OAuth 登录会话
+
+通用流程自 0.1.25 提供，只有平台注册 OAuth 工厂并配置应用后才可使用。当前内置平台没有该工厂；Jamendo 的匿名获取及下载不增加登录要求。
+
+| 方法与路径 | 权限及结果 |
+| --- | --- |
+| `POST /api/v1/oauth/sessions` | credentials:write；body 为 `{source, auth_profile, label?}`；201 返回 session_id、status=pending、expires_at、authorization_url，Location 指向查询接口 |
+| `GET /api/v1/oauth/sessions/{session_id}` | credentials:write，仅自己会话；200 返回 source、auth_profile、status、expires_at、credential_id、error_code；不回显授权 URL、code 或 token |
+| `DELETE /api/v1/oauth/sessions/{session_id}` | credentials:write，仅自己会话；200 返回最终状态；已完成会话保持最终状态，未完成的取消并丢弃迟到结果 |
+| `GET /api/v1/oauth/authorize?session_id=...&ticket=...` | 一次性浏览器入口，不需要在 URL 放服务 Bearer；设置绑定 Cookie 后 303 跳转到平台 |
+| `GET /api/v1/oauth/callback/{application_id}?state=...&code=...` | 平台回调；同时检查 state、应用专属路径和浏览器 Cookie；受理返回 202 文本，交换在后台进行 |
+
+调用方用服务 Bearer 创建会话，然后在浏览器打开返回的 authorization_url，再轮询查询接口。终态为 succeeded／denied／failed／canceled／expired；成功返回 credential_id，调用方需要时再设置默认账号。回调也接受 `error` 代替 `code`，平台原始错误描述不回显。202 只表示回调已受理，必须查询会话判断登录是否成功。会话失效或重启后创建新会话，不重复提交旧授权码。
+
+创建或队列超出容量返回 503 SERVICE_BUSY；错误或缺失参数按通用 400／422 错误返回；未知会话、跨账号查询、错误浏览器绑定返回 404；已消费的入口或回调返回 409。回调与浏览器入口不允许重复参数，包括内容完全相同或编码后重名的参数。响应禁止缓存、禁止 Referer 传播，无任意 return_url 跳转。
+
+凭证描述增加 refresh_state：idle、pending、reauthorization_required。自动刷新只处理本流程创建且应用 ID／version 仍匹配的凭证；成功同时更新版本、secret、expires_at 和 scopes，失败或中断不重放旧 refresh token。手工替换 secret 会移除自动刷新绑定，重新登录后再选用新凭证。应用配置见[配置说明](../../../../config/README.md#oauth-应用配置与秘密)。
 
 ### 11.1 默认平台凭证
 

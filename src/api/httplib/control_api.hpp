@@ -2,6 +2,7 @@
 
 #include "application/accounts/credential_service.hpp"
 #include "application/accounts/identity_admin.hpp"
+#include "application/accounts/oauth_service.hpp"
 #include "application/catalog/asset_service.hpp"
 #include "application/catalog/catalog_service.hpp"
 #include "application/config/service_config.hpp"
@@ -117,6 +118,7 @@ struct ControlApiServices {
     std::shared_ptr<application::media::FileAccessService> files{};
     std::shared_ptr<application::media::MediaAccessService> media{};
     std::shared_ptr<application::ports::Metrics> metrics{};
+    std::shared_ptr<application::accounts::OAuthService> oauth{};
 };
 
 // The control HTTP entry (/health, /api/v1) on cpp-httplib: Bearer authentication with

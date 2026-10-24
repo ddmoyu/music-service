@@ -1,6 +1,6 @@
 # music-service
 
-0.1.24 整理 OAuth 2.0 协议端口、应用配置模型与按授权配置隔离的工厂注册，并落实敏感请求禁用重定向。当前平台尚未接入 OAuth 登录、回调或自动刷新，正式服务继续拒绝非空 app_profiles；实现范围见[授权基础](src/providers/README.md#oauth-授权基础0124)。
+0.1.25 补齐通用 OAuth 登录会话、浏览器回调、PKCE、后台授权码交换与自动刷新，支持离线导入应用秘密、刷新轮换保护和重启恢复。当前 9 个内置平台尚无 OAuth 工厂；Jamendo 保持匿名获取歌曲和下载，不增加登录要求。接口及真实平台接入边界见[OAuth 流程](src/providers/README.md#oauth-登录回调与自动刷新0125)。
 
 0.1.23 增加管理员 JSON／Prometheus 指标、资源占用状态及有界异步文件日志轮转，配置和口径见[运维观测](docs/operations-observability.md)。跨平台匹配、手动与自动换源已取消；解析与下载只使用请求指定的平台。
 

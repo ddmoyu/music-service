@@ -103,6 +103,8 @@ struct ProcessHost::State {
     std::shared_ptr<infrastructure::auth::MbedTlsTokenCodec> codec;
     std::shared_ptr<application::accounts::AccessTokenAuthenticator> authenticator;
     std::shared_ptr<application::accounts::CredentialService> credentials;
+    std::shared_ptr<application::accounts::OAuthService> oauth;
+    std::shared_ptr<runtime::BoundedExecutor> oauth_executor;
     std::vector<DestinationState> destinations;
     std::shared_ptr<infrastructure::filesystem::LocalDestinationFiles> files;
     std::shared_ptr<const providers::ProviderRegistry> registry;
@@ -176,7 +178,7 @@ struct ProcessHost::State {
             s.media_responses = media->active();
         }
         if (events_hub) s.event_subscriptions = events_hub->subscriptions();
-        for (const auto& pool : {catalog_executor, download_executor, processing_executor, media_upstream_executor}) {
+        for (const auto& pool : {catalog_executor, download_executor, processing_executor, media_upstream_executor, oauth_executor}) {
             if (!pool) continue;
             const auto stats = pool->stats();
             s.worker_pools.push_back({pool->name(), stats.queued, stats.running, stats.completed, stats.failed, stats.rejected});
@@ -252,6 +254,11 @@ struct ProcessHost::State {
                 control.reset();
             }
             log.info("shutdown.listeners_stopped");
+            if (oauth) oauth->stop();
+            if (oauth_executor) {
+                oauth_executor->stop_accepting(); oauth_executor->request_stop(); oauth_executor->join();
+            }
+            oauth.reset(); oauth_executor.reset();
             if (scheduler) {
                 // Running downloads may finish within the soft budget; the others save their
                 // checkpoint and wait to be claimed again after the restart (service_shutdown).
@@ -335,6 +342,7 @@ void ProcessHost::run_until(const std::function<bool()>& should_stop) {
                 if (state_->catalog) state_->catalog->collect_expired();
                 if (state_->assets) state_->assets->collect_expired();
                 if (state_->tickets) state_->tickets->collect_expired();
+                if (state_->oauth) state_->oauth->maintain();
             } catch (...) { state_->log.warn("handles.collection_failed"); }
         }
         if (state_ && state_->maintenance && std::chrono::steady_clock::now() >= state_->next_maintenance) {
@@ -485,9 +493,24 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
         application::transport::TrafficTimeouts{config.download_timeouts.connect, config.download_timeouts.read_idle,
                                                config.media_stream.connect_timeout, config.media_stream.idle});
 
+    application::accounts::OAuthService::Applications oauth_applications;
+    std::vector<std::string> application_secrets;
+    for (const auto& [id, app] : config.app_profiles) {
+        if (auto valid = application::accounts::validate_oauth_redirect(id, app.redirect_uri); !valid)
+            return fail(valid.error(), "oauth_config");
+        application_secrets.push_back(app.client_secret_ref);
+        const auto provider = config.providers.find(app.source);
+        if (provider == config.providers.end() || provider->second.app_profile_id != id) continue;
+        auto secret = state->secrets->get(app.client_secret_ref);
+        if (!secret) return fail(domain::Error{domain::ErrorCode::credentials_required,
+            "configured OAuth application secret is unavailable", false, {}}, "oauth_config");
+        oauth_applications.emplace(id, std::make_shared<application::ports::OAuthApplication>(
+            application::ports::OAuthApplication{id, app.source, app.auth_profile, app.version, app.client_id,
+                app.redirect_uri, std::make_shared<application::ports::SecretBytes>(std::move(*secret))}));
+    }
     auto registry = providers::ProviderRegistry::build(
         options.bundles ? std::move(*options.bundles) : providers::builtin_bundles(), config.providers,
-        providers::ProviderServices{state->upstream});
+        providers::ProviderServices{state->upstream, oauth_applications});
     if (!registry) {
         return fail(std::move(registry).error(), "providers");
     }
@@ -495,7 +518,9 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
     state->credentials = std::make_shared<application::accounts::CredentialService>(
         inst.credentials, state->secrets, state->registry, clock);
     // Before any request can create a credential: reclaim secrets no row references.
-    auto reclaimed = state->credentials->reclaim_orphan_secrets();
+    auto recovered_oauth = inst.credentials->recover_refreshes();
+    if (!recovered_oauth) return fail(recovered_oauth.error(), "oauth_recovery");
+    auto reclaimed = state->credentials->reclaim_orphan_secrets(application_secrets);
     if (!reclaimed) {
         return fail(std::move(reclaimed).error(), "secrets");
     }
@@ -505,6 +530,9 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
 
     state->catalog_executor = std::make_shared<runtime::BoundedExecutor>(
         "catalog", std::max<std::uint32_t>(1, config.upstream.short_workers), config.upstream.queue);
+    state->oauth_executor = std::make_shared<runtime::BoundedExecutor>("oauth", 2, 32);
+    state->oauth = std::make_shared<application::accounts::OAuthService>(std::move(oauth_applications),
+        state->registry, state->credentials, inst.credentials, inst.identities, state->codec, clock, state->oauth_executor);
     application::catalog::CatalogLimits catalog_limits{config.catalog, config.cache, config.handles, config.lifetimes, 4};
     auto handle_budget = std::make_shared<application::ports::MemoryBudget>(config.handles.total_bytes);
     catalog_limits.handle_budget = handle_budget;
@@ -735,7 +763,7 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
         std::make_shared<SchedulerPolicy>(state->scheduler),
         state->file_access,
         state->media_access,
-        state->metrics};
+        state->metrics, state->oauth};
     state->control = std::make_unique<api::ControlApi>(std::move(api_options), std::move(services));
     state->control_workers = config.control.workers;
     auto port = state->control->bind();

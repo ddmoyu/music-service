@@ -94,7 +94,7 @@ ports::CredentialStatus parse_status(const std::string& text) {
 
 constexpr std::string_view credential_columns =
     "id, owner_id, source, label, kind, auth_profile, secret_ref, version, status, expires_at, "
-    "created_at, last_verified_at, last_verify_result, scope_summary";
+    "created_at, last_verified_at, last_verify_result, scope_summary, refresh_state, oauth_application_id, oauth_application_version, refresh_after";
 
 std::string_view outcome_text(ports::VerifyOutcome outcome) {
     switch (outcome) {
@@ -132,7 +132,8 @@ ports::CredentialRecord read_credential(const Statement& s) {
                                    from_millis(s.integer(10)),
                                    from_millis(s.optional_integer(11)),
                                    parse_outcome(s.optional_text(12)),
-                                   split_scopes(s.optional_text(13).value_or(""))};
+                                   split_scopes(s.optional_text(13).value_or("")), s.text(14), s.optional_text(15),
+                                   static_cast<std::uint64_t>(s.integer(16)), from_millis(s.optional_integer(17))};
 }
 
 domain::Result<std::optional<ports::CredentialRecord>>
@@ -372,14 +373,16 @@ SqliteCredentialRepository::insert(const ports::NewCredential& c) {
     const auto now = ctx_.clock->now();
     return ctx_.database->write([&](Connection& db) -> domain::Result<ports::CredentialRecord> {
         auto s = db.prepare("INSERT INTO credentials (id, owner_id, source, label, kind,"
-                            " auth_profile, secret_ref, version, status, expires_at, created_at)"
-                            " VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'active', ?, ?)");
+                            " auth_profile, secret_ref, version, status, expires_at, created_at, scope_summary,"
+                            " oauth_application_id, oauth_application_version, refresh_after)"
+                            " VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'active', ?, ?, ?, ?, ?, ?)");
         if (!s) {
             return std::move(s).error();
         }
         s->bind(1, id).bind(2, c.owner_id).bind(3, c.source).bind(4, c.label).bind(5, c.kind).bind(
             6, c.auth_profile).bind(7, c.secret_ref).bind(8, to_millis(c.expires_at)).bind(
-            9, to_millis(now));
+            9, to_millis(now)).bind(10, join_scopes(c.scopes)).bind(11, c.oauth_application_id)
+            .bind(12, static_cast<std::int64_t>(c.oauth_application_version)).bind(13, to_millis(c.refresh_after));
         if (auto done = s->run(); !done) {
             return done.error();
         }
@@ -446,11 +449,14 @@ SqliteCredentialRepository::replace_secret(const std::string& owner_id, const st
         }
         // A new secret has not been verified yet; a label change keeps the evidence.
         auto s = db.prepare("UPDATE credentials SET secret_ref = ?, label = ?, version = ?,"
-                            " status = CASE WHEN ? THEN 'active' ELSE status END,"
+                            " status = CASE WHEN ? THEN 'active' WHEN refresh_state = 'pending' THEN 'invalid' ELSE status END,"
                             " last_verified_at = CASE WHEN ? THEN NULL ELSE last_verified_at END,"
                             " last_verify_result = CASE WHEN ? THEN NULL ELSE last_verify_result END,"
                             " scope_summary = CASE WHEN ? THEN NULL ELSE scope_summary END,"
-                            " expires_at = CASE WHEN ? THEN NULL ELSE expires_at END"
+                            " expires_at = CASE WHEN ? THEN NULL ELSE expires_at END,"
+                            " refresh_state = CASE WHEN ? THEN 'idle' WHEN refresh_state = 'pending' THEN 'reauthorization_required' ELSE refresh_state END,"
+                            " oauth_application_id = CASE WHEN ? THEN NULL ELSE oauth_application_id END,"
+                            " oauth_application_version = CASE WHEN ? THEN 0 ELSE oauth_application_version END"
                             " WHERE id = ? AND owner_id = ?");
         if (!s) {
             return std::move(s).error();
@@ -464,8 +470,9 @@ SqliteCredentialRepository::replace_secret(const std::string& owner_id, const st
             .bind(6, new_secret)
             .bind(7, new_secret)
             .bind(8, new_secret)
-            .bind(9, id)
-            .bind(10, owner_id);
+            .bind(9, new_secret).bind(10, new_secret).bind(11, new_secret)
+            .bind(12, id)
+            .bind(13, owner_id);
         if (auto done = s->run(); !done) {
             return done.error();
         }
@@ -494,7 +501,7 @@ SqliteCredentialRepository::record_verification(const std::string& owner_id, con
         if (current.status == ports::CredentialStatus::revoked) {
             return domain::Error::validation("credential", "is revoked");
         }
-        if (current.version != expected_version) {
+        if (current.version != expected_version || current.refresh_state != "idle") {
             return domain::Error{domain::ErrorCode::version_conflict,
                                  "credential changed during verification", true, {}};
         }
@@ -529,6 +536,86 @@ SqliteCredentialRepository::record_verification(const std::string& owner_id, con
     });
 }
 
+domain::Result<ports::CredentialRecord> SqliteCredentialRepository::begin_refresh(
+    const std::string& owner, const std::string& id, std::uint64_t version) {
+    return ctx_.database->write([&](Connection& db) -> domain::Result<ports::CredentialRecord> {
+        auto found = find_credential(db, owner, id);
+        if (!found) return found.error();
+        if (!*found) return not_found("credential");
+        const auto& c = **found;
+        auto principal = find_principal(db, owner);
+        if (!principal) return principal.error();
+        if (!*principal || !(**principal).enabled)
+            return domain::Error{domain::ErrorCode::credentials_required, "principal is disabled", false, {}};
+        if (c.version != version || c.status != ports::CredentialStatus::active ||
+            c.refresh_state != "idle" || !c.secret_ref || !c.oauth_application_id)
+            return domain::Error{domain::ErrorCode::version_conflict, "credential cannot start refresh", false, {}};
+        auto s = db.prepare("UPDATE credentials SET refresh_state = 'pending' WHERE id = ? AND owner_id = ?");
+        if (!s) return s.error();
+        s->bind(1, id).bind(2, owner);
+        if (auto done = s->run(); !done) return done.error();
+        auto result = c;
+        result.refresh_state = "pending";
+        return result;
+    });
+}
+
+domain::Result<ports::SecretReplacement> SqliteCredentialRepository::finish_refresh(
+    const std::string& owner, const std::string& id, std::uint64_t version,
+    const std::optional<std::string>& secret_ref, std::chrono::system_clock::time_point expires_at,
+    const std::vector<std::string>& scopes, std::chrono::system_clock::time_point refresh_after) {
+    return ctx_.database->write([&](Connection& db) -> domain::Result<ports::SecretReplacement> {
+        auto found = find_credential(db, owner, id);
+        if (!found) return found.error();
+        if (!*found) return not_found("credential");
+        const auto& c = **found;
+        if (c.version != version || c.status == ports::CredentialStatus::revoked || c.refresh_state != "pending")
+            return domain::Error{domain::ErrorCode::version_conflict, "credential changed during refresh", false, {}};
+        if (secret_ref) {
+            auto principal = find_principal(db, owner);
+            if (!principal) return principal.error();
+            if (!*principal || !(**principal).enabled)
+                return domain::Error{domain::ErrorCode::credentials_required, "principal is disabled", false, {}};
+        }
+        auto s = db.prepare("UPDATE credentials SET version = version + 1, secret_ref = ?, status = ?,"
+            " refresh_state = ?, expires_at = ?, scope_summary = ?, last_verified_at = NULL,"
+            " last_verify_result = NULL, refresh_after = ? WHERE id = ? AND owner_id = ?");
+        if (!s) return s.error();
+        s->bind(1, secret_ref ? secret_ref : c.secret_ref).bind(2, secret_ref ? "active" : "invalid")
+            .bind(3, secret_ref ? "idle" : "reauthorization_required")
+            .bind(4, secret_ref ? to_millis(expires_at) : to_millis(c.expires_at))
+            .bind(5, join_scopes(secret_ref ? scopes : c.scopes))
+            .bind(6, secret_ref ? to_millis(refresh_after) : to_millis(c.refresh_after)).bind(7, id).bind(8, owner);
+        if (auto done = s->run(); !done) return done.error();
+        auto stored = find_credential(db, owner, id);
+        if (!stored) return stored.error();
+        return ports::SecretReplacement{**stored, secret_ref ? c.secret_ref : std::nullopt};
+    });
+}
+
+domain::Result<void> SqliteCredentialRepository::recover_refreshes() {
+    return ctx_.database->write([](Connection& db) {
+        return db.exec("UPDATE credentials SET refresh_state = 'reauthorization_required',"
+            " status = 'invalid', version = version + 1 WHERE refresh_state = 'pending' AND status != 'revoked'");
+    });
+}
+
+domain::Result<std::vector<ports::CredentialRecord>> SqliteCredentialRepository::due_refreshes(
+    const std::string& application_id, std::uint64_t application_version,
+    std::chrono::system_clock::time_point before, std::uint32_t limit) {
+    if (limit == 0 || limit > 64) return domain::Error::validation("limit", "must be between 1 and 64");
+    return ctx_.database->read([&](Connection& db) -> domain::Result<std::vector<ports::CredentialRecord>> {
+        auto s = db.prepare("SELECT " + std::string{credential_columns} + " FROM credentials WHERE "
+            "oauth_application_id = ? AND oauth_application_version = ? AND kind = 'oauth2' AND status = 'active'"
+            " AND refresh_state = 'idle' AND refresh_after <= ? AND secret_ref IS NOT NULL"
+            " AND owner_id IN (SELECT id FROM principals WHERE enabled = 1) ORDER BY refresh_after, id LIMIT ?");
+        if (!s) return s.error();
+        s->bind(1, application_id).bind(2, static_cast<std::int64_t>(application_version))
+            .bind(3, to_millis(before)).bind(4, static_cast<std::int64_t>(limit));
+        return collect<ports::CredentialRecord>(*s, read_credential);
+    });
+}
+
 domain::Result<std::vector<std::string>> SqliteCredentialRepository::referenced_secret_refs() {
     return ctx_.database->read([&](Connection& db) -> domain::Result<std::vector<std::string>> {
         auto s = db.prepare("SELECT secret_ref FROM credentials WHERE secret_ref IS NOT NULL"
@@ -555,7 +642,7 @@ domain::Result<ports::SecretReplacement> SqliteCredentialRepository::revoke(cons
         if (current.status == ports::CredentialStatus::revoked) {
             return ports::SecretReplacement{current, std::nullopt};
         }
-        auto s = db.prepare("UPDATE credentials SET status = 'revoked', secret_ref = NULL,"
+        auto s = db.prepare("UPDATE credentials SET status = 'revoked', secret_ref = NULL, refresh_state = 'idle',"
                             " version = version + 1, revoked_at = ? WHERE id = ?");
         if (!s) {
             return std::move(s).error();
