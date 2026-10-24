@@ -8,11 +8,19 @@
 #endif
 
 #include <atomic>
+#include <charconv>
 #include <csignal>
 #include <filesystem>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <vector>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <cerrno>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -47,9 +55,28 @@ int wmain(int argc, wchar_t** argv) {
 int main(int argc, char** argv) {
     std::vector<std::string> args(argv + 1, argv + argc);
 #endif
+    // A desktop launcher may bind the service lifetime to its own process.
+    // Keep this out of persisted configuration: a PID is valid for one launch only.
+    unsigned long parent_pid = 0;
+    for (auto it = args.begin(); it != args.end();) {
+        if (*it != "--parent-pid") { ++it; continue; }
+        if (parent_pid || std::next(it) == args.end()) return 2;
+        const auto value = *std::next(it);
+        const auto parsed = std::from_chars(value.data(), value.data() + value.size(), parent_pid);
+        if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || parent_pid == 0 || parent_pid > 2147483647UL) return 2;
+        it = args.erase(it, std::next(it, 2));
+    }
+#ifdef _WIN32
+    const HANDLE parent_handle = parent_pid ? OpenProcess(SYNCHRONIZE, FALSE, parent_pid) : nullptr;
+    if (parent_pid && !parent_handle) return 2;
+#endif
 #ifdef _WIN32
     // "service" is serve under the Windows service manager, which owns the lifecycle.
     if (const auto at = command_at(args); at < args.size() && args[at] == "service") {
+        if (parent_handle) {
+            CloseHandle(parent_handle);
+            return 2; // SCM and desktop process ownership are mutually exclusive.
+        }
         args[at] = "serve";
         return music_service::server::run_windows_service(std::move(args));
     }
@@ -62,6 +89,17 @@ int main(int argc, char** argv) {
     std::signal(SIGBREAK, on_signal);
 #endif
     music_service::server::CommandHooks hooks;
-    hooks.should_stop = [] { return stop_requested.load(); };
-    return music_service::server::run_command(args, {std::cout, std::cerr}, std::move(hooks));
+    hooks.should_stop = [=] {
+        if (stop_requested.load()) return true;
+#ifdef _WIN32
+        return parent_handle && WaitForSingleObject(parent_handle, 0) != WAIT_TIMEOUT;
+#else
+        return parent_pid && kill(static_cast<pid_t>(parent_pid), 0) != 0 && errno == ESRCH;
+#endif
+    };
+    const auto result = music_service::server::run_command(args, {std::cout, std::cerr}, std::move(hooks));
+#ifdef _WIN32
+    if (parent_handle) CloseHandle(parent_handle);
+#endif
+    return result;
 }
