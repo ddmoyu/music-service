@@ -5,12 +5,18 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      target:
+        description: Environment to validate
+        type: choice
+        default: all
+        options: [all, windows, linux, macos, docker]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ inputs.target || 'all' }}
   cancel-in-progress: true
 
 env:
@@ -18,6 +24,7 @@ env:
 
 jobs:
   windows-msvc:
+    if: github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == 'windows'
     runs-on: windows-2025
     timeout-minutes: 45
     steps:
@@ -49,7 +56,7 @@ jobs:
           cmake --build --preset windows-msvc-release --target package || exit /b 1
       - name: Package smoke test
         shell: pwsh
-        run: packaging/windows/package_smoke.ps1 -Package (Get-Item out/build/windows-msvc-release/music-service-*.zip).FullName
+        run: packaging/windows/package_smoke.ps1 -Package (Get-Item out/build/windows-msvc-release/music-service-*.zip).FullName -RequireImportCheck
       - name: Windows service smoke test
         shell: pwsh
         run: |
@@ -68,6 +75,7 @@ jobs:
         run: python -I packaging/e2e/kuwo_e2e.py --binary out/build/windows-msvc-debug/src/server/music-service.exe --source fivesing
 
   linux-gcc:
+    if: github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == 'linux'
     name: linux-gcc (${{ matrix.arch }})
     strategy:
       fail-fast: false
@@ -110,6 +118,7 @@ jobs:
         run: python3 -I packaging/e2e/kuwo_e2e.py --binary out/build/linux-gcc-debug/src/server/music-service --source fivesing
 
   macos-clang:
+    if: github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == 'macos'
     name: macos-clang (${{ matrix.arch }})
     strategy:
       fail-fast: false
@@ -155,6 +164,7 @@ jobs:
         run: python3 -I packaging/e2e/kuwo_e2e.py --binary out/build/macos-clang-debug/src/server/music-service --source fivesing
 
   docker:
+    if: github.event_name != 'workflow_dispatch' || inputs.target == 'all' || inputs.target == 'docker'
     name: docker (${{ matrix.arch }})
     strategy:
       fail-fast: false

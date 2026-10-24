@@ -32,7 +32,7 @@ function Start-Service-Process([string]$Tag) {
     $err = Join-Path $work "stderr-$Tag.txt"
     # Start-Process joins the arguments with spaces without quoting them, so a path with
     # spaces (a temp directory under such a user profile) must be quoted here.
-    $process = Start-Process -FilePath $bin -ArgumentList @('--config', "`"$config`"", 'serve') -PassThru -NoNewWindow `
+    $process = Start-Process -FilePath $bin -ArgumentList @('--config', "`"$config`"", 'serve') -PassThru -WindowStyle Hidden `
         -RedirectStandardOutput $out -RedirectStandardError $err
     for ($i = 0; $i -lt 100; $i++) {
         if ((Test-Path $out) -and ("$(Get-Content $out -Raw)" -match '"event":"ready"')) { break }
