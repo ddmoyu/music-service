@@ -106,6 +106,18 @@ domain::Result<domain::Track> track_of(const json& song) {
         return protocol_error("song id is not usable");
     }
     domain::Track track{*ref, std::move(*name), {}, std::nullopt, std::nullopt, {}};
+    if (const auto fee = song.find("fee"); fee != song.end() && !fee->is_null()) {
+        if (!fee->is_number_integer() || *fee < 0 || *fee > 2147483647)
+            return protocol_error("invalid song fee");
+        // Song tariff, independent of account-specific privilege.pl/dl/payed.
+        switch (fee->get<int>()) {
+        case 0: track.pay = {0, 0, 0}; break;
+        case 1: track.pay = {1, 1, 1}; break;
+        case 4: track.pay = {1, 1, 0}; break; // separately purchased album
+        case 8: track.pay = {0, 1, 1}; break; // free playback, paid download
+        default: break;
+        }
+    }
     if (const auto artists = song.find(song.contains("ar") ? "ar" : "artists"); artists != song.end() && artists->is_array()) {
         for (const auto& artist : *artists) {
             if (!artist.is_object()) {

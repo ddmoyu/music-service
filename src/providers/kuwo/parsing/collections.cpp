@@ -147,7 +147,7 @@ std::optional<domain::Track> track_of(const json& item, const char* id_key, cons
     return track;
 }
 
-std::vector<domain::Track> tracks_of(const json& document, const char* id_key, const char* duration_key) {
+domain::Result<std::vector<domain::Track>> tracks_of(const json& document, const char* id_key, const char* duration_key) {
     std::vector<domain::Track> tracks;
     const auto list = document.find("musiclist");
     if (list == document.end() || !list->is_array()) {
@@ -155,6 +155,9 @@ std::vector<domain::Track> tracks_of(const json& document, const char* id_key, c
     }
     for (const auto& item : *list) {
         if (auto track = track_of(item, id_key, duration_key)) {
+            auto pay = parse_pay(item);
+            if (!pay) return pay.error();
+            track->pay = *pay;
             tracks.push_back(std::move(*track));
         }
     }
@@ -353,7 +356,9 @@ domain::Result<PlaylistPage> parse_playlist_page(std::string_view body, std::str
     if (text_of(*document, "id") != id) {
         return not_found("kuwo has no such playlist");
     }
-    PlaylistPage page{domain::Playlist{ref_of(id)}, tracks_of(*document, "id", "duration")};
+    auto tracks = tracks_of(*document, "id", "duration");
+    if (!tracks) return tracks.error();
+    PlaylistPage page{domain::Playlist{ref_of(id)}, std::move(*tracks)};
     auto& playlist = page.playlist;
     playlist.name = decode_text(text_of(*document, "title"));
     playlist.creator = clean(*document, "uname");
@@ -379,7 +384,9 @@ domain::Result<AlbumPage> parse_album_page(std::string_view body, std::string_vi
     if (album_id != id) {
         return protocol_error("album response is about another album");
     }
-    AlbumPage page{domain::Album{ref_of(id)}, tracks_of(*document, "id", "duration")};
+    auto tracks = tracks_of(*document, "id", "duration");
+    if (!tracks) return tracks.error();
+    AlbumPage page{domain::Album{ref_of(id)}, std::move(*tracks)};
     auto& album = page.album;
     album.title = decode_text(text_of(*document, "name"));
     album.artists = parse_artists(text_of(*document, "artist"), text_of(*document, "artistid"));
@@ -470,7 +477,9 @@ domain::Result<ChartPage> parse_chart_page(std::string_view body, std::string_vi
     if (array_at(*document, "musiclist") == nullptr) {
         return protocol_error("chart response lacks musiclist");
     }
-    ChartPage page{domain::Chart{ref_of(id)}, tracks_of(*document, "id", "song_duration")};
+    auto tracks = tracks_of(*document, "id", "song_duration");
+    if (!tracks) return tracks.error();
+    ChartPage page{domain::Chart{ref_of(id)}, std::move(*tracks)};
     auto& chart = page.chart;
     chart.name = decode_text(text_of(*document, "name"));
     chart.description = clean(*document, "info");

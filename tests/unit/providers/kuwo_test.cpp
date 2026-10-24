@@ -15,6 +15,7 @@
 #include "runtime/admission/admission_ledger.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <nlohmann/json.hpp>
 
 #include <deque>
 #include <filesystem>
@@ -25,6 +26,20 @@
 using namespace music_service;
 using namespace music_service::test;
 namespace ports = application::ports;
+
+TEST_CASE("kuwo payment flags distinguish playback download and membership", "[kuwo][pay]") {
+    using Json = nlohmann::json;
+    namespace p = providers::kuwo::parsing;
+    auto value = unwrap(p::parse_pay(Json{{"tpay", "0"}, {"fpay", "1"},
+        {"payInfo", {{"feeType", {{"vip", "1"}}}}}}));
+    CHECK(value.pay_play == 0); CHECK(value.pay_down == 1); CHECK(value.pay_month == 1);
+    auto detail = unwrap(p::parse_track_info(Json{{"code", 200}, {"data", {{"rid", 1}, {"name", "test"}, {"artist", "artist"}, {"isListenFee", true}}}}.dump(), "1"));
+    CHECK(detail.pay.pay_play == 1); CHECK_FALSE(detail.pay.pay_down); CHECK_FALSE(detail.pay.pay_month);
+    value = unwrap(p::parse_pay(Json{{"tpay", 2}, {"fpay", nullptr}, {"payInfo", {{"feeType", {{"vip", 0}}}}}}));
+    CHECK_FALSE(value.pay_play); CHECK_FALSE(value.pay_down); CHECK(value.pay_month == 0);
+    for (const auto& invalid : {Json{{"tpay", -1}}, Json{{"fpay", "invalid"}}, Json{{"payInfo", Json::array()}}})
+        CHECK_FALSE(p::parse_pay(invalid));
+}
 
 TEST_CASE("kuwo collection links distinguish playlists albums and tracks", "[kuwo][collections-b]") {
     namespace p = providers::kuwo::parsing;
@@ -110,6 +125,47 @@ ports::ProviderSetup setup(std::shared_ptr<ports::UpstreamHttp> upstream) {
 }
 
 } // namespace
+
+TEST_CASE("kuwo cookie verifier checks identity before querying membership", "[providers][kuwo][membership]") {
+    auto http = std::make_shared<FakeUpstream>();
+    auto bundle = providers::kuwo::make_bundle();
+    REQUIRE(bundle.auth_profiles.size() == 1);
+    auto verifier = unwrap(bundle.auth_profiles[0].verifier(setup(http)));
+    const auto identity = unwrap(domain::AuthIdentityKey::make(user("prn_a", "kuwo", "cre_1"), {1, {}, {}, {}}));
+    ports::SecretBytes cookie{"userid=12345; websid=synthetic-session"};
+    SECTION("valid with membership") {
+        http->respond(200, R"({"meta":{"code":200},"data":{"UID":"12345"}})");
+        http->respond(200, R"({"meta":{"code":200},"ctime":1800000000000,"data":{"svipExpire":"2000000000000","vipLuxuryExpire":"2000000005000","vipExpire":"0","vipmExpire":"0"}})");
+        auto result = unwrap(verifier->verify({identity, cookie}, context().operation));
+        CHECK(result.status == ports::VerificationStatus::valid);
+        CHECK(result.membership.type == "svip");
+        CHECK_FALSE(result.account_hint);
+        REQUIRE(http->calls.size() == 2);
+        for (const auto& call : http->calls) {
+            CHECK(call.request.method == ports::HttpMethod::post);
+            CHECK_FALSE(call.request.allow_redirects);
+            CHECK(call.request.url.find("synthetic-session") == std::string::npos);
+            CHECK(call.request.max_response_bytes == 256 * 1024);
+        }
+    }
+    SECTION("missing login") {
+        http->respond(200, R"({"meta":{"code":200},"data":null})");
+        CHECK(unwrap(verifier->verify({identity, cookie}, context().operation)).status == ports::VerificationStatus::invalid);
+        CHECK(http->calls.size() == 1);
+    }
+    SECTION("wrong account") {
+        http->respond(200, R"({"meta":{"code":200},"data":{"UID":"67890"}})");
+        CHECK(unwrap(verifier->verify({identity, cookie}, context().operation)).status == ports::VerificationStatus::invalid);
+        CHECK(http->calls.size() == 1);
+    }
+    SECTION("membership unavailable") {
+        http->respond(200, R"({"meta":{"code":200},"data":{"UID":"12345"}})");
+        http->respond(503, "private response");
+        auto result = unwrap(verifier->verify({identity, cookie}, context().operation));
+        CHECK(result.status == ports::VerificationStatus::valid);
+        CHECK(result.membership.status == "unknown");
+    }
+}
 
 TEST_CASE("kuwo search responses map to tracks", "[providers][kuwo]") {
     const auto page = unwrap(parsing::parse_search(fixture("search-qingtian-pn0-rn3.json")));
@@ -333,6 +389,104 @@ TEST_CASE("kuwo details and links", "[providers][kuwo]") {
     CHECK(parsed.kind == "track");
     CHECK(parsed.ref == test::track("kuwo", "78932517"));
     CHECK(providers::kuwo::make_search(setup(nullptr)).error().code == ErrorCode::internal);
+}
+
+TEST_CASE("kuwo audio keeps account cookies scoped to each resolver request", "[providers][kuwo][cookie-audio]") {
+    auto upstream = std::make_shared<FakeUpstream>();
+    auto resolver = unwrap(providers::kuwo::make_resolver(setup(upstream)));
+    const auto song = test::track("kuwo", "78932517");
+    const auto signed_in = [](const std::string& id, const std::string& cookie) {
+        auto ctx = context();
+        ctx.identity = unwrap(domain::AuthIdentityKey::make(user("prn_a", "kuwo", id), {1, {}, {}, {}}));
+        ctx.secret = std::make_shared<const ports::SecretBytes>(cookie);
+        return ctx;
+    };
+    const auto first = signed_in("cre_first", "userid=12345; websid=synthetic-first");
+    const auto second = signed_in("cre_second", "userid=23456; websid=synthetic-second");
+    for (const auto& ctx : {context(), first, second, context()}) {
+        upstream->respond(200, fixture("audio-78932517-standard.json"));
+        const auto audio = unwrap(resolver->resolve_audio(ctx, song, {}));
+        const auto& call = upstream->calls.back();
+        CHECK(call.base.identity == ctx.identity);
+        REQUIRE(call.request.secret_headers.size() == (ctx.secret ? 1 : 0));
+        if (ctx.secret) {
+            CHECK(call.request.secret_headers[0].name == "Cookie");
+            CHECK(call.request.secret_headers[0].value == ctx.secret->reveal());
+            CHECK_FALSE(call.request.allow_redirects);
+        }
+        CHECK(call.request.url.find("websid") == std::string::npos);
+        CHECK(call.request.body.empty());
+        for (const auto& header : call.request.headers) CHECK(header.name != "Cookie");
+        for (const auto& [name, value] : audio.request_headers) {
+            CHECK(name != "Cookie");
+            CHECK(value.find("synthetic-") == std::string::npos);
+        }
+    }
+    // Metadata calls do not send the audio account, even if a caller supplies that context.
+    upstream->respond(200, fixture("track-info-78932517.json"));
+    REQUIRE(providers::kuwo::make_detail(setup(upstream)).value()->track_detail(first, song));
+    CHECK(upstream->calls.back().request.secret_headers.empty());
+    upstream->respond(200, fixture("search-qingtian-pn0-rn3.json"));
+    REQUIRE(providers::kuwo::make_search(setup(upstream)).value()->search_tracks(first, {"test", 3, {}}));
+    CHECK(upstream->calls.back().request.secret_headers.empty());
+}
+
+TEST_CASE("kuwo cookie audio preserves the bound account through quality and failure paths", "[providers][kuwo][cookie-audio]") {
+    auto upstream = std::make_shared<FakeUpstream>();
+    auto resolver = unwrap(providers::kuwo::make_resolver(setup(upstream)));
+    auto ctx = context();
+    ctx.identity = unwrap(domain::AuthIdentityKey::make(user("prn_a", "kuwo", "cre_bound"), {1, {}, {}, {}}));
+    const std::string cookie = "userid=12345; websid=synthetic-bound";
+    ctx.secret = std::make_shared<const ports::SecretBytes>(cookie);
+    const auto song = test::track("kuwo", "78932517");
+    SECTION("all qualities") {
+        for (const auto quality : {domain::Quality::standard, domain::Quality::high,
+                                  domain::Quality::lossless, domain::Quality::hires}) {
+            const bool mp3 = quality <= domain::Quality::high;
+            const auto bitrate = quality == domain::Quality::standard ? 128 : quality == domain::Quality::high ? 320 :
+                quality == domain::Quality::lossless ? 2000 : 23000;
+            upstream->respond(200, nlohmann::json{{"code", 200}, {"data", {{"url", "https://cdn.kuwo.cn/synthetic"},
+                {"rid", 78932517}, {"type", 0}, {"format", mp3 ? "mp3" : "flac"},
+                {"bitrate", bitrate}, {"duration", 176}}}}.dump());
+            CHECK(unwrap(resolver->resolve_audio(ctx, song, {quality})).actual_quality == quality);
+        }
+        REQUIRE(upstream->calls.size() == 4);
+    }
+    SECTION("explicit quality fallback retains the same account") {
+        upstream->respond(200, R"({"code":-1})");
+        upstream->respond(200, R"({"code":200,"data":{"url":"https://cdn.kuwo.cn/synthetic","rid":78932517,"type":0,"format":"flac","bitrate":2000,"duration":176}})");
+        const auto audio = unwrap(resolver->resolve_audio(ctx, song,
+            {domain::Quality::hires, domain::QualityPolicy::allow_lower, false}));
+        CHECK(audio.actual_quality == domain::Quality::lossless);
+        REQUIRE(upstream->calls.size() == 2);
+    }
+    SECTION("upstream failures are not retried anonymously") {
+        upstream->respond(503, "unavailable");
+        const auto result = resolver->resolve_audio(ctx, song,
+            {domain::Quality::hires, domain::QualityPolicy::allow_lower, false});
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == ErrorCode::upstream_failed);
+        REQUIRE(upstream->calls.size() == 1);
+    }
+    SECTION("paid previews remain previews") {
+        upstream->respond(200, fixture("audio-228908-substitute.json"));
+        const auto audio = unwrap(resolver->resolve_audio(ctx, test::track("kuwo", "228908"), {}));
+        CHECK(audio.completeness == domain::Completeness::preview);
+        CHECK_FALSE(domain::evaluate_resource({}, {audio.actual_quality, audio.completeness}));
+    }
+    SECTION("a bound account without its secret cannot turn anonymous") {
+        ctx.secret.reset();
+        const auto result = resolver->resolve_audio(ctx, song, {});
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == ErrorCode::credentials_required);
+        CHECK(upstream->calls.empty());
+    }
+    for (const auto& call : upstream->calls) {
+        REQUIRE(call.request.secret_headers.size() == 1);
+        CHECK(call.request.secret_headers[0].value == cookie);
+        CHECK(call.base.identity == ctx.identity);
+        CHECK_FALSE(call.request.allow_redirects);
+    }
 }
 
 TEST_CASE("kuwo resolves standard quality and reports substitutes as previews", "[providers][kuwo]") {

@@ -9,7 +9,7 @@
 | `lyrics` | `song/lyric`（lv=kv=tv=rv=yv=-1） | 独立 LRC、翻译、罗马音及 YRC 行／词毫秒时间；损坏 YRC 保留有效其他变体并警告；纯音乐不返回占位文本 |
 | `parse_links` | 无网络 | `music.163.com/song?id=N`、`/#/song?id=N`、`/song/N`、`/m/song?id=N`、`y.music.163.com/m/song?id=N`；短链 163cn.tv 需要网络，不支持 |
 | `resolve_audio` | `song/enhance/player/url/v1` | standard→standard（128 kbit/s MP3）、high→exhigh（320 kbit/s MP3）、lossless→lossless（FLAC）；凭据可选，实际权限由上游决定 |
-| `verify_credentials` | `w/nuser/account/get` | `account` 非空为 valid（昵称作为 account_hint，会员时 scopes 含 `vip`），为 null 为 invalid |
+| `verify_credentials` | `w/nuser/account/get`＋`music-vip-membership/front/vip/info` | 先校验会话，再读取黑胶SVIP／黑胶VIP／音乐包和对应到期时间；会员查询失败保留有效登录，会员为 unknown |
 | `search_playlists`／`search_albums` | `cloudsearch/pc`（type=1000／10） | 每页最多 50 项，offset 最深 10000；空页结束 |
 | `playlist_detail`／`playlist_tracks` | `v3/playlist/detail`，n=0、s=0 | 声明元数据与完整可见 ID 清单；当前页再以 `v3/song/detail` 每批最多 50 ID 补详情 |
 | `album_detail`／`album_tracks` | `v1/album/{id}` | 上游返回专辑和歌曲，服务有界切页；不伪造上游分页 |
@@ -25,7 +25,7 @@
 - 匿名与账号：搜索、歌曲详情、歌手热门、歌词、公共发现与链接不发送 Cookie。歌单详情／曲目、节目／电台详情／列表、节目音频的 track_detail 及 resolve_audio 可携带已绑定凭据；个人目录必须有账号。授权方式 `web_cookie` 保持手动 Cookie，秘密头只发往 music.163.com，CDN 不携带 Cookie。所有私有缓存与游标沿用完整身份及选择版本隔离。
 - 音源规则：单曲 code 200 才可用；404（无版权或无此歌曲）为 NOT_FOUND；-110（需要会员或购买）为 CREDENTIALS_REQUIRED（带 `netease_song_code`）。应答带 `freeTrialInfo` 的是试听片段，completeness=preview，按公共规则在未允许试听时拒绝。level=standard、类型 mp3、码率 96～160 kbit/s 才声明 standard；无试听标记且有时长时 completeness=full。地址必须在 `*.music.126.net`，一律改用 HTTPS（CDN 以 md5 作强 ETag，支持 Range）；有效期取 `expi`。
 - 高品质证据：只有 level=exhigh、MP3、码率 300～340 kbit/s 才声明 high；level=lossless、FLAC、正码率才声明 lossless。采用应答档位，不按请求值填实际档位。strict 拒绝已知降级，allow_lower 保留实际档位并产生 QUALITY_LOWERED；higher／未知或相互矛盾的事实不满足高品质请求。Hi-Res 请求发送 level=hires；仅上游明确返回 hires／FLAC／正码率才声明该档位。落盘后还须满足至少 24 bit／48 kHz，否则降级为 lossless 并重新执行 strict／allow_lower。仅凭 24 bit／44.1 kHz 不改称 Hi-Res。quality_hints 表示支持请求，不保证账号拥有权限。
-- 账号验证的 301／403 响应与 account=null 均判 invalid；普通有效账号 scopes 为空，会员有 vip scope，但会员不保证每首歌可用。-110 附上游 `netease_fee`（如有），保留会员／单独购买限制的原始证据，不从 Cookie 存在或 VIP 标记猜测购买权。Cookie 只发往平台 API，下载 CDN 请求不携带 Cookie。
+- 账号验证的 301／403 响应与 account=null 均判 invalid；会员独立返回，不再将 vipType 的所有正值压成 vip scope。缺失字段、非法时间或未知响应保留 unknown，不从会员标记猜测歌曲购买权。-110 继续附上游 `netease_fee`（如有）；下载 CDN 请求不携带 Cookie。
 - 顶层 code：301 为 CREDENTIALS_REQUIRED，405 为可重试的限流，-460／-462（风控）与其他为不可重试的 UPSTREAM_FAILED（带 `netease_code`）。
 - 集合边界：歌单响应最多 4 MiB／10000 个 ID，专辑响应最多 8 MiB／2000 首；歌曲详情批最多 2 MiB／50 首。列表每页 1～100，保持原顺序与重复位置。`page.total` 为上游声明数，`listed_total` 为可见清单长度，`unavailable_count` 为本页缺详情位置数；空详情页仍向前推进。列表可见不保证歌曲可下载。
 - 集合游标含 ID 顺序、声明数与上游曲目更新时间的变化标记，由应用层绑定身份、集合与页大小；可检测的变化返回 CURSOR_EXPIRED，要求重新读取。上游响应和服务页缓存都不是原子快照。

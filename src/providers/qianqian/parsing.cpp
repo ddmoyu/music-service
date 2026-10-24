@@ -90,6 +90,17 @@ domain::Track track(const Json& json) {
         auto sort = number(json, "sort", 10000);
         if (sort) out.track_number = static_cast<std::uint32_t>(sort);
     }
+    if (json.contains("isVip") && !json.at("isVip").is_null()) {
+        const auto vip = number(json, "isVip");
+        if (vip <= 1) out.pay.pay_month = static_cast<std::uint32_t>(vip);
+        if (vip == 1) out.pay.pay_play = 1;
+    }
+    if (json.contains("pay_model") && !json.at("pay_model").is_null()) {
+        const auto model = number(json, "pay_model");
+        if (model == 3) out.pay.pay_play = 1;
+        else if (model == 2 && out.pay.pay_month == 0) out.pay.pay_play = 0;
+    }
+    // isPaid is an account purchase state; neither it nor isVip proves download rights.
     return out;
 }
 domain::Playlist playlist(const Json& json) {

@@ -119,6 +119,13 @@ TEST_CASE("Bilibili advertises only implemented native capabilities", "[provider
     CHECK(f.http->calls.empty());
 }
 
+TEST_CASE("Bilibili paid UGC does not imply subscription or download entitlement", "[providers][bilibili][pay]") {
+    Fixture f; auto doc = view_data(); doc["rights"]["ugc_pay"] = 1;
+    f.http->data(doc);
+    const auto value = unwrap(f.port<ports::ITrackDetail>()->track_detail(context(), track("bilibili", std::string{bv} + ":p1")));
+    CHECK(value.pay.pay_play == 1); CHECK_FALSE(value.pay.pay_down); CHECK_FALSE(value.pay.pay_month);
+}
+
 TEST_CASE("Bilibili search preserves video semantics and advances short pages",
           "[providers][bilibili]") {
     Fixture f;
@@ -131,6 +138,8 @@ TEST_CASE("Bilibili search preserves video semantics and advances short pages",
     CHECK(out.page.items[0].artists.empty());
     CHECK_FALSE(out.page.items[0].album);
     CHECK_FALSE(out.page.items[0].duration_ms);
+    CHECK_FALSE(out.page.items[0].pay.pay_play);
+    CHECK_FALSE(out.page.items[0].pay.pay_month);
     CHECK(out.page.items[0].ref.id.value() == std::string{bv} + ":p1");
     CHECK(out.next_cursor == "2:2");
     CHECK(out.page.page.total == 5);

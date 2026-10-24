@@ -1,5 +1,6 @@
 #include "application/transport/url.hpp"
 #include "providers/kugou/parsing.hpp"
+#include "providers/kugou/web_audio.hpp"
 #include <algorithm>
 #include <array>
 #include <mbedtls/base64.h>
@@ -119,6 +120,8 @@ class Audio final : public ports::ITrackDetail,
                             "Kugou Hi-Res is not supported by this adapter",
                             false,
                             {}};
+            if (c.identity.binding().mode() == domain::AccountMode::user || c.secret)
+                return resolve_web_audio(client_, c, ref, requirement);
             const auto info = detail(client_, c, ref.id.value(), "resolve_audio");
             const auto& extra = info.at("extra");
             struct Format {

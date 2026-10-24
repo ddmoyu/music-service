@@ -13,9 +13,13 @@
 | 网页链接解析 | 离线识别 `y.qq.com/n/ryqq/songDetail|playlist|albumDetail|singer/<id>` 及旧 `/n/yqq/song|album/<mid>.html`；短链接、移动端纯查询参数链接尚不支持 |
 | 歌词和封面 | 匿名行级 LRC、独立译文；无歌词明确 unavailable；可信专辑 MID 构造封面地址；复用标签嵌入和 `.lrc`／封面侧文件输出 |
 | 音源 | `standard` 128 kbps MP3、`high` 320 kbps MP3、`lossless` FLAC；实际可用性受账号和歌曲权限限制；strict 不静默降级，allow_lower 只选同档或更低档 |
-| Cookie 校验 | `web_cookie`；返回 valid／invalid；网络与未知上游错误单独返回；不据登录成功推断会员或购买权限 |
+| Cookie 校验 | `web_cookie`；GetLoginUserInfo 验证登录，VipLogin.VipLoginInter.vip_login_base 查询绿钻／豪华绿钻／超级会员和到期时间；会员查询失败显示 unknown，不影响已确认的登录结果 |
+
+会员到期字段支持完整时间与 YYYY-MM-DD。完整时间按北京时间转换为 UTC，接口返回 `membership.expires_at`、`expiry_precision=datetime`；只有日期时返回 `expires_on`、`expiry_precision=date`，保留平台日历日期。豪华绿钻的 `send` 不借用普通绿钻 `overdate` 的时分秒；日期非法或与会员标记矛盾时保留未知。
 
 严格 Hi-Res、加密 QMC／MFLAC、本地 QQ 文件解密、个人歌单和扫码登录不属于本次实现。高品质和无损的成功下载需要相应有权限样本，不能用标准品质的验收替代。
+
+搜索、歌曲列表（歌单／专辑／歌手／榜单）和单曲详情解析上游 `pay.pay_play`、`pay.pay_down`、`pay.pay_month`，通过[统一 Track.pay 契约](../../../docs/design/cpp20-refactor/backend-service/data-models.md#歌曲付费元数据)返回。已知 0／1 保留，缺失／null／未知枚举返回 null；非法类型或超出 32 位无符号整数范围明确报错。播放与下载限制分别展示，不能仅用 `pay_month` 推断 VIP 专属播放；这些歌曲标记不等于当前 Cookie 的会员／购买权限，不改变取流与下载的权限检查。
 
 ## 接入现有服务
 
@@ -26,7 +30,9 @@ cmake --preset windows-msvc-debug "-DMUSIC_SERVICE_PROVIDERS=kuwo;fivesing;netea
 cmake --build --preset windows-msvc-debug
 ```
 
-通过现有凭证 API 新建 `{source:"qq", cookie:本机读取的内容, label:自定名称}`，调用 `/api/v1/credentials/{credential_id}/verify`，再将其设为 `/api/v1/credential-defaults/qq`。Cookie 不放进服务配置、URL、命令行参数或代码。当前校验要求 `uin` 以及 `qqmusic_key` 或 `qm_keyst`。刷新需用户更新 Cookie，本版本不自动刷新。
+通过 `POST /api/v1/credentials` 提交 `{"source":"qq","label":"主账号","kind":"cookie","auth_profile":"web_cookie","secret":{"cookie":"<浏览器 Cookie>"}}`，新账号自动启用、选中并后台校验；轮询 `GET /api/v1/credentials/{credential_id}` 查看结果，手动刷新校验使用 `POST /api/v1/credentials/{credential_id}/verify`。当前校验要求 `uin` 以及 `qqmusic_key` 或 `qm_keyst`。Cookie 不放进服务配置、URL、命令行参数或代码，本版本不自动刷新 Cookie。
+
+同一用户在 QQ 最多启用一个账号；启用已有停用账号使用 `PUT /api/v1/credential-defaults/qq`，提交 credential_id 和新 secret.cookie，同时停用原账号并清除其 Cookie。单个停用用 `POST /api/v1/credentials/{id}/disable`，全部停用用 `DELETE /api/v1/credential-defaults/qq`；停用保留账号描述，重新启用必须重新提供 Cookie。完整请求与会员到期字段显示见[账号接入指南](../../../docs/account-management.md)。
 
 公共路径与已有平台相同，搜索用复数 `sources`，其他目录用 `source`：
 

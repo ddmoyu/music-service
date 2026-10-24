@@ -62,6 +62,7 @@ application::ports::HttpRequest lyric(std::string_view id, const Call& call);
 
 // w/nuser/account/get: who the cookie belongs to (account null when it is nobody).
 application::ports::HttpRequest account(const Call& call);
+application::ports::HttpRequest membership_info(const Call& call);
 
 // Adds the user's cookie as a secret header. Only cookie pairs are passed through;
 // the cookie travels only to music.163.com over HTTPS.

@@ -102,6 +102,9 @@ domain::Track track(const Json& j) {
     if (!j.is_object()) throw invalid();
     domain::Track out{ref_of(text(j, "rid")), required_name(j, "name"),
         parse_artists(text(j, "artist"), text(j, "artistid")), {}, {}, {}};
+    auto pay = parse_pay(j);
+    if (!pay) throw pay.error();
+    out.pay = *pay;
     const auto album_id = text(j, "albumid");
     if (auto name = clean(j, "album")) {
         std::optional<domain::CollectionRef> album_ref;

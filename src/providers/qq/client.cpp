@@ -76,6 +76,10 @@ Json Client::fetch(ports::HttpRequest request, const ports::ProviderContext& con
     request.headers = {{"User-Agent", std::string{user_agent}}, {"Referer", "https://y.qq.com/"},
                        {"Content-Type", "application/json"}, {"Accept", "application/json"}};
     request.max_response_bytes = 4 * 1024 * 1024;
+    if (request.operation == "verify_credentials") {
+        request.max_response_bytes = 256 * 1024;
+        request.allow_redirects = false;
+    }
     if (auth && context.secret) request.secret_headers.push_back({"Cookie", std::string{context.secret->reveal()}});
     ports::AdmissionRequest admission{context.identity.binding().principal_id(), setup_.source,
         request.operation, ports::TrafficClass::short_request, context.identity, {},

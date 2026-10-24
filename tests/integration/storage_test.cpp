@@ -243,11 +243,10 @@ TEST_CASE("default credential selection", "[storage][credentials]") {
     const auto foreign = s.credentials->insert({other, "qq", "X", "cookie", "cookie", "sec_x", {}}).value();
     const auto netease = s.credentials->insert({owner, "netease", "N", "cookie", "cookie", "sec_n", {}}).value();
 
-    CHECK(s.credentials->get_default(owner, "qq")->selection_version == 0);
-    CHECK(s.credentials->set_default(owner, "qq", a.id)->selection_version == 1);
-    CHECK(s.credentials->set_default(owner, "qq", a.id)->selection_version == 1);
+    CHECK(s.credentials->get_default(owner, "qq")->selection_version == 2);
+    CHECK(s.credentials->set_default(owner, "qq", a.id).error().code == ErrorCode::validation_failed);
     CHECK(s.credentials->set_default(owner, "qq", b.id)->selection_version == 2);
-    CHECK(s.credentials->set_default(owner, "qq", a.id)->selection_version == 3); // A -> B -> A
+    CHECK(s.credentials->set_default(owner, "qq", a.id, 2, "sec_a2")->selection_version == 3); // A -> B -> A
 
     CHECK(s.credentials->set_default(owner, "qq", foreign.id).error().code == ErrorCode::not_found);
     CHECK(s.credentials->set_default(owner, "qq", netease.id).error().code ==
@@ -258,15 +257,15 @@ TEST_CASE("default credential selection", "[storage][credentials]") {
     const auto revoked = s.credentials->revoke(owner, a.id);
     REQUIRE(revoked);
     CHECK(revoked->credential.status == ports::CredentialStatus::revoked);
-    CHECK(revoked->credential.version == 2);
-    CHECK(revoked->previous_secret_ref == "sec_a");
+    CHECK(revoked->credential.version == 4);
+    CHECK(revoked->previous_secret_ref == "sec_a2");
     const auto after = s.credentials->get_default(owner, "qq");
     CHECK_FALSE(after->credential_id.has_value());
     CHECK(after->selection_version == 4);
     CHECK_FALSE(s.credentials->revoke(owner, a.id)->previous_secret_ref.has_value());
     CHECK(s.credentials->set_default(owner, "qq", a.id).error().code == ErrorCode::validation_failed);
 
-    CHECK(s.credentials->set_default(owner, "qq", b.id)->selection_version == 5);
+    CHECK(s.credentials->set_default(owner, "qq", b.id, 2, "sec_b2")->selection_version == 5);
     CHECK(s.credentials->clear_default(owner, "qq")->selection_version == 6);
     CHECK(s.credentials->clear_default(owner, "qq")->selection_version == 6);
     CHECK(s.credentials->clear_default(owner, "mock_catalog")->selection_version == 0);

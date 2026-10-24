@@ -16,15 +16,16 @@ ports::ProviderBundle make_bundle() {
         .source = std::move(source).value(),
         .name = "酷我音乐",
         .implementation_id = "kuwo-native",
-        .implementation_version = "0.1.9",
+        .implementation_version = "0.1.10",
     };
-    // 已验证的匿名能力；不登记无实际用途的凭据。
+    // 目录保持匿名；取流可使用当前绑定的网页 Cookie。
     bundle.capabilities = {
         {.key = "search_tracks", .pagination = ports::Pagination::cursor, .catalog_kind = ports::CatalogKind::live},
         {.key = "track_detail"},
         {.key = "parse_links"},
         {.key = "lyrics"},
-        {.key = "resolve_audio"},
+        {.key = "resolve_audio", .credentials = ports::CredentialRequirement::optional,
+         .auth_profiles = {"web_cookie"}},
     };
     bundle.bindings = {
         ports::CapabilityBinding::bind<ports::ITrackSearch>(make_search),
@@ -43,6 +44,7 @@ ports::ProviderBundle make_bundle() {
     bundle.quality_hints = {domain::Quality::standard, domain::Quality::high, domain::Quality::lossless, domain::Quality::hires};
     for (auto& spec : artist_capabilities()) bundle.capabilities.push_back(std::move(spec));
     for (auto& binding : artist_bindings()) bundle.bindings.push_back(std::move(binding));
+    add_auth(bundle);
     return bundle;
 }
 

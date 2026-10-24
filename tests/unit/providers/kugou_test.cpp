@@ -21,6 +21,8 @@ class FakeUpstream final : public ports::UpstreamHttp {
   public:
     std::deque<ports::HttpResponse> answers;
     std::vector<ports::HttpRequest> calls;
+    std::vector<domain::AuthIdentityKey> identities;
+    std::optional<domain::Error> failure;
     bool deferred{false};
     void raw(Json j, int status = 200) { answers.push_back({{status, {}, {}}, j.dump()}); }
     void api(Json data) { raw({{"status", 1}, {"errcode", 0}, {"data", std::move(data)}}); }
@@ -30,8 +32,15 @@ class FakeUpstream final : public ports::UpstreamHttp {
         REQUIRE(application::transport::check_request(request));
         CHECK(base.source.value() == "kugou");
         CHECK(base.operation == request.operation);
-        CHECK(request.secret_headers.empty());
+        if (!request.secret_headers.empty()) {
+            CHECK(request.url.starts_with("https://wwwapi.kugou.com/play/songinfo?"));
+            CHECK(request.operation == "resolve_audio");
+            CHECK_FALSE(request.allow_redirects);
+        }
         calls.push_back(request);
+        REQUIRE(base.identity);
+        identities.push_back(*base.identity);
+        if (failure) return *failure;
         if (deferred)
             return ports::HopResult<ports::HttpResponse>{ports::PendingHop{
                 std::move(request), {"source", std::chrono::steady_clock::now()}}};
@@ -108,19 +117,232 @@ resolve(Fixture& f, domain::Quality quality = domain::Quality::standard,
                                                           {quality, policy, preview});
 }
 } // namespace
-TEST_CASE("Kugou registers only implemented anonymous native capabilities", "[providers][kugou]") {
+TEST_CASE("Kugou registers optional Cookie audio while keeping its catalogue anonymous", "[providers][kugou]") {
     Fixture f;
     auto view = unwrap(f.registry->describe("kugou"));
     CHECK(view.capabilities.size() == 21);
-    CHECK(view.auth_methods.empty());
+    REQUIRE(view.auth_methods.size() == 1);
+    CHECK(view.auth_methods[0].auth_profile == "web_cookie");
+    CHECK_FALSE(view.auth_methods[0].supports_verify);
     CHECK(f.registry->instantiated() == 0);
-    for (const auto& v : view.capabilities)
-        CHECK(v.spec.credentials == ports::CredentialRequirement::none);
+    for (const auto& v : view.capabilities) {
+        CHECK(v.spec.credentials == (v.spec.key == "resolve_audio"
+            ? ports::CredentialRequirement::optional : ports::CredentialRequirement::none));
+        if (v.spec.key == "resolve_audio") CHECK(v.spec.auth_profiles == std::vector<std::string>{"web_cookie"});
+    }
     CHECK(f.registry->require<ports::ArtistSearch>("kugou"));
     CHECK(f.registry->require<ports::ArtistDetail>("kugou"));
     CHECK(f.registry->require<ports::ArtistTracks>("kugou"));
     CHECK(f.registry->require<ports::ArtistAlbums>("kugou"));
     CHECK(f.upstream->calls.empty());
+}
+
+namespace {
+ports::ProviderContext logged_in(std::string cookie = "KugooID=12345; t=synthetic-first; kg_mid=mid-a; kg_dfid=dfid-a",
+                                 std::string id = "cre_first") {
+    auto c = context();
+    c.identity = unwrap(domain::AuthIdentityKey::make(user("prn_a", "kugou", id), {1, {}, {}, {}}));
+    c.secret = std::make_shared<const ports::SecretBytes>(cookie);
+    return c;
+}
+Json web_info() {
+    return {{"hash", song}, {"encode_album_audio_id", "encodedSong"}, {"is_free_part", 0},
+            {"play_url", "https://webfs.tx.kugou.com/audio.mp3"}, {"bitrate", 128},
+            {"timelength", 180000}, {"filesize", 2880000}};
+}
+void web_answers(Fixture& f, Json result = web_info()) {
+    auto first = web_info();
+    first["play_url"] = "";
+    f.upstream->raw({{"status", 1}, {"err_code", 0}, {"data", first}});
+    f.upstream->raw({{"status", 1}, {"err_code", 0}, {"data", std::move(result)}});
+}
+domain::Result<ports::ResolvedAudio> web_resolve(Fixture& f, const ports::ProviderContext& c,
+                                                domain::ResourceRequirement requirement = {}) {
+    return f.port<ports::IAssetResolver>()->resolve_audio(c, kg::parsing::ref(song, true), requirement);
+}
+}
+
+TEST_CASE("Kugou Cookie audio signs both requests with the selected account and excludes CDN secrets", "[providers][kugou][cookie-audio]") {
+    Fixture f;
+    const auto first = logged_in();
+    const auto second = logged_in("KuGoo=KugooID=23456&t=synthetic-second; mid=mid-b; dfid=dfid-b", "cre_second");
+    for (const auto& c : {first, second, first}) {
+        web_answers(f);
+        const auto audio = unwrap(web_resolve(f, c));
+        CHECK(audio.actual_quality == domain::Quality::standard);
+        CHECK(audio.completeness == domain::Completeness::full);
+        CHECK(audio.bitrate_bps == 128000);
+        CHECK_FALSE(audio.shareable);
+        const auto count = f.upstream->calls.size();
+        for (std::size_t i = count - 2; i < count; ++i) {
+            const auto& call = f.upstream->calls[i];
+            CHECK(f.upstream->identities[i] == c.identity);
+            REQUIRE(call.secret_headers.size() == 1);
+            CHECK(call.secret_headers[0].name == "Cookie");
+            CHECK(call.secret_headers[0].value == c.secret->reveal());
+            CHECK(call.url.find(c.identity == first.identity ? "userid=12345" : "userid=23456") != std::string::npos);
+            CHECK(call.url.find(c.identity == first.identity ? "token=synthetic-first" : "token=synthetic-second") != std::string::npos);
+            CHECK(call.url.find("signature=") != std::string::npos);
+            CHECK_FALSE(call.allow_redirects);
+            CHECK(call.body.empty());
+            for (const auto& header : call.headers) CHECK(header.name != "Cookie");
+        }
+        CHECK(f.upstream->calls[count - 2].url.find("hash=" + std::string{song}) != std::string::npos);
+        CHECK(f.upstream->calls[count - 1].url.find("encode_album_audio_id=encodedSong") != std::string::npos);
+        CHECK(audio.url.find("synthetic-") == std::string::npos);
+        for (const auto& [name, value] : audio.request_headers) {
+            CHECK(name != "Cookie");
+            CHECK(value.find("synthetic-") == std::string::npos);
+        }
+    }
+    f.upstream->raw(info());
+    REQUIRE(resolve(f));
+    CHECK(f.upstream->calls.back().url.starts_with("https://m.kugou.com/app/i/getSongInfo.php?"));
+    CHECK(f.upstream->calls.back().secret_headers.empty());
+    f.upstream->raw(info());
+    REQUIRE(f.port<ports::ITrackDetail>()->track_detail(first, kg::parsing::ref(song, true)));
+    CHECK(f.upstream->calls.back().secret_headers.empty());
+}
+
+TEST_CASE("Kugou Cookie preview stays explicit and never becomes full audio", "[providers][kugou][cookie-audio]") {
+    Fixture f;
+    auto response = web_info();
+    response["is_free_part"] = 1;
+    web_answers(f, response);
+    const auto denied = web_resolve(f, logged_in());
+    REQUIRE_FALSE(denied);
+    CHECK(denied.error().code == ErrorCode::preview_rejected);
+    web_answers(f, response);
+    const auto preview = unwrap(web_resolve(f, logged_in(), {domain::Quality::standard, domain::QualityPolicy::strict, true}));
+    CHECK(preview.completeness == domain::Completeness::preview);
+    CHECK_FALSE(preview.bitrate_bps); // 网页的 bitrate 是整曲元数据，不是试听文件的实测码率。
+    CHECK(preview.duration_ms == 180000);
+    REQUIRE(f.upstream->calls.size() == 4);
+}
+
+TEST_CASE("Kugou Cookie quality policy never falls back to an anonymous account", "[providers][kugou][cookie-audio]") {
+    Fixture f;
+    for (const auto quality : {domain::Quality::high, domain::Quality::lossless, domain::Quality::hires}) {
+        const auto result = web_resolve(f, logged_in(), {quality});
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == ErrorCode::quality_unavailable);
+        CHECK(f.upstream->calls.empty());
+    }
+    web_answers(f);
+    const auto audio = unwrap(web_resolve(f, logged_in(), {domain::Quality::lossless, domain::QualityPolicy::allow_lower}));
+    CHECK(audio.actual_quality == domain::Quality::standard);
+    REQUIRE(f.upstream->calls.size() == 2);
+    for (const auto& call : f.upstream->calls) CHECK_FALSE(call.secret_headers.empty());
+}
+
+TEST_CASE("Kugou bound credentials must contain unambiguous web login fields", "[providers][kugou][cookie-audio]") {
+    Fixture f;
+    auto c = logged_in();
+    c.secret.reset();
+    const auto missing = web_resolve(f, c);
+    REQUIRE_FALSE(missing);
+    CHECK(missing.error().code == ErrorCode::credentials_required);
+    for (const auto& cookie : {"", "kg_mid=only-device", "KugooID=0; t=token; kg_mid=mid; kg_dfid=dfid",
+            "KugooID=123; KuGoo=KugooID=456&t=token; kg_mid=mid; kg_dfid=dfid",
+            "KugooID=123; t=first; t=second; kg_mid=mid; kg_dfid=dfid",
+            "KugooID=123; t=token\r\nInjected:value; kg_mid=mid; kg_dfid=dfid"}) {
+        const auto result = web_resolve(f, logged_in(cookie));
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == ErrorCode::credentials_required);
+    }
+    CHECK(f.upstream->calls.empty());
+}
+
+TEST_CASE("Kugou Cookie rejects wrong identities malformed responses and untrusted resources", "[providers][kugou][cookie-audio]") {
+    for (const auto key : {"hash", "encode_album_audio_id", "is_free_part", "timelength", "filesize", "bitrate"}) {
+        Fixture f;
+        auto response = web_info();
+        response.erase(key);
+        web_answers(f, response);
+        const auto result = web_resolve(f, logged_in());
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == ErrorCode::upstream_failed);
+    }
+    for (const auto& patch : std::vector<Json>{{{"hash", high}}, {{"encode_album_audio_id", "anotherSong"}},
+            {{"is_free_part", 2}}, {{"play_url", "http://webfs.tx.kugou.com/audio.mp3"}},
+            {{"play_url", "https://kugou.com.evil.test/audio.mp3"}},
+            {{"play_url", "https://webfs.tx.kugou.com/audio.kgm"}}}) {
+        Fixture f;
+        auto response = web_info();
+        response.update(patch);
+        web_answers(f, response);
+        const auto result = web_resolve(f, logged_in());
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == ErrorCode::upstream_failed);
+        CHECK(result.error().message.find("synthetic-") == std::string::npos);
+    }
+}
+
+TEST_CASE("Kugou Cookie permission upstream and cancellation failures do not retry anonymously", "[providers][kugou][cookie-audio]") {
+    Fixture f;
+    SECTION("no granted URL") {
+        auto denied = web_info();
+        denied["play_url"] = "";
+        web_answers(f, denied);
+        const auto result = web_resolve(f, logged_in());
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == ErrorCode::credentials_required);
+        CHECK(f.upstream->calls.size() == 2);
+    }
+    SECTION("HTTP redirect") {
+        f.upstream->raw({}, 302);
+        const auto result = web_resolve(f, logged_in());
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == ErrorCode::upstream_failed);
+        CHECK(f.upstream->calls.size() == 1);
+    }
+    SECTION("upstream rejection") {
+        f.upstream->raw({{"status", 0}, {"error_code", 20010}});
+        const auto result = web_resolve(f, logged_in());
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == ErrorCode::upstream_failed);
+        CHECK(f.upstream->calls.size() == 1);
+    }
+    SECTION("transport failures") {
+        for (const auto error : {ErrorCode::canceled, ErrorCode::upstream_timeout, ErrorCode::upstream_failed}) {
+            f.upstream->failure = domain::Error{error, "synthetic transport failure", false, {}};
+            const auto result = web_resolve(f, logged_in());
+            REQUIRE_FALSE(result);
+            CHECK(result.error().code == error);
+        }
+        CHECK(f.upstream->calls.size() == 3);
+    }
+    SECTION("admission") {
+        f.upstream->deferred = true;
+        const auto result = web_resolve(f, logged_in());
+        REQUIRE_FALSE(result);
+        CHECK(result.error().code == ErrorCode::service_busy);
+        CHECK(f.upstream->calls.size() == 1);
+    }
+    for (const auto& call : f.upstream->calls) CHECK_FALSE(call.secret_headers.empty());
+}
+
+TEST_CASE("Kugou pay metadata uses standard tariff without guessing unknown privileges", "[providers][kugou][pay]") {
+    for (const bool detail : {false, true}) {
+        auto doc = detail ? info() : track_json();
+        const auto type = detail ? "pay_type" : "PayType";
+        const auto privilege = detail ? "128privilege" : "Privilege";
+        doc[type] = 3; doc[privilege] = 10;
+        auto value = kg::parsing::track(doc, detail);
+        CHECK(value.pay.pay_play == 1); CHECK(value.pay.pay_down == 1); CHECK(value.pay.pay_month == 1);
+        doc[type] = 2;
+        value = kg::parsing::track(doc, detail);
+        CHECK(value.pay.pay_play == 1); CHECK(value.pay.pay_down == 1); CHECK(value.pay.pay_month == 0);
+        doc[type] = 3; doc[privilege] = 8;
+        value = kg::parsing::track(doc, detail);
+        CHECK_FALSE(value.pay.pay_play); CHECK(value.pay.pay_down == 1); CHECK(value.pay.pay_month == 1);
+        doc[type] = 0; doc["HQPrivilege"] = 10;
+        value = kg::parsing::track(doc, detail);
+        CHECK(value.pay.pay_play == 0); CHECK(value.pay.pay_down == 0); CHECK(value.pay.pay_month == 0);
+        doc[type] = 99;
+        value = kg::parsing::track(doc, detail);
+        CHECK_FALSE(value.pay.pay_play); CHECK_FALSE(value.pay.pay_down); CHECK_FALSE(value.pay.pay_month);
+    }
 }
 TEST_CASE("Kugou search preserves identity and advances the upstream window",
           "[providers][kugou]") {

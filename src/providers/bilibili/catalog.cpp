@@ -44,6 +44,8 @@ VideoPart view(const Client& client, const ports::ProviderContext& context,
             if (rights.contains(key) && integer(rights.at(key), 0, 1) == 1)
                 paid_preview = true;
     }
+    if (paid_preview) track.pay.pay_play = 1;
+    // A paid UGC video is not necessarily covered by the platform VIP subscription.
     return {std::move(track), id.bvid, cid, paid_preview};
 }
 

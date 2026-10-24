@@ -61,6 +61,9 @@ public:
     record_verification(const std::string& owner_id, const std::string& id,
                         std::uint64_t expected_version,
                         const application::ports::VerificationEvidence& evidence) override;
+    domain::Result<application::ports::CredentialRecord> begin_verification(const std::string& owner_id,
+        const std::string& id, std::uint64_t expected_version) override;
+    domain::Result<void> recover_verifications() override;
     domain::Result<std::vector<std::string>> referenced_secret_refs() override;
     domain::Result<application::ports::CredentialRecord> begin_refresh(const std::string& owner,
         const std::string& id, std::uint64_t version) override;
@@ -73,11 +76,16 @@ public:
         std::uint64_t application_version, std::chrono::system_clock::time_point before, std::uint32_t limit) override;
     domain::Result<application::ports::SecretReplacement> revoke(const std::string& owner_id,
                                                                  const std::string& id) override;
+    domain::Result<application::ports::CredentialRecord> disable(const std::string& owner_id, const std::string& id) override;
+    domain::Result<std::vector<std::string>> pending_secret_deletions(
+        const std::optional<std::string>& owner, const std::optional<std::string>& source) override;
+    domain::Result<void> finish_secret_deletion(const std::string& ref) override;
     domain::Result<application::ports::DefaultSelection>
     get_default(const std::string& owner_id, const std::string& source) override;
     domain::Result<application::ports::DefaultSelection>
     set_default(const std::string& owner_id, const std::string& source,
-                const std::string& credential_id) override;
+                const std::string& credential_id, std::optional<std::uint64_t> expected_version = {},
+                const std::optional<std::string>& new_secret_ref = {}) override;
     domain::Result<application::ports::DefaultSelection>
     clear_default(const std::string& owner_id, const std::string& source) override;
 

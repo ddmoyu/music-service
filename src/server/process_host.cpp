@@ -105,6 +105,7 @@ struct ProcessHost::State {
     std::shared_ptr<application::accounts::CredentialService> credentials;
     std::shared_ptr<application::accounts::OAuthService> oauth;
     std::shared_ptr<runtime::BoundedExecutor> oauth_executor;
+    std::shared_ptr<runtime::BoundedExecutor> verification_executor;
     std::vector<DestinationState> destinations;
     std::shared_ptr<infrastructure::filesystem::LocalDestinationFiles> files;
     std::shared_ptr<const providers::ProviderRegistry> registry;
@@ -178,7 +179,7 @@ struct ProcessHost::State {
             s.media_responses = media->active();
         }
         if (events_hub) s.event_subscriptions = events_hub->subscriptions();
-        for (const auto& pool : {catalog_executor, download_executor, processing_executor, media_upstream_executor, oauth_executor}) {
+        for (const auto& pool : {catalog_executor, download_executor, processing_executor, media_upstream_executor, oauth_executor, verification_executor}) {
             if (!pool) continue;
             const auto stats = pool->stats();
             s.worker_pools.push_back({pool->name(), stats.queued, stats.running, stats.completed, stats.failed, stats.rejected});
@@ -254,6 +255,11 @@ struct ProcessHost::State {
                 control.reset();
             }
             log.info("shutdown.listeners_stopped");
+            if (credentials) credentials->stop_verifications();
+            if (verification_executor) {
+                verification_executor->stop_accepting(); verification_executor->request_stop(); verification_executor->join();
+            }
+            verification_executor.reset();
             if (oauth) oauth->stop();
             if (oauth_executor) {
                 oauth_executor->stop_accepting(); oauth_executor->request_stop(); oauth_executor->join();
@@ -515,8 +521,11 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
         return fail(std::move(registry).error(), "providers");
     }
     state->registry = std::move(registry).value();
+    state->verification_executor = std::make_shared<runtime::BoundedExecutor>("credential_verification", 2, 32);
     state->credentials = std::make_shared<application::accounts::CredentialService>(
-        inst.credentials, state->secrets, state->registry, clock);
+        inst.credentials, state->secrets, state->registry, clock, state->verification_executor);
+    auto recovered_verifications = inst.credentials->recover_verifications();
+    if (!recovered_verifications) return fail(recovered_verifications.error(), "credential_verification_recovery");
     // Before any request can create a credential: reclaim secrets no row references.
     auto recovered_oauth = inst.credentials->recover_refreshes();
     if (!recovered_oauth) return fail(recovered_oauth.error(), "oauth_recovery");

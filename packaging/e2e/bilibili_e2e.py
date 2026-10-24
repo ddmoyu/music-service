@@ -34,8 +34,8 @@ def run(service, args, report):
 
     invalid = api.json("POST", "/api/v1/credentials", {
         "source": "bilibili", "kind": "cookie", "auth_profile": "web_cookie", "secret": {"cookie": "SESSDATA=synthetic-invalid"}, "label": "Bilibili invalid acceptance"}, expect=(201,))[2]
-    verified = api.json("POST", "/api/v1/credentials/" + invalid["credential_id"] + "/verify", {})[2]
-    check(verified["result"] == "invalid", "invalid session is rejected")
+    verified = api.wait_credential(invalid["credential_id"])
+    check(verified["login_status"] == "invalid", "invalid session is rejected")
     report["invalid_cookie"] = "invalid"
 
     # 先验证无凭证搜索，用户 Cookie 为独立的可选验收。
@@ -60,8 +60,8 @@ def run(service, args, report):
         credential = api.json("POST", "/api/v1/credentials", {
             "source": "bilibili", "kind": "cookie", "auth_profile": "web_cookie", "secret": {"cookie": args.cookie_file.read_text(encoding="utf-8").strip()},
             "label": "Bilibili acceptance"}, expect=(201,))[2]
-        verified = api.json("POST", "/api/v1/credentials/" + credential["credential_id"] + "/verify", {})[2]
-        check(verified["result"] == "valid", "provided session verifies")
+        verified = api.wait_credential(credential["credential_id"])
+        check(verified["login_status"] == "valid", "provided session verifies")
         api.json("PUT", "/api/v1/credential-defaults/bilibili", {"credential_id": credential["credential_id"]})
         report["valid_cookie"] = "passed"
     else:

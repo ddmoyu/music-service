@@ -1,4 +1,5 @@
 #include "providers/qq/bundle.hpp"
+#include "providers/qq/membership.hpp"
 #include "providers/qq/parsing.hpp"
 #include "application/transport/url.hpp"
 #include <array>
@@ -154,7 +155,16 @@ public:
             }
             auto info = data.at("info");
             result.status = number(info, "retCode") == 0 && !text(info, "nick").empty() ? ports::VerificationStatus::valid : ports::VerificationStatus::invalid;
-            // 不把账号昵称或 UID 暴露为展示字段；成功登录也不推断会员和歌曲购买权。
+            if (result.status == ports::VerificationStatus::valid) {
+                try {
+                    result.membership = parse_membership(client_.rpc("verify_credentials", "VipLogin.VipLoginInter",
+                        "vip_login_base", Json::object(), c), std::chrono::system_clock::now());
+                } catch (const Error& error) {
+                    result.membership = membership::unavailable(std::string{domain::to_string(error.code)});
+                } catch (const std::exception&) {
+                    result.membership = membership::unavailable("UPSTREAM_RESPONSE_INVALID");
+                }
+            }
             return result;
         });
     }

@@ -3,11 +3,11 @@
 每个平台独立成包，包含能力描述、协议构造、解析、配置与契约样本。新增平台通过构建注册项接入，不修改公共 source 枚举、业务路由或任务状态机。
 
 - registry：ProviderRegistry 与生成的内置清单。CMake 缓存变量 `MUSIC_SERVICE_PROVIDERS` 选择编入的平台，默认清单见 [CMakeLists.txt](CMakeLists.txt)；每项需要 `<source>/CMakeLists.txt` 定义 `music_service_provider_<source>`，并在 `providers/<source>/bundle.hpp` 提供 `make_bundle()`。清单由 `registry/builtin_bundles.cpp.in` 生成，直接调用这些函数，不依赖静态构造器注册。
-- kuwo：匿名单曲及集合能力、歌手搜索／详情／作品分页、官方专辑封面、歌词，以及 standard／high／lossless 音源；详情直连 JSON API，见 [kuwo/README.md](kuwo/README.md)。
+- kuwo：匿名单曲及集合目录、歌手搜索／详情／作品分页、官方专辑封面、歌词，以及支持可选 Cookie 的 standard／high／lossless／hires 音源；详情直连 JSON API，见 [kuwo/README.md](kuwo/README.md)。
 - fivesing：第二个平台，匿名单曲搜索、详情、链接、歌词与 standard／high 音源，作品类型＋编号复合身份、登记的明文 API 端点、同一文件的主备地址（T22），见 [fivesing/README.md](fivesing/README.md)。
 - netease：网易云目录、授权、音源与歌词，见 [netease/README.md](netease/README.md)。
 - qq：QQ 音乐推荐、榜单、搜索、目录与原生音源，见 [qq/README.md](qq/README.md)。
-- kugou：匿名推荐、分类、榜单、四类搜索、歌手资料与歌曲／专辑分页、集合、链接、LRC、专辑封面和按官方 hash 映射的音源，见 [kugou/README.md](kugou/README.md)。
+- kugou：匿名推荐、分类、榜单、四类搜索、歌手资料与作品目录、LRC、封面和按官方 hash 映射的音源；另支持可选 Cookie 的官网 standard MP3 取流，见 [kugou/README.md](kugou/README.md)。
 - qianqian：千千匿名单曲／专辑搜索、集合、分类及热门歌单、链接、歌词和三档音源，见 [qianqian/README.md](qianqian/README.md)。
 - jamendo：匿名三类搜索、官方精选歌单搜索与推荐、原生歌曲分类、官方歌曲榜、集合详情与分页、歌词及标准 MP3 下载，见 [jamendo/README.md](jamendo/README.md)。
 - bilibili：视频搜索、分 P 详情／链接、固定 cid 的独立 AAC 音轨与 Cookie 校验，见 [bilibili/README.md](bilibili/README.md)。
@@ -15,6 +15,10 @@
 - 其他平台：在实际接入时创建，不预建空平台包，不调用外部 helper。
 
 平台需要凭证校验时，在自身 auth 目录实现可选 ICredentialVerifier，并通过 bundle 的 auth_profiles 绑定。平台协议只返回校验或授权结果；账号选择、凭证存储与刷新协调属于 application/accounts。所有上游请求共用入场端口，不建立平台私有线程池或 semaphore。
+
+Cookie 保存或替换后，application/accounts 使用独立有界执行器自动校验。网易云、QQ、酷我与 Bilibili 返回独立的 MembershipInfo（类型、平台名称、到期时间）；未知保持 unknown／null，会员不复用 OAuth scopes。查询、取消及展示规则见 [API 契约](../../docs/design/cpp20-refactor/backend-service/api-contract.md#cookie-自动校验与会员)，验证范围见 [验收记录](../../docs/research/credential-membership-acceptance.md)。
+
+2026-10-24 Cookie 取流核查及补齐：网易云、QQ、酷我、咪咕、Bilibili 和酷狗的 `resolve_audio` 已声明 optional `web_cookie` 并在解析请求中使用秘密 Cookie；播放与下载共用该能力。咪咕和酷狗没有校验工厂，登录／会员未知不影响取流代码携带 Cookie。千千、5sing、Jamendo 尚未注册用户 Cookie profile，当前取流为匿名；不能把能返回 CREDENTIALS_REQUIRED 视为已支持账号接入。CDN 不自动继承平台 Cookie。酷狗账号取流当前限 standard MP3，所测 VIP 歌只返回试听；完整接入矩阵及前端发现规则见 [API 文档](../../docs/design/cpp20-refactor/backend-service/api-contract.md#各平台-cookie-取流接入状态)。此项源码核查不等同于九个平台都完成真实账号联调。
 
 ## OAuth 登录、回调与自动刷新（0.1.25）
 
@@ -36,9 +40,9 @@
 
 OAuth 使用独立的 2 个工作线程、32 项队列，满额返回 SERVICE_BUSY。授权码交换包含排队在内最多 30 秒，并受会话到期限制；控制请求不等待上游。自动刷新扫描每 5 秒最多选取每应用 2 个到期凭证，刷新时机为到期前 min(60 秒, 有效期的 1/10)。每次刷新预算 30 秒，SQLite 条件领取保证同一版本仅一次在途。刷新期间更新或撤销凭证，旧结果被丢弃；正在刷新时只改标签也会结束旧刷新并要求重新授权。失败保留 reauthorization_required，未知结果与进程重启不会重放旧 token。
 
-自动刷新仅作用于本流程产生并绑定应用 ID／version 的凭证；手工替换 secret 会清除应用绑定，之后须重新登录才能恢复自动刷新。改用其他应用身份时递增 app_profiles.version 并重新授权。获取租约不会同步等待刷新；短期令牌或上游缓慢可能使已过期凭证暂时不可用，查询凭证可看到 refresh_state。登录成功不会自动改选默认账号。
+自动刷新仅作用于本流程产生并绑定应用 ID／version 的已启用凭证；手工替换 secret 会清除应用绑定，之后须重新登录才能恢复自动刷新。改用其他应用身份时递增 app_profiles.version 并重新授权。获取租约不会同步等待刷新；短期令牌或上游缓慢可能使已过期凭证暂时不可用，查询凭证可看到 refresh_state。登录成功后新账号自动启用和选中，同时停用同平台原账号并清理旧秘密。
 
-数据库仅支持当前 schema 4，不执行历史迁移；非当前开发数据需使用新的 data_dir，备份恢复也只接受当前结构。应用 token 缓存、application 模式租约及真实平台 OAuth 协议仍属于 T24 后续范围。配置和 API 示例见[配置说明](../../config/README.md#oauth-应用配置与秘密)及 [API 契约](../../docs/design/cpp20-refactor/backend-service/api-contract.md#oauth-登录会话)。
+数据库仅支持当前 schema 7，不执行历史迁移；非当前开发数据需使用新的 data_dir，备份恢复也只接受当前结构。应用 token 缓存、application 模式租约及真实平台 OAuth 协议仍属于 T24 后续范围。配置和 API 示例见[配置说明](../../config/README.md#oauth-应用配置与秘密)及 [API 契约](../../docs/design/cpp20-refactor/backend-service/api-contract.md#oauth-登录会话)。
 
 2026-10-24 验证：Windows MSVC x64 Debug／Release 构建通过；全量 CTest 607 项中 601 通过、6 项在线／样本门控跳过、0 失败。最终 OAuth／迁移专项 14 项、947 个断言通过，覆盖浏览器绑定、跨应用／跨账号隔离、PKCE 标准向量、拒绝／异常／取消／到期、参数重复、队列过载、日志脱敏、刷新轮换、存储失败及跨连接重启恢复。Release 实测 Jamendo 匿名歌曲 49292 的详情与 MP3 下载成功，产物 310,500 字节。证据为 out/oauth-flow-debug-build.log、out/oauth-flow-release-build.log、out/oauth-flow-ctest.log、out/oauth-flow-targeted.log、out/oauth-release-smoke-report.json；不包含真实平台 OAuth 账号授权验收。
 

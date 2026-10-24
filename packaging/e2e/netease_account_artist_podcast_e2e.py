@@ -40,8 +40,8 @@ def run(service, cookie_file, report):
     error("me/playlists", "CREDENTIALS_REQUIRED")
     credential = api.json("POST", "/api/v1/credentials", {"source": "netease",
         "kind": "cookie", "auth_profile": "web_cookie", "secret": {"cookie": cookie_file.read_text(encoding="utf-8").strip()}, "label": "D acceptance"}, expect=(201,))[2]["credential_id"]
-    verified = api.json("POST", f"/api/v1/credentials/{credential}/verify", {})[2]
-    check(verified["result"] == "valid", "provided account verifies")
+    verified = api.wait_credential(credential)
+    check(verified["login_status"] == "valid", "provided account verifies")
     api.json("PUT", "/api/v1/credential-defaults/netease", {"credential_id": credential})
     first = get("me/playlists", limit=2)
     check(bool(first["items"]), "personal playlist exists")

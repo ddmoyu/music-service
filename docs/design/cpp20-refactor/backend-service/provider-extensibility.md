@@ -74,13 +74,15 @@
 
 CredentialService 是 application/accounts 的用例协调者。它选择 [AccountBinding 与 AuthIdentityKey](data-models.md#账号绑定与授权身份)、租用秘密、合并刷新并提交结果；平台包只实现授权协议，infrastructure 提供通用网络、SecretStore 和持久化。公共服务不按 source 分支选择 token 端点或解析平台字段。
 
+账号启用、停用、同平台互斥选择及秘密清理由 CredentialService 和通用仓储统一处理，不由各平台维护独立默认账号。停用账号不再提供凭证快照，重新启用必须有新秘密；平台验证结果只能按被检查的账号版本提交。平台声明 Cookie profile 后可使用同一组[账号接口](api-contract.md#11-凭证管理)，未知登录或会员证据返回 unknown，不自行推断有效期。
+
 ### 授权能力注册与调用
 
 auth_profiles 以 source + auth_profile + kind 为键，注册输入 schema、所需 app_profile、版本及下列独立可选工厂；不是要求所有平台实现的统一登录基类。
 
 | 端口 | 输入与输出 | 责任 |
 | --- | --- | --- |
-| `ICredentialVerifier` | 授权快照、操作上下文 → valid／invalid／unknown、账号／scope 证据 | 有界校验，不更新秘密或任务 |
+| `ICredentialVerifier` | 授权快照、操作上下文 → valid／invalid／unknown、账号／scope 与独立会员证据 | 有界校验；会员到期时刻／日期互斥，不更新秘密或任务 |
 | `ICredentialRefresher` | 固定账号的过期或将过期快照、所需应用租约 → 替换秘密、到期时间与 scope 证据 | 平台刷新协议；无通用递归 CredentialService 调用 |
 | `IApplicationTokenProvider` | 应用 profile 快照、scope 请求、操作上下文 → 应用 token 结果 | 仅已实现的应用授权流程；不能代替用户授权 |
 

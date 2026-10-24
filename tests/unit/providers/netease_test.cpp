@@ -36,6 +36,31 @@ namespace parsing = providers::netease::parsing;
 namespace protocol = providers::netease::protocol;
 using domain::ErrorCode;
 
+TEST_CASE("netease song tariffs normalize independently of account privileges", "[netease][pay]") {
+    using Json = nlohmann::json;
+    for (const int fee : {0, 1, 4, 8, 99}) {
+        CAPTURE(fee);
+        Json song{{"id", 42}, {"name", "test"}, {"fee", fee},
+                  {"privilege", {{"payed", 1}, {"pl", 0}, {"dl", 0}}}};
+        const domain::TrackPay expected = fee == 0 ? domain::TrackPay{0, 0, 0} :
+            fee == 1 ? domain::TrackPay{1, 1, 1} : fee == 4 ? domain::TrackPay{1, 1, 0} :
+            fee == 8 ? domain::TrackPay{0, 1, 1} : domain::TrackPay{};
+        auto detail = unwrap(parsing::parse_detail(Json{{"code", 200}, {"songs", Json::array({song})}}.dump(), "42"));
+        auto list = unwrap(parsing::parse_tracks(Json{{"code", 200}, {"songs", Json::array({song})}}.dump()));
+        auto search = unwrap(parsing::parse_search(Json{{"code", 200}, {"result", {{"songCount", 1}, {"songs", Json::array({song})}}}}.dump()));
+        for (const auto& actual : {detail.pay, list.front().pay, search.tracks.front().pay}) {
+            CHECK(actual.pay_play == expected.pay_play);
+            CHECK(actual.pay_down == expected.pay_down);
+            CHECK(actual.pay_month == expected.pay_month);
+        }
+    }
+    for (const auto& fee : {Json(nullptr), Json("1"), Json(-1)}) {
+        auto result = parsing::parse_detail(Json{{"code", 200}, {"songs", Json::array({{{"id", 42}, {"name", "test"}, {"fee", fee}}})}}.dump(), "42");
+        if (fee.is_null()) { REQUIRE(result); CHECK_FALSE(result->pay.pay_play); }
+        else { REQUIRE_FALSE(result); CHECK(result.error().code == ErrorCode::upstream_failed); }
+    }
+}
+
 namespace {
 
 constexpr std::string_view fixed_key = "0123456789abcdef";
@@ -654,11 +679,16 @@ TEST_CASE("netease cookie verification", "[providers][netease]") {
 
     const ports::SecretBytes cookie{std::string_view{"MUSIC_U=session; __csrf=tok"}};
     upstream->respond(200, fixture("account-user-synthetic.json"));
+    upstream->respond(200, R"({"code":200,"data":{"redplus":{"expireTime":0},"associator":{"expireTime":4102444800000},"musicPackage":{"expireTime":4102444800000}}})");
     const auto valid = unwrap(verifier->verify({identity, cookie}, operation));
     CHECK(valid.status == ports::VerificationStatus::valid);
     CHECK(valid.account_hint == "测试用户");
-    CHECK(valid.scopes == std::vector<std::string>{"vip"});
-    REQUIRE(upstream->calls.size() == 1);
+    CHECK(valid.scopes.empty());
+    CHECK(valid.membership.type == "vip");
+    CHECK(valid.membership.name == "黑胶VIP");
+    REQUIRE(upstream->calls.size() == 2);
+    CHECK_FALSE(upstream->calls[1].request.allow_redirects);
+    CHECK(upstream->calls[1].request.url.find("music-vip-membership/front/vip/info") != std::string::npos);
     CHECK(upstream->calls[0].request.operation == "verify_credentials");
     CHECK(upstream->calls[0].request.secret_headers.at(0).value == "MUSIC_U=session; __csrf=tok");
 
@@ -775,7 +805,10 @@ TEST_CASE("netease C entitlement and session failures stay distinct", "[provider
         CHECK(unwrap(verifier->verify({user_identity(), cookie}, anonymous_context().operation)).status == ports::VerificationStatus::invalid);
     }
     upstream->respond(200, R"({"code":200,"account":{"id":123,"vipType":0},"profile":{"vipType":0}})");
+    upstream->respond(503, "");
     auto ordinary = unwrap(verifier->verify({user_identity(), cookie}, anonymous_context().operation));
+    CHECK(ordinary.status == ports::VerificationStatus::valid);
+    CHECK(ordinary.membership.status == "unknown");
     CHECK(ordinary.status == ports::VerificationStatus::valid);
     CHECK(ordinary.scopes.empty());
 }

@@ -90,6 +90,21 @@ TEST_CASE("Qianqian signing sorts raw UTF-8 before URL encoding", "[providers][q
     CHECK_FALSE(qqn::signed_query(params, 0).empty());
 }
 
+TEST_CASE("Qianqian pay metadata does not turn account purchases into free songs", "[providers][qianqian][pay]") {
+    auto doc = song(); doc["isPaid"] = 1; doc["pay_model"] = 3;
+    auto value = qqn::parsing::track(doc);
+    CHECK(value.pay.pay_play == 1); CHECK(value.pay.pay_month == 1); CHECK_FALSE(value.pay.pay_down);
+    doc["isVip"] = 0; doc["pay_model"] = 2;
+    value = qqn::parsing::track(doc);
+    CHECK(value.pay.pay_play == 0); CHECK(value.pay.pay_month == 0); CHECK_FALSE(value.pay.pay_down);
+    doc["pay_model"] = 99; doc["isVip"] = 2;
+    value = qqn::parsing::track(doc);
+    CHECK_FALSE(value.pay.pay_play); CHECK_FALSE(value.pay.pay_month);
+    doc.erase("isVip"); doc.erase("pay_model");
+    value = qqn::parsing::track(doc);
+    CHECK_FALSE(value.pay.pay_play); CHECK_FALSE(value.pay.pay_month);
+}
+
 TEST_CASE("Qianqian declares only implemented anonymous capabilities", "[providers][qianqian]") {
     Fixture f;
     CHECK(f.registry->instantiated() == 0);

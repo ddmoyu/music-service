@@ -1,6 +1,7 @@
 #pragma once
 #include "application/ports/providers/bundle.hpp"
 #include <nlohmann/json.hpp>
+#include <map>
 #include <stdexcept>
 
 namespace music_service::providers::kugou {
@@ -41,12 +42,14 @@ void same_revision(const std::optional<std::string>& cursor, std::string_view re
 std::vector<ports::PlaintextEndpoint> plaintext_endpoints();
 Json parse_response(std::string_view body);
 void api_success(const Json& doc);
+std::string signed_web_url(std::string_view endpoint,
+                           std::map<std::string, std::string> params);
 
 class Client {
   public:
     explicit Client(const ports::ProviderSetup& setup) : setup_(setup) {}
     Json get(std::string_view operation, std::string url,
-             const ports::ProviderContext& context) const;
+             const ports::ProviderContext& context, bool cookie = false) const;
     Json api(std::string_view operation, std::string path,
              const ports::ProviderContext& context) const;
 

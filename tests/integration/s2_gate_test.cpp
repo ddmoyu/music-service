@@ -411,7 +411,7 @@ TEST_CASE("T28: declared capabilities match the routes; a failing source leaves 
 
     const auto providers = body(api.Get("/api/v1/providers"))["data"]["items"];
     REQUIRE(providers.size() == 2);
-    std::set<std::string> covered{"parse_links", "resolve_audio"}; // not routed per source
+    std::set<std::string> covered{"parse_links", "resolve_audio", "verify_credentials"}; // not routed per source
     for (const auto& route : route_cases()) {
         covered.insert(route.key);
     }
@@ -439,6 +439,24 @@ TEST_CASE("T28: declared capabilities match the routes; a failing source leaves 
                                            (source == "kuwo" ? std::string{"78932517"} : work) + R"("}})",
                                        "application/json");
         CHECK(resolved->status == (declared.count("resolve_audio") == 1 ? 200 : 422));
+        if (declared.count("verify_credentials") == 1) {
+            const auto created = api.Post("/api/v1/credentials", json{{"source", source}, {"kind", "cookie"},
+                {"auth_profile", "web_cookie"}, {"secret", {{"cookie", "missing_session=synthetic"}}}}.dump(),
+                "application/json");
+            REQUIRE(created);
+            REQUIRE(created->status == 201);
+            const auto descriptor = body(created)["data"];
+            const auto path = "/api/v1/credentials/" + descriptor["credential_id"].get<std::string>();
+            auto checked = body(api.Get(path))["data"];
+            const auto until = std::chrono::steady_clock::now() + 2s;
+            while (checked["verification"]["state"] == "pending" && std::chrono::steady_clock::now() < until) {
+                std::this_thread::sleep_for(5ms);
+                checked = body(api.Get(path))["data"];
+            }
+            CHECK(checked["verification"]["state"] == "complete");
+            CHECK(checked["login_status"] == "invalid");
+            CHECK(checked["membership"]["status"] == "unknown");
+        }
     }
 
     // A05 with the real packages: Kuwo's search fails, 5sing's results still arrive.

@@ -1,6 +1,23 @@
 # 酷我适配器
 
-首个开发平台，source `kuwo`，实现 kuwo-native 0.1.9。能力均为匿名（不登记 Cookie profile，不发送 Cookie）。B 阶段补充 `www.kuwo.cn`／`kuwo.cn` 的 `/playlist_detail/{id}`、`/album_detail/{id}` 链接，返回 playlist／album，沿用现有集合详情与分页；仅接受默认端口，不展开短链。
+Cookie 账号校验已接入 `web_cookie`：以 POST 请求访问 `vip1.kuwo.cn/vip/v2/sysinfo` 核对会话身份，再查询 `/vip/v2/user/vip` 的 VIP、豪华VIP、超级VIP和音乐包到期字段。会话只放在 Cookie 与禁止重定向的表单正文中，查询失败为未知。
+
+首个开发平台，source `kuwo`，实现 kuwo-native 0.1.10。目录能力保持匿名；`resolve_audio` 的凭证要求为 optional，支持 `web_cookie`。播放与下载取流都会携带选定账号的 Cookie；没有可用默认凭证时按统一规则匿名访问。B 阶段补充 `www.kuwo.cn`／`kuwo.cn` 的 `/playlist_detail/{id}`、`/album_detail/{id}` 链接，返回 playlist／album，沿用现有集合详情与分页；仅接受默认端口，不展开短链。
+
+Cookie 使用方式与边界：
+
+- 新建账号并保存 Cookie 后自动启用和选中；同一调用方在酷我最多启用一个账号。通过 `PUT /api/v1/credential-defaults/kuwo` 提交 credential_id 和新 secret 可启用已停用账号，并清除原账号 Cookie；下载显式 credential_id 也必须已启用。`DELETE /api/v1/credential-defaults/kuwo` 全部停用并清除 Cookie。
+- 四种音质均使用本次租用的账号秘密；允许品质降级时仍使用同一账号。已绑定账号的上游失败不会自动改用匿名身份重试。下载在受理时固定账号绑定；切换后原账号已停用，排队任务不能再租用其 Cookie，也不会改用新账号。提交新 Cookie 重新启用原账号后可创建新任务或 retry。
+- Cookie 只放入固定 HTTPS 取流端点 `mobi.kuwo.cn/mobi.s` 的 `secret_headers`，带 Cookie 的请求禁止重定向；不会写入 URL、返回 JSON 或 CDN 下载头。账号身份和凭证版本沿用统一音源、缓存及下载隔离机制。
+- 上游是否实际授予某首歌、某种音质的会员权限，以响应及音频验证为准。部分 VIP 歌曲匿名也能取得相同资源，不能仅凭携带 Cookie 后下载成功就证明会员专属权益生效；收费标签也不替代试听和品质校验。
+
+2026-10-24 Windows MSVC Debug 实测：本机 Cookie 校验为有效豪华 VIP；林俊杰《江南》（93157）、《美人鱼》（93151）的搜索付费字段均为 `(1,1,1)`。两首分别以匿名和默认 Cookie 完成 standard MP3 整曲解析、播放代理 Range 读取（206、65,536 字节）、完整下载及文件 HTTP 全量读取。文件大小分别为 4,288,455 和 4,065,267 字节；四个下载均未跨身份复用成品，两首的匿名／Cookie 文件 SHA-256 分别一致。该结果不证明 Cookie 带来了额外会员权限；未在本轮实测高品质、无损、Hi-Res、Linux 或 macOS。
+
+可复现验收（只读本机 Cookie，使用独立临时数据目录，报告不包含凭证、账号标识或音源 URL）：
+
+```powershell
+python packaging/e2e/kuwo_cookie_audio_e2e.py --binary out/build/windows-msvc-debug/src/server/music-service.exe --cookie-file .local-secrets/kuwo-cookie.txt --report out/kuwo-cookie-audio-live.json
+```
 
 | 能力 | 端点（全部 HTTPS） | 说明 |
 | --- | --- | --- |

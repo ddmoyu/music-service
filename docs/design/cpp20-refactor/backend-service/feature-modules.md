@@ -33,9 +33,13 @@ ProcessHost 管理 initializing → recovering → ready → draining → stoppe
 
 PrincipalService 识别服务调用方；CredentialService 选择该 principal 对应平台的账号。默认凭证由 SQLite 的 credential_defaults 唯一管理，经 API 原子设置／清除，规则见[账号模型](data-models.md#账号绑定与授权身份)。本机 principal／token 管理由应用用例处理，CLI 只做参数与一次性交付，见[管理命令](configuration-and-deployment.md#本机身份管理命令)。
 
+同一 principal/source 可保留多个账号记录，最多启用一个。新建并提供 Cookie 时自动启用；新建停用记录不接受 secret。启用已有停用账号需提交新 secret，同时停用原账号并清除旧秘密；清除平台选择会全部停用。停用保留描述，撤销永久阻止再次启用，二者均阻止后续获取 Cookie。清理失败显式报错并持久记录待处理引用，重试或启动时继续清理。
+
+Cookie 创建、更新和重新启用后，独立有界执行器自动校验登录、会员类型和到期信息；结果关联账号版本及 verification.id，未知证据保持 unknown。停用取消旧校验并清除旧证据，迟到结果不能恢复状态。前端按 enabled、login_status、membership 分别展示，到期信息保留日期或精确时刻的原有精度，详见[接入指南](../../../account-management.md)。
+
 凭证模型支持 Cookie、OAuth2 和 API key，实际类型按平台声明逐步启用。CredentialService 统一生成稳定 AccountBinding 与带版本的 AuthIdentityKey；缓存、游标和租约使用完整身份键。应用身份与用户身份分开；平台包注册验证／刷新协议，application/accounts 合并刷新并条件提交，不由 Provider 直接改写秘密或数据库；详见[多平台扩展](provider-extensibility.md#6-凭证与账号)。
 
-凭证更新生成新版本，新请求使用新版本，在途请求持有独立旧快照。删除阻止后续租用；已交付给请求的秘密不能立即收回。校验失败只记录状态、时间和原因，不覆盖秘密。存储协调见[内部契约](internal-contracts.md)。
+凭证更新、启用和停用推进账号版本，新请求使用当前可用版本，在途请求持有独立旧快照。停用或撤销阻止后续租用，排队任务不会转用另一账号；已交付给请求的秘密不能立即收回。校验失败只记录状态、时间和原因，不自动删除秘密或关闭 enabled。存储协调见[内部契约](internal-contracts.md)。
 
 ## 3. 平台适配
 

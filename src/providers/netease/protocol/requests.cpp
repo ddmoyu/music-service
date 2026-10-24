@@ -210,6 +210,13 @@ ports::HttpRequest account(const Call& call) {
     return weapi("w/nuser/account/get", json::object(), "verify_credentials", call);
 }
 
+ports::HttpRequest membership_info(const Call& call) {
+    auto request = weapi("music-vip-membership/front/vip/info", {{"userId", ""}}, "verify_credentials", call);
+    request.max_response_bytes = 256 * 1024;
+    request.allow_redirects = false;
+    return request;
+}
+
 void with_cookie(ports::HttpRequest& request, std::string_view cookie) {
     std::string clean;
     each_pair(cookie, [&](std::string_view key, std::string_view value) {

@@ -1,5 +1,6 @@
 #include "providers/netease/capabilities.hpp"
 #include "providers/netease/client.hpp"
+#include "providers/netease/membership.hpp"
 
 #include "providers/netease/parsing/parsers.hpp"
 #include "providers/netease/protocol/requests.hpp"
@@ -329,9 +330,11 @@ public:
         }
         verification.status = ports::VerificationStatus::valid;
         verification.account_hint = account->nickname;
-        if (account->vip_type && *account->vip_type > 0) {
-            verification.scopes.push_back("vip");
-        }
+        try {
+            auto membership_body = client_.body(protocol::membership_info(call_for(cookie)), context, cookie);
+            verification.membership = membership_body ? parse_membership(*membership_body, std::chrono::system_clock::now())
+                : membership::unavailable(std::string{domain::to_string(membership_body.error().code)});
+        } catch (const std::exception&) { verification.membership = membership::unavailable("UPSTREAM_RESPONSE_INVALID"); }
         return verification;
     }
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "domain/result.hpp"
+#include "application/ports/providers/membership.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -36,6 +37,12 @@ struct CredentialRecord {
     std::optional<std::string> oauth_application_id;
     std::uint64_t oauth_application_version{0};
     std::optional<std::chrono::system_clock::time_point> refresh_after{};
+    std::optional<std::string> verification_id{};
+    std::string verification_state{"idle"}; // idle | pending | complete
+    std::optional<std::string> verification_error{};
+    MembershipInfo membership{};
+    bool enabled{true};
+    bool secret_cleanup_pending{false};
 };
 
 struct NewCredential {
@@ -50,6 +57,7 @@ struct NewCredential {
     std::optional<std::string> oauth_application_id{};
     std::uint64_t oauth_application_version{0};
     std::optional<std::chrono::system_clock::time_point> refresh_after{};
+    bool enabled{true};
 };
 
 // What a verification established about the checked version. Absent evidence keeps
@@ -59,6 +67,9 @@ struct VerificationEvidence {
     std::chrono::system_clock::time_point at;
     std::optional<std::chrono::system_clock::time_point> expires_at;
     std::vector<std::string> scopes;
+    MembershipInfo membership{};
+    std::optional<std::string> verification_id{};
+    std::optional<std::string> error_code{};
 };
 
 struct SecretReplacement {
@@ -95,11 +106,16 @@ public:
 
     // Stores a verification result and its evidence for the version that was checked:
     // VERSION_CONFLICT if the credential changed meanwhile, VALIDATION_FAILED if
-    // revoked. valid and invalid also set the status; unknown leaves it. The version
+    // revoked or disabled. valid and invalid also set the status; unknown leaves it. The version
     // does not change.
     virtual domain::Result<CredentialRecord>
     record_verification(const std::string& owner_id, const std::string& id,
                         std::uint64_t expected_version, const VerificationEvidence& evidence) = 0;
+
+    // 同版本已有 pending 时复用其编号；完成、取消和更新后的旧结果不能覆盖新校验。
+    virtual domain::Result<CredentialRecord> begin_verification(const std::string& owner_id,
+        const std::string& id, std::uint64_t expected_version) = 0;
+    virtual domain::Result<void> recover_verifications() = 0;
 
     // Every secret_ref a credential still points to, for reclaiming orphaned secrets.
     virtual domain::Result<std::vector<std::string>> referenced_secret_refs() = 0;
@@ -120,14 +136,24 @@ public:
     // call on a revoked credential succeeds without further changes.
     virtual domain::Result<SecretReplacement> revoke(const std::string& owner_id,
                                                      const std::string& id) = 0;
+    virtual domain::Result<CredentialRecord> disable(const std::string& owner_id, const std::string& id) = 0;
+    // 秘密移除与 SQLite 不能共用事务，先持久记录待删除引用，成功移除文件后再确认。
+    virtual domain::Result<std::vector<std::string>> pending_secret_deletions(
+        const std::optional<std::string>& owner, const std::optional<std::string>& source) = 0;
+    virtual domain::Result<void> finish_secret_deletion(const std::string& ref) = 0;
 
     virtual domain::Result<DefaultSelection> get_default(const std::string& owner_id,
                                                          const std::string& source) = 0;
     // The credential must belong to the owner (else NOT_FOUND), match the source and
-    // be neither revoked nor invalid (else VALIDATION_FAILED). Setting the same value keeps the version.
+    // be enabled and usable unless a fresh secret is supplied. Revocation is final.
+    // In one transaction, disable the previous account, queue its secret deletion,
+    // activate this account and update the selection. Same selection/no new secret is a no-op.
     virtual domain::Result<DefaultSelection> set_default(const std::string& owner_id,
                                                          const std::string& source,
-                                                         const std::string& credential_id) = 0;
+                                                         const std::string& credential_id,
+                                                         std::optional<std::uint64_t> expected_version = {},
+                                                         const std::optional<std::string>& new_secret_ref = {}) = 0;
+    // Disables the selected account and queues secret deletion in the same transaction.
     // Clearing an empty selection keeps its version.
     virtual domain::Result<DefaultSelection> clear_default(const std::string& owner_id,
                                                            const std::string& source) = 0;

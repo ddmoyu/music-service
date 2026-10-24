@@ -27,6 +27,13 @@ struct VersionInfo {
     std::vector<std::string> evidence;
 };
 
+// Normalized payment metadata: 0=no, 1=yes, empty=unknown. Not account permissions.
+struct TrackPay {
+    std::optional<std::uint32_t> pay_play;
+    std::optional<std::uint32_t> pay_down;
+    std::optional<std::uint32_t> pay_month;
+};
+
 // Platform track metadata. Unknown values stay empty; they are never guessed.
 struct Track {
     TrackRef ref;
@@ -38,6 +45,7 @@ struct Track {
     std::optional<std::string> artwork{};
     std::optional<std::uint32_t> track_number{};
     std::optional<std::uint32_t> track_total{};
+    TrackPay pay{};
 };
 
 // One source's page. total and has_more may be unknown.

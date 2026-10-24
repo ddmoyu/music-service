@@ -57,6 +57,295 @@ std::ptrdiff_t index_of(const std::vector<std::string>& names, const std::string
 
 } // namespace
 
+TEST_CASE("HTTP accounts support exclusive activation disable all and restart without cookies", "[server][accounts][activation]") {
+    Deployment d{"account-activation-http"};
+    REQUIRE(d.run({"init"}).code == server::exit_ok);
+    const auto token = d.read(d.bootstrap());
+    const auto secret_count = [&] {
+        std::size_t count = 0;
+        for (const auto& entry : fs::directory_iterator(d.dir / "data" / "secrets" / "credentials"))
+            if (entry.path().extension() == ".secret") ++count;
+        return count;
+    };
+    std::string first_id, second_id;
+    {
+        RunningService service{d, std::make_shared<infrastructure::observability::MemorySink>()};
+        auto client = service.client(token);
+        auto anonymous = service.client();
+        const auto create = [&](bool enabled) {
+            json value{{"source", "aud"}, {"kind", "cookie"}, {"auth_profile", "web_cookie"}, {"enabled", enabled}};
+            if (enabled) value["secret"] = {{"cookie", "synthetic-account-cookie"}};
+            const auto result = client.Post("/api/v1/credentials", value.dump(), "application/json");
+            REQUIRE(result); REQUIRE(result->status == 201);
+            CHECK(result->body.find("synthetic-account-cookie") == std::string::npos);
+            CHECK_FALSE(body(result)["data"]["secret_cleanup_pending"].get<bool>());
+            return body(result)["data"]["credential_id"].get<std::string>();
+        };
+        first_id = create(true);
+        second_id = create(false);
+        const auto first_path = "/api/v1/credentials/" + first_id;
+        const auto second_path = "/api/v1/credentials/" + second_id;
+        CHECK(body(client.Get("/api/v1/credential-defaults/aud"))["data"]["credential_id"] == first_id);
+        CHECK(secret_count() == 1);
+        CHECK(client.Put("/api/v1/credential-defaults/aud", json{{"credential_id", second_id}}.dump(), "application/json")->status == 422);
+        CHECK(anonymous.Post(first_path + "/disable", "{}", "application/json")->status == 401);
+        CHECK(client.Post(first_path + "/disable", R"({"extra":true})", "application/json")->status == 400);
+        for (const auto* invalid : {R"({"source":"aud","kind":"cookie","auth_profile":"web_cookie","enabled":"false"})",
+                                   R"({"source":"aud","kind":"cookie","auth_profile":"web_cookie","enabled":false,"secret":{"cookie":"x"}})"})
+            CHECK(client.Post("/api/v1/credentials", invalid, "application/json")->status == 400);
+        const auto activate = client.Put("/api/v1/credential-defaults/aud",
+            json{{"credential_id", second_id}, {"secret", {{"cookie", "synthetic-second-cookie"}}}}.dump(), "application/json");
+        REQUIRE(activate->status == 200);
+        CHECK(activate->body.find("synthetic-second-cookie") == std::string::npos);
+        CHECK(body(activate)["data"]["credential_id"] == second_id);
+        CHECK_FALSE(body(client.Get(first_path))["data"]["enabled"].get<bool>());
+        CHECK(body(client.Get(second_path))["data"]["enabled"] == true);
+        CHECK(secret_count() == 1);
+        CHECK(client.Post(first_path + "/verify", "{}", "application/json")->status == 400);
+        CHECK(client.Put(first_path, R"({"secret":{"cookie":"x"}})", "application/json")->status == 400);
+        const auto stopped = client.Post(second_path + "/disable", "{}", "application/json");
+        REQUIRE(stopped->status == 200);
+        const auto stopped_record = body(stopped)["data"];
+        CHECK(stopped_record["enabled"] == false);
+        CHECK(stopped_record["login_status"] == "unknown");
+        CHECK(stopped_record["membership"]["status"] == "unknown");
+        CHECK(stopped_record["secret_cleanup_pending"] == false);
+        CHECK(body(client.Post(second_path + "/disable", "", "application/json"))["data"]["version"] == stopped_record["version"]);
+        CHECK(secret_count() == 0);
+        CHECK(body(client.Get("/api/v1/credential-defaults/aud"))["data"]["credential_id"].is_null());
+        CHECK(client.Put("/api/v1/credential-defaults/aud",
+            json{{"credential_id", first_id}, {"secret", {{"cookie", "new-first-cookie"}}}}.dump(), "application/json")->status == 200);
+        CHECK(body(client.Delete("/api/v1/credential-defaults/aud"))["data"]["credential_id"].is_null());
+        CHECK(secret_count() == 0);
+        CHECK(service.stop().code == server::exit_ok);
+    }
+    RunningService restarted{d, std::make_shared<infrastructure::observability::MemorySink>()};
+    auto client = restarted.client(token);
+    const auto rows = body(client.Get("/api/v1/credentials?source=aud"))["data"]["items"];
+    REQUIRE(rows.size() == 2);
+    for (const auto& row : rows) {
+        CHECK(row["enabled"] == false);
+        CHECK(row["secret_cleanup_pending"] == false);
+    }
+    CHECK(secret_count() == 0);
+    CHECK(body(client.Get("/api/v1/credential-defaults/aud"))["data"]["credential_id"].is_null());
+    CHECK(client.Put("/api/v1/credential-defaults/aud", json{{"credential_id", first_id}}.dump(), "application/json")->status == 422);
+    CHECK(restarted.stop().code == server::exit_ok);
+}
+
+TEST_CASE("membership date precision survives HTTP listing restart and secret replacement", "[server][membership][accounts]") {
+    struct DateVerifier final : ports::ICredentialVerifier {
+        domain::Result<ports::CredentialVerification> verify(const ports::CredentialSnapshot& snapshot,
+            const ports::OperationContext&) override {
+            ports::CredentialVerification result;
+            result.status = ports::VerificationStatus::valid;
+            if (snapshot.secret.reveal() == "dated") {
+                result.membership = {"active", "vip", "豪华绿钻", {}, {}, {}, "2100-01-01"};
+            } else if (snapshot.secret.reveal() == "precise") {
+                result.membership = {"active", "vip", "测试会员",
+                    std::chrono::sys_days{std::chrono::year{2100}/1/1}, {}, {}};
+            }
+            return result;
+        }
+    };
+    auto bundles = [] {
+        auto bundle = mock_audio("aud");
+        bundle.auth_profiles[0].verifier = [](const ports::ProviderSetup&) -> domain::Result<std::shared_ptr<ports::ICredentialVerifier>> {
+            return std::shared_ptr<ports::ICredentialVerifier>{std::make_shared<DateVerifier>()};
+        };
+        return std::vector<ports::ProviderBundle>{std::move(bundle), mock_catalog("cat")};
+    };
+    auto wait = [](httplib::Client& client, const std::string& path) {
+        auto record = body(client.Get(path))["data"];
+        const auto deadline = std::chrono::steady_clock::now() + 2s;
+        while (record["verification"]["state"] == "pending" && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(5ms);
+            record = body(client.Get(path))["data"];
+        }
+        REQUIRE(record["verification"]["state"] == "complete");
+        return record;
+    };
+    auto check_date = [](const json& record) {
+        CHECK(record["membership"]["expires_on"] == "2100-01-01");
+        CHECK(record["membership"]["expiry_precision"] == "date");
+        CHECK(record["membership"]["expires_at"].is_null());
+        CHECK(record["expires_at"].is_null()); // 凭证本身的有效期仍独立。
+    };
+    Deployment deployment{"membership-date-http"};
+    REQUIRE(deployment.run({"init"}).code == server::exit_ok);
+    const auto token = deployment.read(deployment.bootstrap());
+    std::string path;
+    {
+        RunningService service{deployment, std::make_shared<infrastructure::observability::MemorySink>(), bundles()};
+        auto client = service.client(token);
+        auto created = client.Post("/api/v1/credentials",
+            R"({"source":"aud","kind":"cookie","auth_profile":"web_cookie","secret":{"cookie":"dated"}})", "application/json");
+        REQUIRE(created); REQUIRE(created->status == 201);
+        const auto pending = body(created)["data"];
+        CHECK(pending["membership"]["expires_on"].is_null());
+        CHECK(pending["membership"]["expiry_precision"] == "unknown");
+        path = "/api/v1/credentials/" + pending["credential_id"].get<std::string>();
+        check_date(wait(client, path));
+        check_date(body(client.Get("/api/v1/credentials"))["data"]["items"][0]);
+        auto renamed = client.Put(path, R"({"label":"保留会员日期"})", "application/json");
+        REQUIRE(renamed->status == 200);
+        check_date(body(renamed)["data"]);
+        CHECK(service.stop().code == server::exit_ok);
+    }
+    RunningService restarted{deployment, std::make_shared<infrastructure::observability::MemorySink>(), bundles()};
+    auto client = restarted.client(token);
+    check_date(body(client.Get(path))["data"]);
+    for (const std::string secret : {"precise", "unknown", "dated"}) {
+        auto replaced = client.Put(path, json{{"secret", {{"cookie", secret}}}}.dump(), "application/json");
+        REQUIRE(replaced->status == 200);
+        CHECK(body(replaced)["data"]["membership"]["expires_on"].is_null());
+        const auto record = wait(client, path);
+        if (secret == "dated") check_date(record);
+        else {
+            CHECK(record["membership"]["expires_on"].is_null());
+            CHECK(record["membership"]["expiry_precision"] == (secret == "precise" ? "datetime" : "unknown"));
+            if (secret == "precise") CHECK(record["membership"]["expires_at"] == "2100-01-01T00:00:00.000Z");
+            else CHECK(record["membership"]["expires_at"].is_null());
+        }
+    }
+    const auto revoked = body(client.Delete(path))["data"];
+    CHECK(revoked["membership"]["expires_on"].is_null());
+    CHECK(revoked["membership"]["expiry_precision"] == "unknown");
+    CHECK(restarted.stop().code == server::exit_ok);
+}
+
+TEST_CASE("slow cookie verification keeps HTTP controls responsive and rejects overload", "[server][membership]") {
+    struct SlowVerifier final : ports::ICredentialVerifier {
+        explicit SlowVerifier(std::shared_ptr<std::atomic<bool>> done) : release(std::move(done)) {}
+        std::shared_ptr<std::atomic<bool>> release;
+        domain::Result<ports::CredentialVerification> verify(const ports::CredentialSnapshot&, const ports::OperationContext& c) override {
+            while (!release->load() && !c.stop.stop_requested() && !c.expired(std::chrono::steady_clock::now()))
+                std::this_thread::sleep_for(2ms);
+            if (c.stop.stop_requested()) return domain::Error{domain::ErrorCode::canceled, "canceled", false, {}};
+            ports::CredentialVerification r;
+            r.status = ports::VerificationStatus::valid;
+            r.membership = {"active", "svip", "测试会员", {}, {}, {}};
+            return r;
+        }
+    };
+    Deployment d{"membership-responsive"};
+    REQUIRE(d.run({"init"}).code == server::exit_ok);
+    auto release = std::make_shared<std::atomic<bool>>(false);
+    std::vector<ports::ProviderBundle> bundles{mock_catalog("cat")};
+    for (int i = 0; i < 5; ++i) {
+        auto provider = mock_audio("aud" + std::to_string(i));
+        provider.auth_profiles[0].verifier = [release](const ports::ProviderSetup&) -> domain::Result<std::shared_ptr<ports::ICredentialVerifier>> {
+            return std::shared_ptr<ports::ICredentialVerifier>{std::make_shared<SlowVerifier>(release)};
+        };
+        bundles.push_back(std::move(provider));
+    }
+    auto sink = std::make_shared<infrastructure::observability::MemorySink>();
+    RunningService service{d, sink, std::move(bundles)};
+    auto client = service.client(d.read(d.bootstrap()));
+    std::vector<json> saved;
+    auto begin = std::chrono::steady_clock::now();
+    for (int i = 0; i < 5; ++i) {
+        auto response = client.Post("/api/v1/credentials", json{{"source", "aud" + std::to_string(i)}, {"kind", "cookie"},
+            {"auth_profile", "web_cookie"}, {"secret", {{"cookie", "synthetic-private-session"}}}}.dump(), "application/json");
+        REQUIRE(response); REQUIRE(response->status == 201);
+        CHECK(response->body.find("synthetic-private-session") == std::string::npos);
+        saved.push_back(body(response)["data"]);
+    }
+    CHECK(std::chrono::steady_clock::now() - begin < 2s);
+    CHECK(saved[0]["verification"]["state"] == "pending");
+    CHECK(saved[4]["login_status"] == "unknown");
+    CHECK(saved[4]["verification"]["error_code"] == "SERVICE_BUSY");
+    CHECK(saved[4]["verification"]["retry_after_seconds"] == 1);
+    CHECK(client.Get("/health/live")->status == 200);
+    CHECK(client.Get("/api/v1/credentials")->status == 200);
+    const auto id = saved[0]["credential_id"].get<std::string>();
+    auto manual = client.Post("/api/v1/credentials/" + saved[4]["credential_id"].get<std::string>() + "/verify", "{}", "application/json");
+    CHECK(manual->status == 503);
+    const auto canceled = client.Post("/api/v1/credentials/" + id + "/verify/" + saved[0]["verification"]["id"].get<std::string>() + "/cancel", "{}", "application/json");
+    REQUIRE(canceled->status == 200);
+    CHECK(body(canceled)["data"]["verification"]["error_code"] == "CANCELED");
+    release->store(true);
+    auto final = body(client.Get("/api/v1/credentials/" + id))["data"];
+    CHECK(final["login_status"] == "unknown");
+    CHECK(final["membership"]["status"] == "unknown");
+    CHECK(service.stop().code == server::exit_ok);
+}
+
+TEST_CASE("track pay metadata is uniform across HTTP catalog routes and caches", "[catalog][server][pay]") {
+    class PayCatalog final : public ports::ITrackSearch, public ports::ITrackDetail,
+                             public ports::PlaylistTracks, public ports::AlbumTracks,
+                             public ports::ArtistTracks, public ports::ChartTracks,
+                             public ports::CategoryTracks {
+    public:
+        domain::Track row(const std::string& id) const {
+            domain::Track out{track("pay", id), "payment metadata", {}};
+            if (id == "known") out.pay = {0, 1, 1};
+            else if (id == "partial") out.pay = {1, std::nullopt, 0};
+            return out;
+        }
+        domain::Result<ports::TrackSearchPage> search_tracks(const ports::ProviderContext&,
+                                                            const ports::TrackSearchQuery& query) override {
+            ports::TrackSearchPage out;
+            out.page.items.push_back(row(query.text)); out.page.page = {query.limit, 1, 1, false};
+            return out;
+        }
+        domain::Result<domain::Track> track_detail(const ports::ProviderContext&, const domain::TrackRef& ref) override {
+            return row(ref.id.value());
+        }
+        domain::Result<ports::CatalogPage<domain::Track>> list(const ports::ProviderContext&,
+            const domain::PlatformRef& ref, const ports::ListQuery& query) override {
+            ports::CatalogPage<domain::Track> out;
+            out.page.items.push_back(row(ref.id.value())); out.page.page = {query.limit, 1, 1, false};
+            return out;
+        }
+    };
+    auto catalog = std::make_shared<PayCatalog>();
+    auto bundle = base_bundle("pay");
+    const auto bind = [&]<class Port>(const char* key) {
+        bundle.capabilities.push_back({.key = key});
+        bundle.bindings.push_back(ports::CapabilityBinding::bind<Port>(
+            [catalog](const ports::ProviderSetup&) -> domain::Result<std::shared_ptr<Port>> { return std::shared_ptr<Port>{catalog}; }));
+    };
+    bind.operator()<ports::ITrackSearch>("search_tracks");
+    bind.operator()<ports::ITrackDetail>("track_detail");
+    bind.operator()<ports::PlaylistTracks>("playlist_tracks");
+    bind.operator()<ports::AlbumTracks>("album_tracks");
+    bind.operator()<ports::ArtistTracks>("artist_tracks");
+    bind.operator()<ports::ChartTracks>("chart_tracks");
+    bind.operator()<ports::CategoryTracks>("category_tracks");
+    Deployment deployment{"track-pay-http"};
+    REQUIRE(deployment.run({"init"}).code == server::exit_ok);
+    RunningService service{deployment, std::make_shared<infrastructure::observability::MemorySink>(),
+                           std::vector<ports::ProviderBundle>{std::move(bundle)}, true};
+    auto api = service.client(deployment.read(deployment.bootstrap()));
+    for (const std::string mode : {"known", "partial", "unknown"}) {
+        const json expected = mode == "known" ? json{{"pay_play", 0}, {"pay_down", 1}, {"pay_month", 1}} :
+            mode == "partial" ? json{{"pay_play", 1}, {"pay_down", nullptr}, {"pay_month", 0}} :
+            json{{"pay_play", nullptr}, {"pay_down", nullptr}, {"pay_month", nullptr}};
+        const std::vector<std::string> routes{
+            "/api/v1/search/tracks?sources=pay&q=" + mode,
+            "/api/v1/tracks/detail?source=pay&id=" + mode,
+            "/api/v1/playlists/tracks?source=pay&id=" + mode,
+            "/api/v1/albums/tracks?source=pay&id=" + mode,
+            "/api/v1/artists/tracks?source=pay&id=" + mode,
+            "/api/v1/charts/tracks?source=pay&id=" + mode,
+            "/api/v1/categories/tracks?source=pay&category_id=" + mode};
+        for (const auto& route : routes) {
+            CAPTURE(mode, route);
+            for (int attempt = 0; attempt < 2; ++attempt) {
+                const auto response = api.Get(route);
+                REQUIRE(response); REQUIRE(response->status == 200);
+                const auto document = body(response);
+                const auto& data = document.at("data");
+                const auto& item = data.contains("items") ? data.at("items").at(0) : data;
+                CHECK(item.at("pay") == expected);
+                if (route.starts_with("/api/v1/search/"))
+                    CHECK(document["meta"]["source_results"][0]["cache"]["hit"] == (attempt == 1));
+            }
+        }
+    }
+}
+
 TEST_CASE("saturated upstream requests leave health queries and cancellation responsive", "[stability][server]") {
     class SlowSearch final : public ports::ITrackSearch {
     public:
@@ -420,7 +709,7 @@ TEST_CASE("the service serves the control API and stops in order", "[server]") {
 
         const auto full = admin.Post(
             "/api/v1/credentials",
-            R"({"source":"aud","kind":"cookie","auth_profile":"web_cookie","secret":{"cookie":"other=1"}})",
+            R"({"source":"aud","kind":"cookie","auth_profile":"web_cookie","enabled":false})",
             "application/json");
         CHECK(full->status == 201);
         CHECK(error_code(admin.Post("/api/v1/credentials", R"({"source":"aud","kind":"oauth2","auth_profile":"x","secret":{}})",
@@ -448,9 +737,17 @@ TEST_CASE("the service serves the control API and stops in order", "[server]") {
         CHECK(huge->status == 413);
 
         CHECK(body(admin.Get("/api/v1/credentials?source=aud"))["data"]["items"].size() == 2);
-        const auto verified = body(admin.Post("/api/v1/credentials/" + id + "/verify", "", "application/json"));
-        CHECK(verified["data"]["result"] == "valid");
-        CHECK(verified["data"]["credential"]["last_verify_result"] == "valid");
+        const auto scheduled = admin.Post("/api/v1/credentials/" + id + "/verify", "", "application/json");
+        REQUIRE(scheduled->status == 202);
+        auto verified = body(admin.Get("/api/v1/credentials/" + id))["data"];
+        const auto verify_deadline = std::chrono::steady_clock::now() + 2s;
+        while (verified["verification"]["state"] == "pending" && std::chrono::steady_clock::now() < verify_deadline) {
+            std::this_thread::sleep_for(5ms);
+            verified = body(admin.Get("/api/v1/credentials/" + id))["data"];
+        }
+        CHECK(verified["login_status"] == "valid");
+        CHECK(verified["last_verify_result"] == "valid");
+        CHECK(verified["membership"]["status"] == "unknown");
         const auto renamed = body(admin.Put("/api/v1/credentials/" + id, R"({"label":"改名"})", "application/json"));
         CHECK(renamed["data"]["version"] == 2);
 

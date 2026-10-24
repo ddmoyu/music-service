@@ -3,6 +3,7 @@
 #include "domain/catalog/track.hpp"
 #include "domain/catalog/collections.hpp"
 #include "domain/result.hpp"
+#include <nlohmann/json_fwd.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -25,6 +26,9 @@ struct SearchPage {
 
 // searchMusicBykeyWord JSON.
 domain::Result<SearchPage> parse_search(std::string_view body);
+
+// Shared by search, collection rows and the web track-detail/artist endpoints.
+domain::Result<domain::TrackPay> parse_pay(const nlohmann::json& item);
 
 // What mobi.s says about the audio for the requested rid.
 struct AudioEvidence {

@@ -37,9 +37,9 @@
 | MediaAccessService.describe | owner、asset_id／file_id、mode、auth、期限 → 访问描述 | 复用已解析资源，选择安全直链／代理，按需签发票据，不创建播放实体 |
 | FileAccessService.describe/open | owner、file_id → 描述／只读文件租约 | 文件存在性、归属与 immutable 校验 |
 | MediaTicketService.issue/authorize | owner、file／asset 目标、期限 → 票据／授权目标 | 媒体模块内部组件，不提供另一套重复公开签发接口；不能延长 asset 寿命 |
-| CredentialService.put/verify/remove | owner、source、凭证输入 → 去敏描述 | 秘密存储与版本更新，不在验证中修改任务 |
+| CredentialService.create/update/disable/revoke/schedule_verification | owner、账号／平台、凭证输入 → 去敏描述 | 账号启停、秘密存储、后台校验与版本更新；不在验证中修改下载任务 |
 | CredentialService.select/lease | owner、source、可选账号选择／固定 AccountBinding → 绑定／CredentialLease | 唯一身份键生成处；固定绑定不重新选择默认账号，需要刷新时由用例协调 |
-| CredentialService.get_default/set_default/clear_default | owner、source、可选 credential_id → 默认引用与 selection_version | SQLite 单事务，验证 owner／source；不改其他账号，不自动选择替代凭证 |
+| CredentialService.get_default/set_default/clear_default | owner、source、credential_id／新 secret → 默认引用与 selection_version | SQLite 单事务启用所选账号并停用该平台原账号；清除选择全部停用；提交后清理旧秘密，不自动改选替代账号 |
 | PrincipalService.create/set_enabled/list | 本机管理输入 → 身份描述 | 独占实例锁后调用 Repository；不通过普通 HTTP admin 暴露 |
 | AccessTokenService.issue/revoke/list | principal、明确 scope／token_id → token 描述 | 明文只交付至受限新文件；DB 存哈希和撤销事实，规则见本机管理命令 |
 | DownloadIntentNormalizer.prepare | 请求、有效策略、授权与上下文 → PreparedDownloadIntent | application/tasks 内部步骤；事务外校验候选并保存稳定目标，领域纯规则生成规范意图与指纹 |
@@ -147,8 +147,9 @@ version 用于状态与进度并发控制，execution_id 用于区分执行世�
 | idempotency_records | owner + method + route + key 唯一 | 并发提交只有一个结果 |
 | file_assets | file_id 唯一；owner + created_at；目标路径唯一 | 文件获取、资产追踪和路径冲突处理 |
 | finalization_intents | task_id 唯一；发布状态索引 | 重启优先恢复未完成发布 |
-| credentials | id 唯一；owner + source；秘密引用及版本 | 平台账号描述，不另存 is_default 与默认选择表竞争 |
+| credentials | id 唯一；owner + source 在 enabled=1 时唯一；秘密引用及版本 | 停用记录不含秘密引用；enabled 与默认选择在同事务变更 |
 | credential_defaults | owner + source 主键；credential_id 可空、selection_version | 默认选择唯一且清除后仍保留世代；关联凭证必须同 owner/source |
+| credential_secret_deletions | secret_ref 主键；credential_id、owner、source | 已解除引用、待删除文件的持久队列；删除文件后确认，支持失败重试和重启回收 |
 | destinations | id 主键；canonical_root 不可变 | FileAsset、工作区与发布意图解析同一持久位置，不跟随默认目录变化 |
 
 所有任务所属批次关系以 batch_items 为准；task 不使用一个可变 batch_id 列来表达多对多关系。批次统计实时按其条目关联任务快照计算；条目重复时计数按条目，取消时按唯一 task_id 执行。
@@ -167,8 +168,8 @@ fingerprint 在同一事务中检查与插入，不能只先 SELECT 再在另一
 | 进度检查点 | 当前公开进度、版本、可恢复证据 | 字节接收、文件刷写策略 |
 | 开始发布 | 状态 finalizing、目标预留、发布意图 | 文件重命名、验证 |
 | 完成发布 | file_assets、task_files、completed、意图完成标记 | 提交后 SSE 通知 |
-| 默认凭证选择 | 默认引用与 selection_version；核对 owner/source、凭证可选状态与 profile | 提交后新请求生效，旧选择句柄失效；重复设置不新增版本 |
-| 撤销平台凭证 | 撤销状态、凭证 version、清除其默认引用并推进 selection_version | 提交后失效缓存／新租约，清理秘密；不改已持久任务的绑定 |
+| 启用／切换平台账号 | 新账号 enabled／secret／version、原账号停用与清空引用、旧秘密清理队列、默认引用与 selection_version；核对 owner/source、状态与 profile | 新秘密先写入，提交后删除旧秘密并取消旧校验；重复选择且无新 secret 不增加版本 |
+| 停用／撤销平台凭证 | enabled=false／撤销状态、清空 secret_ref、凭证 version、待清理引用、清除选择并推进 selection_version | 提交后阻止新租约，清理秘密；不改已持久任务的绑定 |
 | 服务 token 签发／撤销 | token 描述、哈希与撤销事实 | 离线独占锁；签发前安全创建并刷写明文交付文件，失败残留不导入 |
 
 检查点中的 received_bytes 是公开传输进度，不等同于断电后必定存在的持久字节。恢复时以工作文件实际长度和资源证据重新验证；需要强恢复点时文件刷写先于相应恢复证据提交。
@@ -179,7 +180,7 @@ fingerprint 在同一事务中检查与插入，不能只先 SELECT 再在另一
 
 先把新秘密写到新的不可变 secret_ref，再事务更新凭证描述与版本，最后使相关缓存失效并清理不再引用的旧秘密。DB 提交失败时新秘密成为待回收孤立项，旧有效凭证仍可使用；不能先覆盖旧秘密后让 DB 失败。
 
-删除先使数据库凭证不可新租用，再清理秘密文件。清理失败记录待重试，不重新暴露已删除的凭证。日志和任务快照只记录 credential_id/version，不记录秘密正文。
+停用、切换、撤销先在事务中使旧凭证不可新租用，并持久记录待清理引用，再清理秘密文件；替换 secret 也使用同一清理队列。清理失败返回明确错误，CredentialDescriptor.secret_cleanup_pending=true，不重新暴露旧秘密，也不报告完成。HTTP 单次最多处理 64 项，余项返回 SERVICE_BUSY；重试操作或启动时继续清理。启用已停用账号必须重新提供 secret，不能从历史引用恢复。日志和任务快照只记录 credential_id/version，不记录秘密正文。
 
 用户刷新提交还检查原 credential version、所依赖应用配置版本和撤销标记；成功才发布新身份键。应用 token 使用受限内存缓存，按 app_profile、scope 与配置版本合并获取；条目有唯一 app_token_id，条件替换递增 app_token_version，淘汰后重建使用新 ID。重启失效后重新获取，不为此新增平台专表或回写管理配置。应用私钥／client_secret 仍从 SecretStore 只读租用。
 

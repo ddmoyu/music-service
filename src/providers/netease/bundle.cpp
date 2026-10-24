@@ -77,7 +77,6 @@ ports::ProviderBundle make_bundle() {
         .kind = ports::CredentialKind::cookie,
         .version = 1,
         .input_fields = {{.name = "cookie", .required = true, .secret = true}},
-        .scopes = {"vip"},
         .verifier = make_verifier,
     }};
     bundle.quality_hints = {domain::Quality::standard, domain::Quality::high, domain::Quality::lossless, domain::Quality::hires};

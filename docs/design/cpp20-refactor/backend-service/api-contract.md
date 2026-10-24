@@ -12,7 +12,7 @@
 
 API 地址由配置或桌面启动器交付；动态端口与冲突处理见[部署约定](configuration-and-deployment.md#监听地址与端口冲突)。info 返回实际对外媒体／事件地址，不返回尚未绑定的端口 0。
 
-v1 允许新增可选响应字段；删除、改义、改变单位或必填参数属于破坏性变更，应进入新版本。客户端忽略未知字段；枚举未知值按通用展示处理。请求未知字段返回 400，避免拼错配置被静默忽略。
+项目处于开发阶段，只维护当前 v1 定义。删除、改义、改变单位或必填参数时同步更新调用方、测试和文档，不保留旧字段、别名或历史格式兼容。客户端忽略未知响应字段；枚举未知值按通用展示处理。请求未知字段返回 400，避免拼错配置被静默忽略。
 
 ## 2. 身份、权限与请求约定
 
@@ -25,7 +25,7 @@ v1 允许新增可选响应字段；删除、改义、改变单位或必填参�
 | `downloads:write` | 创建、取消、重试自己的任务与批次 |
 | `files:read` | 自己的已保存文件元数据、文件读取及其访问票据 |
 | `media:read` | 自己的已解析 asset 的在线直链／代理读取及其访问票据；不管理播放器 |
-| `credentials:write` | 自己的凭证列表、创建、更新、校验、删除及默认平台凭证选择 |
+| `credentials:write` | 自己的账号列表、创建、更新、校验、启用、停用、删除及平台账号选择 |
 | `admin` | 运行状态与全局下载调度开关；不隐含向普通响应泄漏秘密 |
 
 缺 token／无效 token 返回 401，scope 不足返回 403。资源不属于调用方时按 404 处理；管理员操作其他用户资源需使用明确管理用例，首版普通路由不接受 owner_id 越权参数。
@@ -168,6 +168,7 @@ features 反映实际构建及运行配置；客户端不能把该示例的布�
       "duration_ms": 210000,
       "version": {"kind": "studio", "label": null, "evidence": []},
       "artwork": null,
+      "pay": {"pay_play": null, "pay_down": null, "pay_month": null},
       "context_ref": "ctx_demo"
     }]
   },
@@ -229,6 +230,20 @@ features 反映实际构建及运行配置；客户端不能把该示例的布�
 
 曲目／歌单列表 data 为 `{items, page}`，详情 data 为实体对象。集合的 track_count 允许未知，返回的当前页大小不等于集合完整大小。不支持某种详情时明确返回 CAPABILITY_UNSUPPORTED，而不是用搜索结果伪装完整详情。
 
+所有 Track（搜索、歌单／专辑／歌手／榜单／分类歌曲列表、单曲详情）均返回统一 `pay` 对象，固定包含以下三个字段；前端无需解析平台私有付费码。
+
+| 字段 | 统一含义 | 值 |
+| --- | --- | --- |
+| `pay.pay_play` | 歌曲播放收费标记 | 1：明确收费；0：明确无此标记；null：未知 |
+| `pay.pay_down` | 歌曲下载收费标记 | 同上 |
+| `pay.pay_month` | 歌曲的会员相关收费标记 | 同上；不代表当前账号是会员，也不承诺会员覆盖所有购买要求 |
+
+例如 VIP 歌曲为 `"pay":{"pay_play":1,"pay_down":1,"pay_month":1}`；可免费播放、下载收费可为 `"pay":{"pay_play":0,"pay_down":1,"pay_month":1}`。缺失字段、未确认的枚举和没有对应数据的平台分别返回 null，不补为 0。数值始终为 0／1／null；前端不要把 null 当成免费。
+
+这些字段描述歌曲收费属性，不是当前账号的可用性，也不是指定音质的权限。不能仅凭 `pay_month=1` 判断 VIP 专属播放，不能凭 0 保证取流成功。版权、地区、会员等级、购买记录、音质及试听仍由音源解析／下载结果决定；禁止下载与收费下载也不等价。
+
+当前映射只使用该次目录响应，不为了补齐标记逐首查询或取流。同一首歌的搜索／列表缺少上游字段时可为 null，详情有字段时才返回确定值；所有入口的结构和含义保持一致。平台字段、映射及保守边界见[歌曲付费元数据](data-models.md#歌曲付费元数据)，展示规则与代码见[歌曲付费字段的前端使用](#71-歌曲付费字段的前端使用)。
+
 0.1.15 新增 `category_tracks`，沿用列表鉴权、缓存、错误和游标规则，通过 `categories/tracks` 返回 Track。Jamendo 原生标签的 `lists=track`，不支持 `categories/playlists`。Jamendo `search_playlists` 只检索官方精选歌单的名称／简介，能力标记 `catalog_kind=search_derived`；`total=null`、`listed_total` 为精选范围内匹配数。搜索的 `meta.source_results[].page` 与列表分页统一保留 `listed_total`、`unavailable_count`，未提供时均为 null，缓存命中时仍保持。其官方歌曲榜使用 `bestof`、`trending`、`genre:<分类ID>`，读取前 100 项并保留顺序；`total=null`、`listed_total<=100`，检测到榜单变化返回 `CURSOR_EXPIRED`。
 
 阶段 B 增加可选分页事实：`page.listed_total` 为上游可见 ID／歌曲清单长度，`page.unavailable_count` 为本页有 ID 但缺失详情的位置数。未知为 null；`page.total` 仍是上游声明总数，不能用返回条数替代。网易云按原位置推进游标，可能出现 items 为空但仍有 next_cursor 的页。检测到集合曲目变更返回 CURSOR_EXPIRED；不承诺固定时刻快照。Album 增加可选 `description`，未知为 null。
@@ -249,6 +264,82 @@ v1 为单实体解析契约；文本含多个不同的已识别实体时返回 4
 
 原文、翻译和罗马音时间轴独立保留，`romanized_lrc` 缺失为 null。YRC 损坏部分跳过并返回 `YRC_MALFORMED`，不影响有效 LRC。服务配置 `downloads.output.lyrics_variant` 控制标签写入，缺少选定变体时回退原文，任务的 `result.warnings` 返回 `LYRICS_VARIANT_FALLBACK`。
 
+### 7.1 歌曲付费字段的前端使用
+
+搜索结果、各类歌曲列表和单曲详情统一读取 `track.pay`。三个字段用于展示歌曲的收费属性；当前账号是否具备实际播放、下载权限，由音源解析和下载结果确定。
+
+| 字段 | 值为 `1` | 值为 `0` | 值为 `null` |
+| --- | --- | --- | --- |
+| `pay_month` | 显示 **VIP** 标签 | 不显示 VIP 标签 | 不显示 VIP 标签，会员相关收费情况未知 |
+| `pay_play` | 提示“播放收费” | 不显示播放收费提示 | 播放收费情况未知 |
+| `pay_down` | 提示“下载收费” | 不显示下载收费提示 | 下载收费情况未知 |
+
+VIP 标签建议附说明：“该歌曲包含会员相关收费标记，具体权益以平台为准。”不能仅凭 `pay_month=1` 显示“VIP 专属播放”或“开通 VIP 即可播放”；会员标记可能只涉及下载或其他权益，也不能据此推断当前账号的会员状态。`pay_play=1` 或 `pay_down=1` 时，如果 `pay_month` 为 0／null，仍显示相应收费提示，不补写 VIP 要求或断言必须单独购买。
+
+典型组合如下，三项独立判断：
+
+| pay_play / pay_down / pay_month | VIP 标签 | 播放提示 | 下载提示 |
+| --- | --- | --- | --- |
+| `1 / 1 / 1` | 显示 | 播放收费 | 下载收费 |
+| `0 / 1 / 1` | 显示 | 无收费提示 | 下载收费 |
+| `0 / 0 / 1` | 显示 | 无收费提示 | 无收费提示 |
+| `1 / 1 / 0` | 不显示 | 播放收费 | 下载收费 |
+| `1 / null / 1` | 显示 | 播放收费 | 收费情况未知 |
+| `null / null / null` | 不显示 | 收费情况未知 | 收费情况未知 |
+
+`null` 必须保留为未知，不转成 0，也不解释为免费、非 VIP、禁止播放或禁止下载。列表可以省略未知提示，详情或悬浮提示可显示“播放收费信息未知”／“下载收费信息未知”。例如 `pay_down=null` 时，不能根据 `pay_play` 或 `pay_month` 补齐下载收费状态。
+
+按钮和操作流程按以下规则处理：
+
+- 不因收费字段为 1 就禁用按钮，当前账号可能已经拥有会员或购买权限；字段为 0／null 也不保证操作成功。按钮是否可用还应遵循来源能力、请求状态等既有规则。
+- 用户点击播放后，调用 `POST /api/v1/assets/resolve`，按返回结果处理音质、试听和实际访问权限；不要把收费标记直接当作解析失败。
+- 用户点击下载后，按下载契约提交 `POST /api/v1/downloads`。返回任务标识表示任务已受理；继续查询 `GET /api/v1/downloads/{task_id}` 或订阅任务事件，以最终状态确定成功或失败。
+- 失败时按后端错误码及具体原因展示提示。凭证、资源限制、音质、试听和网络失败分别处理，不能全部改写成“需要 VIP”。
+
+TypeScript 示例可直接用于生成展示状态；其中 `unmarked` 表示“无此收费标记”，不是“保证免费可用”。提示为 unknown 时可仅用于详情或悬浮说明。
+
+```ts
+type PayFlag = 0 | 1 | null;
+type ChargeState = "paid" | "unmarked" | "unknown";
+
+interface TrackPay {
+  pay_play: PayFlag;
+  pay_down: PayFlag;
+  pay_month: PayFlag;
+}
+
+function chargeState(flag: PayFlag): ChargeState {
+  if (flag === 1) return "paid";
+  if (flag === 0) return "unmarked";
+  return "unknown";
+}
+
+function chargeHint(state: ChargeState, action: "播放" | "下载"): string | null {
+  if (state === "paid") return `${action}收费`;
+  if (state === "unknown") return `${action}收费信息未知`;
+  return null;
+}
+
+function getPayDisplay(pay: TrackPay) {
+  const playCharge = chargeState(pay.pay_play);
+  const downloadCharge = chargeState(pay.pay_down);
+  return {
+    showVipBadge: pay.pay_month === 1,
+    playCharge,
+    downloadCharge,
+    playHint: chargeHint(playCharge, "播放"),
+    downloadHint: chargeHint(downloadCharge, "下载"),
+  };
+}
+
+// track 为任一歌曲接口返回的 Track 对象：
+// const display = getPayDisplay(track.pay);
+// display.showVipBadge 控制 VIP 标签，playHint / downloadHint 用于收费提示。
+// 不使用这些展示状态直接设置播放或下载按钮的 disabled。
+```
+
+使用 `=== 1`、`=== 0` 区分收费状态。不要使用 `Boolean(flag)`、`!flag` 或 `flag ?? 0`，这些写法会把 null 与 0 混在一起。三个键在响应中固定存在，值为 null 是合法的未知状态。
+
 ## 8. 音源解析与探测
 
 | 方法与路径 | 输入 | 成功结果 |
@@ -257,6 +348,8 @@ v1 为单实体解析契约；文本含多个不同的已识别实体时返回 4
 | `POST /api/v1/assets/probe` | asset_id | 200 探测报告及证据，过期 410 |
 
 均需要 catalog:read，属于有额度的昂贵控制操作。resolve 中的 track 为 TrackRef，默认 standard、strict、allow_preview=false。音频只从该 TrackRef 指定的平台解析，目录型来源没有 resolve_audio 能力时返回 422 CAPABILITY_UNSUPPORTED，下载同样在创建前拒绝。
+
+酷我（`source=kuwo`）的 `resolve_audio` 支持 optional `web_cookie`，播放解析和下载共用该能力。新建账号并保存 Cookie 后自动启用和选中；通过 `PUT /api/v1/credential-defaults/kuwo` 提交 credential_id 和新 secret 可切换到已停用账号，同时停用原账号并清理其 Cookie。后续播放解析使用当前启用账号的可用 Cookie，下载也可以显式指定本人的已启用 credential_id。没有可用凭证时按统一选择规则匿名访问。已受理下载保留原账号绑定，该账号停用后不能再租用 Cookie，不会改用另一个账号。取流阶段的失败不会触发匿名重试，Cookie 不传给音频 CDN。会员歌曲是否可播放／下载仍以解析与任务最终结果为准，不能从 Cookie 存在或 pay 标记推断成功。
 
 2026-10-24 已取消跨平台匹配与换源，`/api/v1/tracks/matches` 路由不存在。请求不允许 `fallback` 或 `match_selection`，无论 disabled、空 sources 或 null 均返回 400 VALIDATION_FAILED。解析结果不公开原始 CDN URL、秘密请求头或解密密钥。
 
@@ -490,19 +583,125 @@ direct URL 是可能携带限时授权参数的敏感能力，仅在此显式访
 
 ## 11. 凭证管理
 
+从新增账号到切换、停用和展示会员状态的完整示例见[平台账号与 Cookie 接入指南](../../../account-management.md)。本节维护路由、字段和错误定义。
+
 以下需要 credentials:write，所有秘密只在写入请求出现，响应仅有 CredentialDescriptor：
 
 | 方法与路径 | 输入／语义 |
 | --- | --- |
 | `GET /api/v1/credentials` | 可选 source，列出自己的描述和状态 |
-| `POST /api/v1/credentials` | source、label、kind、auth_profile、secret；201，新 credential_id；secret 编码后最多 64 KiB，按平台 schema 验证 |
-| `PUT /api/v1/credentials/{credential_id}` | 更新同 kind／auth_profile 的 secret 或 label；200，凭证版本递增并使对应缓存失效；换凭证类型须新建 |
-| `POST /api/v1/credentials/{credential_id}/verify` | 无秘密 body；有限平台校验，200 返回 valid／invalid／unknown 与原因 |
-| `DELETE /api/v1/credentials/{credential_id}` | 200，撤销未来使用；重复撤销自己的已知记录仍成功 |
+| `GET /api/v1/credentials/{credential_id}` | 查询自己的凭证及最新自动校验结果 |
+| `POST /api/v1/credentials` | source、label?、kind、auth_profile、enabled?（默认 true）、secret；201，新 credential_id；enabled=true 必须提供 secret 并自动选中，停用原账号；enabled=false 必须省略 secret，仅创建停用记录。secret 编码后最多 64 KiB |
+| `PUT /api/v1/credentials/{credential_id}` | 更新同 kind／auth_profile 的 secret 或 label；200，凭证版本递增；停用账号只允许改 label，重新启用使用平台选择接口提交新 secret；换凭证类型须新建 |
+| `POST /api/v1/credentials/{credential_id}/verify` | 无秘密 body；发起或复用在途校验，202 返回 CredentialDescriptor 与校验编号；队列满为 503 SERVICE_BUSY |
+| `POST /api/v1/credentials/{credential_id}/verify/{verification_id}/cancel` | 无秘密 body；取消指定校验，200 返回当前描述；重复取消成功，旧编号不能取消新校验 |
+| `POST /api/v1/credentials/{credential_id}/disable` | 空 body 或 `{}`；200，停用并清除 Cookie，保留名称和 ID，若当前选中则清空选择；重复停用成功 |
+| `DELETE /api/v1/credentials/{credential_id}` | 200，永久撤销并清除秘密，保留 revoked 描述；不能重新启用；重复撤销自己的已知记录仍成功 |
 
-kind 支持 cookie、oauth2、api_key，只有平台声明并已实现的 kind／auth_profile 可写入。secret 分别为 `{cookie}`、`{access_token, refresh_token?, expires_at?, scopes?}` 或 `{api_key}`；平台可在已公布 schema 中约束必填字段，声明的 scopes 不能代替上游校验。创建凭据必须显式填写 kind、auth_profile 和 secret。Cookie 使用 `{"kind":"cookie","auth_profile":"web_cookie","secret":{"cookie":"..."}}`；更新秘密也使用 secret 对象。顶层 cookie 是未知字段，不推断认证类型或 profile。OAuth 应用 client_secret 通过服务管理配置的 SecretStore 引用设置，不能由普通用户替换整个服务的应用身份。所有秘密仅写入、不回显。
+kind 支持 cookie、oauth2、api_key，只有平台声明并已实现的 kind／auth_profile 可写入。secret 分别为 `{cookie}`、`{access_token, refresh_token?, expires_at?, scopes?}` 或 `{api_key}`；平台可在已公布 schema 中约束必填字段，声明的 scopes 不能代替上游校验。创建凭据必须显式填写 kind、auth_profile；启用时还必须填写 secret。Cookie 使用 `{"kind":"cookie","auth_profile":"web_cookie","secret":{"cookie":"..."}}`；更新秘密也使用 secret 对象。顶层 cookie 是未知字段，不推断认证类型或 profile。OAuth 应用 client_secret 通过服务管理配置的 SecretStore 引用设置，不能由普通用户替换整个服务的应用身份。所有秘密仅写入、不回显。
 
-校验接口不替代账号登录。auth_methods 公布对应 profile 的 supports_verify／supports_refresh／supports_application_token／supports_authorization_code／configured，没有实际工厂不声明支持。没有验证工厂时 verify 返回 422 CAPABILITY_UNSUPPORTED。0.1.25 的 OAuth 用户刷新由 CredentialService 调用 IOAuth2 并条件提交；应用 token 仍未接入。删除凭证会阻止后续读取和重新解析，但已经交给在途请求的凭证不保证可被“收回”；需停止下载时调用任务取消。
+校验接口不替代账号登录。auth_methods 公布对应 profile 的 supports_verify／supports_refresh／supports_application_token／supports_authorization_code／configured，没有实际工厂不声明支持。已登记的 Cookie profile 没有验证工厂时，后台结果为 unknown，verification.error_code 为 CAPABILITY_UNSUPPORTED。OAuth 用户刷新由 CredentialService 调用 IOAuth2 并条件提交；应用 token 仍未接入。删除凭证会阻止后续读取和重新解析，但已经交给在途下载请求的凭证不保证可被“收回”；需停止下载时调用任务取消。
+
+### 各平台 Cookie 取流接入状态
+
+2026-10-24 按当前源码核对。下表分别记录凭证注册、账号校验和取流请求的实现情况；实际运行版本是否包含这些能力，以 `GET /api/v1/providers` 为准。表中的“已接入”不代表所有会员歌曲或所有音质均已通过真实账号验收。
+
+| 平台 / source | 用户 Cookie 凭证 | 登录／会员校验 | 播放解析与下载取流 | 当前边界 |
+| --- | --- | --- | --- | --- |
+| QQ 音乐 `qq` | 已注册 `web_cookie` | 已接入 | 已携带 Cookie，optional | vkey 请求使用所选账号的 Cookie 和登录参数；具体歌曲、购买及音质权限由上游决定 |
+| 网易云 `netease` | 已注册 `web_cookie` | 已接入 | 已携带 Cookie，optional | 播放地址请求携带 Cookie；会员与单独购买、试听、音质分别判定 |
+| 酷我 `kuwo` | 已注册 `web_cookie` | 已接入 | 已携带 Cookie，optional | kuwo-native 0.1.10 起支持；目录仍匿名，四种音质取流沿用同一绑定账号 |
+| Bilibili `bilibili` | 已注册 `web_cookie` | 已接入 | 已携带 Cookie，optional | 视频详情与 playurl 请求使用账号 Cookie；当前仅支持已实现的独立 AAC 音轨能力，不承诺大会员覆盖付费 UGC |
+| 咪咕 `migu` | 已注册 `web_cookie` | 未接入 | 已携带 Cookie，optional | Cookie 已传给 listen-url 权限端点；尚无登录／会员验证工厂，校验结果保持 unknown |
+| 酷狗 `kugou` | 已注册 `web_cookie` | 未接入 | 已携带 Cookie，optional | kugou-native 0.1.18 起支持官网账号取流，当前为 standard MP3；无账号沿用匿名接口。Cookie 不保证整曲权限，试听默认返回 PREVIEW_REJECTED |
+| 千千 `qianqian` | 未注册 | 未接入 | 未接入，当前匿名 | 当前为匿名签名请求；付费歌可能返回 CREDENTIALS_REQUIRED，尚无用户账号取流链路 |
+| 5sing `fivesing` | 未注册 | 未接入 | 未接入，当前匿名 | 现用 song/getSongUrl 是已登记的 HTTP 端点，不能直接附加 Cookie；需先确认支持账号的 HTTPS 取流协议 |
+| Jamendo `jamendo` | 未注册 | 未接入 | 未接入，当前匿名 | 使用公开目录与下载接口，遵守 isDownloadable 标记；没有用户 Cookie 或真实用户 OAuth 取流实现 |
+
+前端按以下字段动态展示，不能把上表作为固定平台枚举：
+
+1. 是否提供 Cookie 输入入口，看平台 `auth_methods` 是否声明 `kind=cookie` 及对应的 `auth_profile`。当前已接入的平台使用 `web_cookie`。未声明时不提交该 profile；后端会以 VALIDATION_FAILED 拒绝未注册的 auth_profile。
+2. Cookie 是否用于播放和下载，看 `capabilities.resolve_audio.credentials` 及 `requirements.auth_profiles`。当前支持 Cookie 取流的六个平台均为 optional；`requires_credentials=false` 表示不强制提供凭证，不能据此隐藏 Cookie 输入入口或判断取流忽略 Cookie。
+3. 是否提供手动校验入口，看该认证方式的 `supports_verify`。咪咕和酷狗为 false，但仍可保存、选择并在取流时使用 Cookie；校验结果 unknown／CAPABILITY_UNSUPPORTED 不等于登录失效，也不等于取流未接入。
+4. 新建并保存 Cookie 默认启用和选中该账号，同一调用方、同一平台最多启用一个。播放和下载只可使用已启用的账号；停用账号的 Cookie 已清除，再次启用必须重新提交。全部停用后按能力声明选择匿名或返回 CREDENTIALS_REQUIRED，详见[默认平台凭证](#111-默认平台凭证)。
+5. CREDENTIALS_REQUIRED 既可能来自账号权限不足，也可能来自尚未实现账号取流的平台。例如千千未公布 Cookie profile 时，应展示后端原因并说明“当前后端尚未支持该平台账号取流”，不能引导用户反复填写后端无法使用的 Cookie。
+
+酷狗账号取流的 standard MP3 不代表同时支持会员高品质：high／lossless／hires 使用 strict 时返回 QUALITY_UNAVAILABLE，allow_lower 可降到该账号的 standard。只取得试听时默认返回 PREVIEW_REJECTED；显式 allow_preview=true 后，解析结果仍为 completeness=preview，前端应显示“试听”。下载还需经过文件校验，AUDIO_INVALID 表示收到的音频结构未通过校验，不能显示下载成功。Cookie 登录／会员状态目前未知，不能据此禁用取流，也不能显示“已开通 VIP”。
+
+播放解析和下载执行共用平台的 `resolve_audio` 能力。下载任务在执行时租用已固定账号的有效凭证版本，再取得音源地址；后续 CDN 传输只使用解析结果指定的请求头，不自动转发平台登录 Cookie。因此，CDN 请求没有账号 Cookie 并不表示下载没有使用账号权限。身份绑定、账号校验结果、歌曲 `pay` 标记和上游实际授权是独立信息，不能互相替代。
+
+核查范围为九个平台的能力注册、解析请求和共用下载链路，本次未逐个平台重新进行真实 Cookie 联调。酷我两首 VIP 样本的匿名／豪华 VIP 播放代理读取及完整下载结果见[酷我适配器验收说明](../../../../src/providers/kuwo/README.md)；两组文件一致，不能据此证明会员专属权益生效。登录与会员查询的实际覆盖范围见 [Cookie 会员验收](../../../research/credential-membership-acceptance.md)，该验收不能替代各平台账号取流验证。
+
+酷狗后续实际联调见[验收记录](../../../research/kugou-acceptance.md#cookie-取流与-vip-样本协议包-0118)：两首 VIP 歌在所提供 Cookie 下只返回试听，默认整曲请求被拒绝；免费歌的匿名和 Cookie 播放／完整下载均成功。未验证 VIP 整曲授权成功。
+
+### Cookie 自动校验与会员
+
+保存新的 Cookie 或替换 secret 后自动校验，创建仍返回 201、更新返回 200，响应包含 `verification.id`。请求线程只保存并入队，不等待平台；客户端轮询单条凭证或列表获得结果。手动 verify 复用同版本在途校验，已完成时新建校验。更新 secret 清空旧证据并取消旧任务；只改 label 保留已完成证据，原校验在途时为新版本重新排队。
+
+| 字段 | 含义 |
+| --- | --- |
+| `status` | 凭证管理状态 active／invalid／revoked；active 不代表已验证登录 |
+| `enabled` | 是否启用；独立于 status 和 login_status，同一调用方／平台最多一项为 true；false 时不能使用、更新或校验 Cookie |
+| `secret_cleanup_pending` | 该账号的旧秘密文件是否仍待清理；正常完成停用为 false。清理失败的操作返回错误；停用操作即使清理失败，账号仍保持停用，不能授权请求 |
+| `login_status` | valid／invalid／unknown；尚未查到、超时或不支持均为 unknown |
+| `verification` | id、state（idle／pending／complete）、error_code、retry_after_seconds |
+| `last_verified_at`／`last_verify_result` | 最近完成校验的时间与结果；新校验在途时为空 |
+| `membership.status` | unknown／none／active／expired；none 只来自明确的非会员证据 |
+| `membership.type` | unknown／none／vip／svip／music_package |
+| `membership.name` | 平台会员名称，例如黑胶SVIP、豪华绿钻、超级会员、豪华VIP、年度大会员；未知为 null |
+| `membership.expires_at` | 该会员类型的 UTC 到期时刻；仅有日期或无法确认时为 null，与凭证顶层 expires_at 独立 |
+| `membership.expires_on` | 仅有日期时返回 YYYY-MM-DD，与 expires_at 互斥；QQ 使用北京时间的日历日期，按日期直接展示 |
+| `membership.expiry_precision` | datetime：读取 expires_at；date：读取 expires_on；unknown：到期信息未知 |
+| `membership.checked_at`／`membership.error_code` | 会员查询时间及脱敏失败原因；不回传原始响应或账号标识 |
+
+调用方仅在 verification.state=pending 时显示“校验中”并轮询 `GET /api/v1/credentials/{credential_id}`；complete 停止轮询，新建停用账号的 idle 状态也不轮询。通过平台选择接口重新启用后，另查账号描述取得校验编号。登录状态分别显示“已登录／登录失效／未知”；会员状态为 unknown 时显示“未知”，none 时显示“非会员”，其余显示 name 并标注是否已过期。到期信息按 expiry_precision 展示：datetime 将 expires_at 按用户时区格式化，date 原样显示 expires_on 的年月日，unknown 显示“未知”。日期精度没有具体时分秒，不补成午夜或当天末尾；到期当天的会员状态以平台返回值为准。Cookie 更新后以响应中的新 verification.id 为准，丢弃旧编号的轮询结果。
+
+已完成的会员查询示例（以下仅列出新增字段）：
+
+```json
+{
+  "login_status": "valid",
+  "verification": {
+    "id": "chk_example",
+    "state": "complete",
+    "error_code": null,
+    "retry_after_seconds": null
+  },
+  "membership": {
+    "status": "active",
+    "type": "vip",
+    "name": "黑胶VIP",
+    "expires_at": "2026-10-27T15:59:59.000Z",
+    "expires_on": null,
+    "expiry_precision": "datetime",
+    "checked_at": "2026-10-24T11:36:20.722Z",
+    "error_code": null
+  }
+}
+```
+
+QQ 豪华绿钻的日期精度示例（membership 对象）：
+
+```json
+{
+  "status": "active",
+  "type": "vip",
+  "name": "豪华绿钻",
+  "expires_at": null,
+  "expires_on": "2026-10-27",
+  "expiry_precision": "date",
+  "checked_at": "2026-10-24T12:18:05.091Z",
+  "error_code": null
+}
+```
+
+会员不混入 OAuth scopes。登录校验成功、会员查询失败时保留 login_status=valid，membership.status=unknown。会员与到期信息是最近查询的快照，应结合 checked_at 展示，续费或到期后可手动刷新；会员本身不保证具体歌曲、音质或视频权限。
+
+网易云 `redplus`／`associator`／`musicPackage` 对应黑胶SVIP／黑胶VIP／音乐包；QQ `identity.HugeVip` 对应超级会员，历史字段 `svip` 对应豪华绿钻；酷我按各权益到期字段判断；Bilibili 按 vipType／vipStatus 区分月度与年度大会员。缺失关键字段、未知取值或相互矛盾时保留未知。咪咕的 Cookie 尚无验证协议，自动校验返回未知。
+
+校验使用 2 个独立工作线程、32 项队列，全局最多 34 项、每个调用方最多 4 项在途；包含排队的总预算 15 秒，不自动重试。自动校验过载时 Cookie 已保存，响应返回 verification.error_code=SERVICE_BUSY、retry_after_seconds=1；手动提交过载返回 503。取消立即设为 unknown／CANCELED，旧编号不能取消新任务。撤销与正常停机触发取消；崩溃重启把残留 pending 标记为 unknown／INTERRUPTED。数据库提交失败显示 unknown／STORAGE_UNAVAILABLE，不报告成功。
+
+数据库当前为 schema 7；只接受当前格式，已有开发数据需使用新的 data_dir 初始化，不自动迁移或删除旧数据。
 
 不能将任意他人的 Cookie 作为 query 参数覆盖整个服务的当前账号。用户默认选择通过下列接口写入 SQLite，配置文件不管理用户默认凭证。
 
@@ -518,7 +717,7 @@ kind 支持 cookie、oauth2、api_key，只有平台声明并已实现的 kind�
 | `GET /api/v1/oauth/authorize?session_id=...&ticket=...` | 一次性浏览器入口，不需要在 URL 放服务 Bearer；设置绑定 Cookie 后 303 跳转到平台 |
 | `GET /api/v1/oauth/callback/{application_id}?state=...&code=...` | 平台回调；同时检查 state、应用专属路径和浏览器 Cookie；受理返回 202 文本，交换在后台进行 |
 
-调用方用服务 Bearer 创建会话，然后在浏览器打开返回的 authorization_url，再轮询查询接口。终态为 succeeded／denied／failed／canceled／expired；成功返回 credential_id，调用方需要时再设置默认账号。回调也接受 `error` 代替 `code`，平台原始错误描述不回显。202 只表示回调已受理，必须查询会话判断登录是否成功。会话失效或重启后创建新会话，不重复提交旧授权码。
+调用方用服务 Bearer 创建会话，然后在浏览器打开返回的 authorization_url，再轮询查询接口。终态为 succeeded／denied／failed／canceled／expired；成功返回 credential_id，新账号自动启用并选中，同平台原账号停用并清理秘密。回调也接受 `error` 代替 `code`，平台原始错误描述不回显。202 只表示回调已受理，必须查询会话判断登录是否成功。会话失效或重启后创建新会话，不重复提交旧授权码。
 
 创建或队列超出容量返回 503 SERVICE_BUSY；错误或缺失参数按通用 400／422 错误返回；未知会话、跨账号查询、错误浏览器绑定返回 404；已消费的入口或回调返回 409。回调与浏览器入口不允许重复参数，包括内容完全相同或编码后重名的参数。响应禁止缓存、禁止 Referer 传播，无任意 return_url 跳转。
 
@@ -531,12 +730,26 @@ kind 支持 cookie、oauth2、api_key，只有平台声明并已实现的 kind�
 | 方法与路径 | 输入与结果 |
 | --- | --- |
 | `GET /api/v1/credential-defaults/{source}` | 返回 source、credential_id（可空）、selection_version；尚无记录时为 null／0，不返回秘密 |
-| `PUT /api/v1/credential-defaults/{source}` | body 为 `{credential_id}`；验证属于本人、source 一致、未撤销且 profile 与当前平台注册匹配；200 返回选择与版本 |
-| `DELETE /api/v1/credential-defaults/{source}` | 清除该来源的默认引用，200 返回 null 与版本；已为空则保持原版本 |
+| `PUT /api/v1/credential-defaults/{source}` | body 为 `{credential_id, secret?}`；选择并启用该账号，同时停用该平台原账号并清除其秘密；已停用账号必须提供新 secret；200 返回选择与版本 |
+| `DELETE /api/v1/credential-defaults/{source}` | 全部停用当前调用方在该平台的账号并清除秘密，200 返回 null 与版本；已全部停用则保持原版本 |
 
-不存在或他人的凭证返回 404；自己的凭证 source／profile 不匹配或已撤销返回 422 VALIDATION_FAILED。PUT 未知 source 返回 400 UNKNOWN_PROVIDER；GET／DELETE 允许读取或清除已移除平台的历史选择。重复设置同一选择不递增版本，其他变更原子推进 selection_version；并发设置按事务提交顺序生效，不隐式修改凭证本身的 version。
+不存在或他人的凭证返回 404；自己的凭证 source／profile 不匹配、已撤销、启用时缺少新 secret，或未提供新 secret 且凭证无效／过期时返回 422 VALIDATION_FAILED。PUT 未知 source 返回 400 UNKNOWN_PROVIDER；GET／DELETE 允许读取或清除已移除平台的历史选择。重复选择已启用且可用的账号、不提交 secret 时保持两个版本不变；选择变化推进 selection_version，启用、停用或替换 secret 推进对应账号 version。并发变更按事务顺序生效；同账号并发修改可能返回 409 VERSION_CONFLICT，应重新查询后再操作。
 
-创建凭证不自动设默认。DELETE 凭证时，同事务清除指向它的默认引用并递增 selection_version；不改选其他账号。没有默认用户账号时，只有平台能力允许的 application／anonymous 模式可继续，否则返回 CREDENTIALS_REQUIRED。新请求立即使用新选择，已受理任务仍用固定绑定；旧默认选择生成的游标失效，详见[账号模型](data-models.md#账号绑定与授权身份)。
+新建账号默认 enabled=true，保存 Cookie 后自动选中；若希望只建记录，传 enabled=false 并省略 secret。停用、切换或撤销时，在同一事务更新 enabled、秘密引用、账号版本、平台选择并记录待清理秘密；提交后删除秘密文件、取消旧校验。文件清理失败返回 503 STORAGE_UNAVAILABLE，待清理引用所属账号的描述标记 secret_cleanup_pending=true；不会报告停用完成，可重试停用／全部停用，启动时也继续清理。HTTP 每次最多清理 64 项，仍有待清理项时返回 503 SERVICE_BUSY。已提交的账号状态不会因文件清理失败而恢复；切换失败可能已选中新账号，替换秘密失败也可能已保存新秘密，失败后先查询当前列表与选择。
+
+停用后保留账号 ID、名称等描述，登录和会员结果重置为 unknown／ACCOUNT_DISABLED，旧校验不能恢复旧会员信息；新建停用记录保持 idle／unknown。重新启用后自动校验新 Cookie。全部停用后，只有能力允许的 application／anonymous 模式可继续，否则返回 CREDENTIALS_REQUIRED。显式提交已停用 credential_id 同样被拒绝。已受理任务保留原绑定，后续租用失败时不会改选其他账号；已交给在途请求的秘密快照无法收回，需要停止任务时调用取消。旧默认选择生成的游标失效，详见[账号模型](data-models.md#账号绑定与授权身份)。
+
+例如有两个 QQ 账号，通过以下请求重新提交 Cookie 并启用第二个账号（第一个账号会停用）：
+
+```http
+PUT /api/v1/credential-defaults/qq
+Authorization: Bearer <service-token>
+Content-Type: application/json
+
+{"credential_id":"cre_second","secret":{"cookie":"<fresh-cookie>"}}
+```
+
+停用单个账号使用 `POST /api/v1/credentials/cre_second/disable`，全部停用 QQ 账号使用 `DELETE /api/v1/credential-defaults/qq`。使用 `GET /api/v1/credentials?source=qq` 展示各账号的 enabled 与 secret_cleanup_pending，使用 `GET /api/v1/credential-defaults/qq` 查询当前启用账号；credential_id=null 表示全部停用。
 
 ## 12. 管理接口
 
@@ -553,15 +766,16 @@ paused 只停止领取新任务，已有任务继续；取消活动任务仍走�
 ## 13. 前端最小接入流程
 
 1. 配置服务地址和 token，调用 info／providers／destinations，显示真实能力。
-2. 搜索或进入集合详情，保留 TrackRef 与 context_ref；部分来源失败时展示明细。
-3. 创建任务前生成新的 Idempotency-Key；网络不确定时用同一个 key 重试提交。
-4. 建立 SSE 订阅后查询当前下载状态，按版本合并事件；重连时重新同步，无需重提下载。不支持订阅时条件轮询兜底。
-5. completed 表示保存到后端；按 file_id 取描述，原生客户端可用 Bearer 读取，网页通过 media-access 获取票据 URL；保存到当前设备的进度由客户端单独维护。
-6. 用户点取消则调用取消接口并等终态；关闭 SSE、停止轮询或关闭窗口不等于取消。
+2. 如使用平台账号，按 auth_methods 提供输入，读取账号列表及平台选择，按 enabled、login_status、membership 分别展示；新增 Cookie 自动启用，切换或全部停用会清除旧 Cookie。账号操作完成后刷新列表和选择，只轮询 pending 校验；清空输入框不能代替停用接口，完整流程见[账号指南](../../../account-management.md)。
+3. 搜索或进入集合详情，保留 TrackRef 与 context_ref；部分来源失败时展示明细。账号选择或授权版本变化后重新取第一页。
+4. 创建任务前生成新的 Idempotency-Key；网络不确定时用同一个 key 重试提交。
+5. 建立 SSE 订阅后查询当前下载状态，按版本合并事件；重连时重新同步，无需重提下载。不支持订阅时条件轮询兜底。
+6. completed 表示保存到后端；按 file_id 取描述，原生客户端可用 Bearer 读取，网页通过 media-access 获取票据 URL；保存到当前设备的进度由客户端单独维护。
+7. 用户点取消则调用取消接口并等终态；关闭 SSE、停止轮询或关闭窗口不等于取消。停用账号阻止后续获取 Cookie，不能收回已交给在途请求的秘密快照。
 
 ## 14. 契约验证清单
 
-当前元数据定义：歌曲的 `artwork` 在有可信平台封面时为 HTTPS URL；`track_number`、`track_total` 为正整数或 null。下载结果新增 `metadata_fields`，取值见 [任务模型](data-models.md#下载任务)。客户端按当前契约读取结果；下载请求无需增加参数。输出默认配置由服务端 `downloads.output` 控制，并在受理时固定；单任务仍可使用 `metadata_policy`。
+当前元数据定义：歌曲的 `artwork` 在有可信平台封面时为 HTTPS URL；`track_number`、`track_total` 为正整数或 null。下载结果新增 `metadata_fields`，取值见 [任务模型](data-models.md#下载任务快照)。客户端按当前契约读取结果；下载请求无需增加参数。输出默认配置由服务端 `downloads.output` 控制，并在受理时固定；单任务仍可使用 `metadata_policy`。
 
 重点验证 JSON 示例可解析、单位一致、逐源分页不重复第一页、所有错误有 request_id、下载提交可靠持久化、同键幂等、批次创建原子性、资源 owner 隔离、状态转换竞争、媒体票据范围与到期、Range／If-Range／304／416，以及关闭前端后任务生命周期独立。
 

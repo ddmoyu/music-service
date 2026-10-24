@@ -5,7 +5,6 @@
 #include <array>
 #include <chrono>
 #include <map>
-#include <mbedtls/md5.h>
 #include <set>
 #include <type_traits>
 
@@ -23,29 +22,7 @@ std::string artist_search_url(std::string_view query, std::uint32_t page_number,
                                               {"keyword", std::string{query}},
                                               {"page", std::to_string(page_number)},
                                               {"pagesize", std::to_string(limit)}};
-    // 官网 infSign.min.js 的公开签名种子，并非账号秘密或登录凭证。
-    constexpr std::string_view seed = "NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt";
-    std::string input{seed};
-    for (const auto& [key, value] : params)
-        input += key + "=" + value;
-    input += seed;
-    std::array<unsigned char, 16> bytes{};
-    if (mbedtls_md5(reinterpret_cast<const unsigned char*>(input.data()), input.size(),
-                    bytes.data()) != 0)
-        throw Error{ErrorCode::internal, "Kugou search signing failed", false, {}};
-    std::string signature;
-    for (const auto b : bytes) {
-        signature += "0123456789ABCDEF"[b >> 4];
-        signature += "0123456789ABCDEF"[b & 15];
-    }
-    params["signature"] = std::move(signature);
-    std::string url = "https://complexsearch.kugou.com/v1/search/author?";
-    for (const auto& [key, value] : params) {
-        if (url.back() != '?')
-            url += '&';
-        url += key + "=" + application::transport::encode_query_component(value);
-    }
-    return url;
+    return signed_web_url("https://complexsearch.kugou.com/v1/search/author", std::move(params));
 }
 namespace {
 using parsing::number;

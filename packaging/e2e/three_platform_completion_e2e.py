@@ -43,8 +43,8 @@ def run(service, cookie_file, report):
 
     credential = api.json("POST", "/api/v1/credentials", {"source": "netease",
         "kind": "cookie", "auth_profile": "web_cookie", "secret": {"cookie": cookie_file.read_text(encoding="utf-8").strip()}, "label": "E acceptance"}, expect=(201,))[2]["credential_id"]
-    verified = api.json("POST", f"/api/v1/credentials/{credential}/verify", {})[2]
-    check(verified["result"] == "valid", "provided account verifies")
+    verified = api.wait_credential(credential)
+    check(verified["login_status"] == "valid", "provided account verifies")
     api.json("PUT", "/api/v1/credential-defaults/netease", {"credential_id": credential})
     status, strict = resolve("netease", "210049", "hires")
     lower_status, lower = resolve("netease", "210049", "hires", "allow_lower")

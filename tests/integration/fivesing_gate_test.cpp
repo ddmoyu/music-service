@@ -271,7 +271,13 @@ TEST_CASE("T41: two real platforms, two principals, one download path", "[gate][
     const auto providers = body(a.Get("/api/v1/providers"));
     for (const auto& item : providers["data"]["items"]) {
         CHECK(item["implementation"]["execution_mode"] == "native");
-        CHECK(item["auth_methods"].empty());
+        if (item["source"] == "kuwo") {
+            REQUIRE(item["auth_methods"].size() == 1);
+            CHECK(item["auth_methods"][0]["auth_profile"] == "web_cookie");
+            CHECK(item["auth_methods"][0]["supports_verify"] == true);
+        } else {
+            CHECK(item["auth_methods"].empty());
+        }
         const auto expected = item["source"] == "kuwo" ? json::array({"standard", "high", "lossless", "hires"}) : json::array({"standard", "high"});
         CHECK(item["quality_hints"] == expected);
     }

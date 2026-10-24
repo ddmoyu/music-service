@@ -59,7 +59,13 @@ struct Fixture {
 Json track_json(const char* mid = song, int id = 1) {
     return {{"id", id}, {"mid", mid}, {"name", "中文歌名"}, {"singer", Json::array({{{"mid", artist_id}, {"name", "歌手"}}})},
             {"album", {{"mid", album_id}, {"name", "专辑"}}}, {"interval", 180}, {"index_album", 1},
+            {"pay", {{"pay_play", 0}, {"pay_down", 1}, {"pay_month", 1}}},
             {"file", {{"media_mid", media}, {"size_128mp3", 10000}, {"size_320mp3", 20000}, {"size_flac", 30000}}}};
+}
+void check_pay(const domain::Track& value) {
+    CHECK(value.pay.pay_play == 0);
+    CHECK(value.pay.pay_down == 1);
+    CHECK(value.pay.pay_month == 1);
 }
 Json playlist_json(int id = 100) { return {{"dissid", id}, {"dissname", "歌单"}, {"song_count", 3}}; }
 Json album_json() { return {{"albumMID", album_id}, {"albumName", "专辑"}, {"song_count", 3}}; }
@@ -97,6 +103,7 @@ TEST_CASE("QQ search preserves Chinese data and selects the matching search type
         f.upstream->rpc(search_json("song", track_json(), 2));
         auto out = unwrap(f.port<ports::ITrackSearch>()->search_tracks(context(), {"中文", 1, "1"}));
         CHECK(out.page.items.front().title == "中文歌名"); CHECK(out.next_cursor == "2");
+        check_pay(out.page.items.front());
         auto param = Json::parse(f.upstream->calls.back().body)["req_0"]["param"];
         CHECK(param["search_type"] == 0); CHECK(param["page_num"] == 2);
     }
@@ -144,6 +151,50 @@ TEST_CASE("QQ search distinguishes an expired session from an empty result", "[p
     }
 }
 
+TEST_CASE("QQ track pay flags preserve zero and unknown metadata", "[providers][qq]") {
+    Fixture f;
+    auto doc = track_json();
+    domain::TrackPay expected{0, 1, 1};
+    SECTION("independent flags") {}
+    SECTION("VIP") { doc["pay"]["pay_play"] = 1; expected.pay_play = 1; }
+    SECTION("all zero") {
+        doc["pay"] = {{"pay_play", 0}, {"pay_down", 0}, {"pay_month", 0}};
+        expected = {0, 0, 0};
+    }
+    SECTION("missing pay") { doc.erase("pay"); expected = {}; }
+    SECTION("null pay") { doc["pay"] = nullptr; expected = {}; }
+    SECTION("empty pay") { doc["pay"] = Json::object(); expected = {}; }
+    SECTION("partial and null fields") {
+        doc["pay"] = {{"pay_play", nullptr}, {"pay_down", 0}};
+        expected = {std::nullopt, 0, std::nullopt};
+    }
+    SECTION("unknown upstream value") { doc["pay"]["pay_month"] = 2; expected.pay_month.reset(); }
+    f.upstream->rpc({{"track_info", doc}});
+    const auto result = unwrap(f.port<ports::ITrackDetail>()->track_detail(context(), track("qq", song)));
+    CHECK(result.pay.pay_play == expected.pay_play);
+    CHECK(result.pay.pay_down == expected.pay_down);
+    CHECK(result.pay.pay_month == expected.pay_month);
+    REQUIRE(f.upstream->calls.size() == 1); // Metadata requires no extra account/permission request.
+}
+
+TEST_CASE("QQ rejects malformed track pay metadata", "[providers][qq]") {
+    for (const auto& invalid_pay : {Json::array(), Json("invalid"), Json(true)}) {
+        Fixture f; auto doc = track_json(); doc["pay"] = invalid_pay;
+        f.upstream->rpc({{"track_info", doc}});
+        const auto result = f.port<ports::ITrackDetail>()->track_detail(context(), track("qq", song));
+        REQUIRE_FALSE(result); CHECK(result.error().code == ErrorCode::upstream_failed);
+    }
+    for (const auto* key : {"pay_play", "pay_down", "pay_month"}) {
+        for (const auto& invalid : {Json(-1), Json(0.5), Json(true), Json::object(), Json("invalid"), Json(4294967296ULL)}) {
+            CAPTURE(key, invalid);
+            Fixture f; auto doc = track_json(); doc["pay"][key] = invalid;
+            f.upstream->rpc({{"track_info", doc}});
+            const auto result = f.port<ports::ITrackDetail>()->track_detail(context(), track("qq", song));
+            REQUIRE_FALSE(result); CHECK(result.error().code == ErrorCode::upstream_failed);
+        }
+    }
+}
+
 TEST_CASE("QQ rejects malformed search pages and bounds input before HTTP", "[providers][qq]") {
     Fixture f; auto port = f.port<ports::ITrackSearch>();
     for (const ports::SearchQuery q : {ports::SearchQuery{"x", 0, {}}, {"", 1, {}}, {"x", 51, {}},
@@ -166,6 +217,7 @@ TEST_CASE("QQ playlist keeps duplicates and invalidates changed revisions", "[pr
     f.upstream->rpc(playlist_data());
     auto first = unwrap(port->list(context(), track("qq", "100"), {2, {}}));
     REQUIRE(first.page.items.size() == 2); CHECK(first.page.items[0].ref == first.page.items[1].ref);
+    for (const auto& item : first.page.items) check_pay(item);
     REQUIRE(first.next_cursor);
     SECTION("unchanged") {
         f.upstream->rpc(playlist_data());
@@ -207,6 +259,7 @@ TEST_CASE("QQ chart preserves rank ordering and counts unavailable songs", "[pro
     CHECK(result.page.items.size() == available);
     CHECK(result.page.page.unavailable_count == 2 - available);
     CHECK(result.page.items.back().ref.id.value() == song2);
+    for (const auto& item : result.page.items) check_pay(item);
     if (available == 2) CHECK(result.page.items.front().ref.id.value() == song);
     REQUIRE(result.next_cursor); CHECK(result.next_cursor->starts_with("2:"));
     CHECK(f.upstream->calls.back().secret_headers.empty());
@@ -264,11 +317,13 @@ TEST_CASE("QQ album and artist lists use upstream offsets and matching identitie
     Fixture f;
     SECTION("album tracks") {
         f.upstream->rpc({{"albumMid", album_id}, {"totalNum", 2}, {"songList", Json::array({{{"songInfo", track_json()}}})}});
-        CHECK(unwrap(f.port<ports::AlbumTracks>()->list(context(), track("qq", album_id), {1, {}})).next_cursor.has_value());
+        const auto result = unwrap(f.port<ports::AlbumTracks>()->list(context(), track("qq", album_id), {1, {}}));
+        CHECK(result.next_cursor.has_value()); check_pay(result.page.items.front());
     }
     SECTION("artist tracks") {
         f.upstream->rpc({{"singerMid", artist_id}, {"totalNum", 2}, {"songList", Json::array({{{"songInfo", track_json()}}})}});
-        CHECK(unwrap(f.port<ports::ArtistTracks>()->list(context(), track("qq", artist_id), {1, {}})).next_cursor.has_value());
+        const auto result = unwrap(f.port<ports::ArtistTracks>()->list(context(), track("qq", artist_id), {1, {}}));
+        CHECK(result.next_cursor.has_value()); check_pay(result.page.items.front());
     }
     SECTION("artist albums") {
         Json album{{"albumMid", album_id}, {"albumName", "专辑"}, {"totalNum", 0}};
@@ -351,8 +406,22 @@ TEST_CASE("QQ verifier separates invalid credentials from upstream failure witho
     Fixture f; auto verifier = unwrap(f.registry->require_verifier("qq", "web_cookie", ports::CredentialKind::cookie));
     auto c = context(); ports::SecretBytes secret{fake_cookie};
     SECTION("valid") {
-        f.upstream->login(); auto result = unwrap(verifier->verify({c.identity, secret}, c.operation));
+        f.upstream->login();
+        f.upstream->rpc({{"identity", {{"HugeVip", 0}, {"HugeVipEnd", ""}, {"vip", 1}, {"overdate", "2100-01-01 00:00:00"}}},
+            {"svip", 1}, {"send", "2100-01-01"}});
+        auto result = unwrap(verifier->verify({c.identity, secret}, c.operation));
         CHECK(result.status == ports::VerificationStatus::valid); CHECK_FALSE(result.account_hint); CHECK(result.scopes.empty());
+        CHECK(result.membership.type == "vip"); CHECK(result.membership.name == "豪华绿钻");
+        CHECK(result.membership.expires_on == "2100-01-01");
+        CHECK_FALSE(result.membership.expires_at);
+        CHECK_FALSE(f.upstream->calls.back().allow_redirects);
+        CHECK(Json::parse(f.upstream->calls.back().body)["req_0"]["module"] == "VipLogin.VipLoginInter");
+    }
+    SECTION("membership error preserves login") {
+        f.upstream->login(); f.upstream->raw({{"code", 9999}});
+        auto result = unwrap(verifier->verify({c.identity, secret}, c.operation));
+        CHECK(result.status == ports::VerificationStatus::valid);
+        CHECK(result.membership.status == "unknown");
     }
     SECTION("missing key") {
         ports::SecretBytes bad{"uin=12345"};

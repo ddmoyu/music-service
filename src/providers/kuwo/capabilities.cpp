@@ -160,6 +160,10 @@ public:
             return std::move(rid).error();
         }
         constexpr std::array offered{domain::Quality::standard, domain::Quality::high, domain::Quality::lossless, domain::Quality::hires};
+        if (context.identity.binding().mode() == domain::AccountMode::user &&
+            (!context.secret || context.secret->reveal().empty())) {
+            return Error{ErrorCode::credentials_required, "the bound Kuwo cookie is unavailable", false, {}};
+        }
         auto chosen = domain::choose_quality(requirement, offered);
         if (!chosen) return chosen.error();
         auto result = resolve_one(context, track, requirement, *rid, *chosen);
@@ -195,7 +199,13 @@ private:
         std::string_view rid, domain::Quality chosen) {
         const auto br = chosen == domain::Quality::hires ? "23000kflac" : chosen == domain::Quality::lossless ? "2000kflac" :
                         chosen == domain::Quality::high ? "320kmp3" : "128kmp3";
-        auto response = client_.fetch(protocol::audio(rid, client_id(), br), context);
+        auto request = protocol::audio(rid, client_id(), br);
+        if (context.secret) {
+            request.secret_headers.push_back({"Cookie", std::string{context.secret->reveal()}});
+            // 只交给固定取流端点；重定向不能把账号请求降成匿名请求。
+            request.allow_redirects = false;
+        }
+        auto response = client_.fetch(std::move(request), context);
         if (!response) {
             return std::move(response).error();
         }

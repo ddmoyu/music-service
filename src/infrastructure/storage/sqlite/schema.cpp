@@ -45,11 +45,34 @@ CREATE TABLE credentials (
         CHECK (refresh_state IN ('idle', 'pending', 'reauthorization_required')),
     oauth_application_id TEXT,
     oauth_application_version INTEGER NOT NULL DEFAULT 0,
-    refresh_after INTEGER
+    refresh_after INTEGER,
+    verification_id TEXT,
+    verification_state TEXT NOT NULL DEFAULT 'idle' CHECK (verification_state IN ('idle', 'pending', 'complete')),
+    verification_error TEXT,
+    membership_status TEXT NOT NULL DEFAULT 'unknown' CHECK (membership_status IN ('unknown', 'none', 'active', 'expired')),
+    membership_type TEXT NOT NULL DEFAULT 'unknown' CHECK (membership_type IN ('unknown', 'none', 'vip', 'svip', 'music_package')),
+    membership_name TEXT,
+    membership_expires_at INTEGER,
+    membership_checked_at INTEGER,
+    membership_error TEXT,
+    membership_expires_on TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    CHECK (membership_expires_at IS NULL OR membership_expires_on IS NULL),
+    CHECK ((enabled = 0 AND secret_ref IS NULL) OR (enabled = 1 AND secret_ref IS NOT NULL AND status != 'revoked'))
 ) STRICT;
 CREATE INDEX credentials_refresh_due ON credentials
     (oauth_application_id, oauth_application_version, refresh_state, status, refresh_after);
 CREATE INDEX credentials_owner_source ON credentials (owner_id, source);
+CREATE UNIQUE INDEX credentials_one_enabled ON credentials (owner_id, source) WHERE enabled = 1;
+
+CREATE TABLE credential_secret_deletions (
+    secret_ref TEXT PRIMARY KEY,
+    credential_id TEXT NOT NULL REFERENCES credentials (id),
+    owner_id TEXT NOT NULL,
+    source TEXT NOT NULL
+) STRICT;
+CREATE INDEX credential_secret_deletions_scope ON credential_secret_deletions (owner_id, source);
+CREATE INDEX credential_secret_deletions_account ON credential_secret_deletions (credential_id);
 
 CREATE TABLE credential_defaults (
     owner_id TEXT NOT NULL REFERENCES principals (id),

@@ -172,7 +172,7 @@ redirect_uri 必须与平台登记值一致，路径固定为 `/api/v1/oauth/cal
 
 应用 ID 只允许 1～64 个英文字母、数字、下划线、短横线。client_secret_ref 由 SecretStore 加载，配置文件不放明文 client_secret。变更应用身份时增加 version 并重新授权；原应用凭证不会使用新应用秘密尝试刷新。应用 client credentials token 缓存尚未接入。
 
-当前数据库为 schema 4，只初始化空库或校验结构完全一致的库，不执行逐版迁移。非当前数据库请改用新的 `data_dir` 初始化，已有数据保持原样。当前版本重启会将上次中断的 pending 刷新标记为需要重新授权；数据库及 secrets 应配套备份。使用步骤见 [API 契约](../docs/design/cpp20-refactor/backend-service/api-contract.md#oauth-登录会话)。
+当前数据库为 schema 7，只初始化空库或校验结构完全一致的库，不执行逐版迁移。非当前数据库请改用新的 `data_dir` 初始化，已有数据保持原样。当前版本重启会将上次中断的 pending 刷新标记为需要重新授权，并继续处理已停用账号的秘密清理；数据库及 secrets 应配套备份。使用步骤见 [API 契约](../docs/design/cpp20-refactor/backend-service/api-contract.md#oauth-登录会话)。
 
 ## 启动前的组合检查
 

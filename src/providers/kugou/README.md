@@ -1,6 +1,6 @@
 # 酷狗原生适配器
 
-`source=kugou`，协议包 `0.1.17`。在 C++20 服务内直接实现协议，复用公共传输、上游额度、缓存、游标、任务、文件与媒体票据。生产运行没有 Python、外部下载程序或第三方解析服务依赖。Python 只用于独立验收。
+`source=kugou`，协议包 `0.1.18`。在 C++20 服务内直接实现协议，复用公共传输、上游额度、缓存、游标、任务、文件与媒体票据。生产运行没有 Python、外部下载程序或第三方解析服务依赖。Python 只用于独立验收。
 
 ## 已实现能力
 
@@ -15,7 +15,27 @@
 | 元数据 | 按 hash 查找 LRC；官方歌曲／专辑封面；复用标签和歌词、封面独立导出；歌手头像不作为歌曲封面 |
 | 音源 | standard 128 kbps MP3、high 320 kbps MP3、lossless FLAC 候选；strict 不降级，allow_lower 只选择同档或更低档；具体歌曲与档位受权限限制 |
 
-共注册 21 项能力。当前均为匿名接口，不登记 Cookie profile。付费资源明确返回 `CREDENTIALS_REQUIRED`，当前适配器尚不能通过导入 Cookie 解锁；登录、个人歌单、短链、`gcid_` 云歌单、Hi-Res 和 KGM／加密音源尚未实现。没有用其他音源替代受限歌曲。
+共注册 21 项能力。目录保持匿名，`resolve_audio` 支持 optional `web_cookie`，播放解析和下载取流使用同一账号选择。没有启用账号时沿用匿名接口；有 Cookie 时调用官网签名的 `https://wwwapi.kugou.com/play/songinfo`，携带 Cookie 中的登录参数，先由 hash 获取歌曲身份，再取得账号授权的音源。账号取流失败不会改走匿名，也不会换成其他歌曲。
+
+Cookie 取流目前支持 **standard MP3**；high／lossless／hires 的 strict 请求返回 `QUALITY_UNAVAILABLE`，allow_lower 可使用同一账号的 standard。匿名模式仍保留既有 standard／high／lossless 候选。歌曲的会员标记不代表账号已获授权；没有音源返回 `CREDENTIALS_REQUIRED`，只有试听且未指定 `allow_preview=true` 返回 `PREVIEW_REJECTED`。允许试听时仍标记 preview，下载继续执行完整的文件结构校验。
+
+尚未实现登录／会员查询工厂，`supports_verify=false`，登录和会员状态保持 unknown，不能据此判断 Cookie 无效或账号没有 VIP。个人歌单、短链、`gcid_` 云歌单、Hi-Res 和 KGM／加密音源仍未实现。
+
+## Cookie 使用与验证
+
+通过 `POST /api/v1/credentials` 提交 `source=kugou`、`kind=cookie`、`auth_profile=web_cookie`、`secret={"cookie":"<浏览器 Cookie>"}`。新建启用账号会自动选中；再次启用已停用账号时，通过 `PUT /api/v1/credential-defaults/kugou` 提交 credential_id 与新的 secret。账号切换会停用原账号并清除其 Cookie；已受理下载仍绑定原账号，原账号不可用时明确失败，不改用新账号。详见[默认平台凭证](../../../docs/design/cpp20-refactor/backend-service/api-contract.md#111-默认平台凭证)。
+
+Cookie 需包含 `KugooID` 与 `t`（支持官网 `KuGoo` 嵌套字段），以及 `kg_mid`／`kg_dfid`（或网页的 `mid`／`dfid` 字段）。缺少或冲突的登录字段明确失败。Cookie 仅进入 HTTPS songinfo 请求的秘密请求头；该官方 GET 协议还要求在签名参数中包含 token，因此两次请求均禁止重定向，不记录请求 URL、Cookie 或上游正文。目录与音频 CDN 不携带登录 Cookie。
+
+2026-10-24 使用用户提供的 Cookie 实测：林俊杰《江南》《美人鱼》的 `pay` 三项均为 1，匿名解析／下载返回 `CREDENTIALS_REQUIRED`，Cookie 模式返回试听，默认整曲请求为 `PREVIEW_REJECTED`。允许试听后，代理 Range 读取各 65,536 字节成功；试听下载因 MP3 实际帧数少于头部声明返回 `AUDIO_INVALID`，未放宽校验。贝瓦儿歌《两只老虎》在匿名和 Cookie 模式下均完成整曲代理读取、下载和文件回读，产物均为 2,000,980 字节／125,022 ms，SHA-256 相同。此结果验证 Cookie 链路和权限限制，**未验证 VIP 整曲授权成功，也不能推断账号会员等级**。
+
+Windows MSVC Debug 构建通过；平台单元测试 235 通过、4 个在线门控跳过，11,649 个断言通过；酷狗及账号集成测试 32 项、1,748 个断言通过，覆盖启用、切换、停用、秘密更新、排队任务重启与 CDN／日志脱敏。详细证据见[本次验收记录](../../../docs/research/kugou-acceptance.md#cookie-取流与-vip-样本协议包-0118)。未进行 Linux／macOS 或会员高品质整曲验收。
+
+```powershell
+python packaging/e2e/kugou_cookie_audio_e2e.py --binary <music-service.exe> --cookie-file <本地秘密文件> --report <结果.json>
+```
+
+脚本使用独立临时服务，只输出歌曲、错误码和音频校验证据，不输出 Cookie、账号标识或临时音源 URL。报告明确保留权限／试听及音频结构失败，不把脚本执行完成视为 VIP 整曲下载成功。
 
 能力已实现不等于各档位均已成功下载；当前构建和样本验证结果单列在[酷狗验收记录](../../../docs/research/kugou-acceptance.md)。
 

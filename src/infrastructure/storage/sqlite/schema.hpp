@@ -7,7 +7,7 @@
 
 namespace music_service::infrastructure::storage::sqlite {
 
-inline constexpr std::uint32_t current_schema_version = 4;
+inline constexpr std::uint32_t current_schema_version = 7;
 
 // Initializes an empty database atomically. An existing database must have exactly
 // this build's schema and checksum; no version upgrade or data conversion is performed.

@@ -40,12 +40,12 @@ def run(service, cookie_file, report):
     check(status != 200 and missing["meta"]["source_results"][0]["error"]["code"] == "CREDENTIALS_REQUIRED", "anonymous search reports login requirement")
     invalid = api.json("POST", "/api/v1/credentials", {
         "source": "qq", "kind": "cookie", "auth_profile": "web_cookie", "secret": {"cookie": "uin=12345; qqmusic_key=synthetic-invalid"}, "label": "invalid test"}, expect=(201,))[2]["credential_id"]
-    check(api.json("POST", f"/api/v1/credentials/{invalid}/verify", {})[2]["result"] == "invalid", "invalid Cookie is rejected")
+    check(api.wait_credential(invalid)["login_status"] == "invalid", "invalid Cookie is rejected")
     credential = api.json("POST", "/api/v1/credentials", {
         "source": "qq", "kind": "cookie", "auth_profile": "web_cookie", "secret": {"cookie": cookie_file.read_text(encoding="utf-8").strip()},
         "label": "QQ acceptance"}, expect=(201,))[2]["credential_id"]
-    verified = api.json("POST", f"/api/v1/credentials/{credential}/verify", {})[2]
-    check(verified["result"] == "valid", "QQ cookie verifies")
+    verified = api.wait_credential(credential)
+    check(verified["login_status"] == "valid", "QQ cookie verifies")
     api.json("PUT", "/api/v1/credential-defaults/qq", {"credential_id": credential})
     report["credential"] = "valid"
     report["search"] = {}

@@ -18,7 +18,10 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
+#include <barrier>
 #include <functional>
+#include <deque>
+#include <thread>
 #include <set>
 #include <string>
 #include <utility>
@@ -93,6 +96,21 @@ public:
 private:
     std::function<void()> hook_;
     const ports::CredentialVerification& verdict_;
+};
+
+class FailingSecretRemoval final : public ports::SecretStore {
+public:
+    explicit FailingSecretRemoval(std::shared_ptr<ports::SecretStore> inner) : inner_(std::move(inner)) {}
+    bool fail{true};
+    domain::Result<std::string> put(const ports::SecretBytes& bytes) override { return inner_->put(bytes); }
+    domain::Result<ports::SecretBytes> get(std::string_view ref) override { return inner_->get(ref); }
+    domain::Result<std::vector<std::string>> list() override { return inner_->list(); }
+    domain::Result<void> remove(std::string_view ref) override {
+        if (fail) return domain::Error{ErrorCode::storage_unavailable, "simulated removal failure", true, {}};
+        return inner_->remove(ref);
+    }
+private:
+    std::shared_ptr<ports::SecretStore> inner_;
 };
 
 struct Accounts {
@@ -348,8 +366,8 @@ TEST_CASE("cookie credentials are checked against registered auth profiles", "[a
     CHECK(created.label == "主账号");
     CHECK(created.status == ports::CredentialStatus::active);
     CHECK(a.stored_secrets() == 1);
-    // Creating never selects a default.
-    CHECK_FALSE(unwrap(a.credentials->get_default(prn, "aud")).credential_id);
+    CHECK(created.enabled);
+    CHECK(unwrap(a.credentials->get_default(prn, "aud")).credential_id == created.id);
 }
 
 TEST_CASE("updates commit the new secret before removing the old one", "[accounts]") {
@@ -396,14 +414,13 @@ TEST_CASE("verification results belong to the version that was checked", "[accou
     Accounts a{"verify"};
     const auto prn = a.principal();
     const auto good = a.cookie(prn, "aud", "good");
-    const auto bad = a.cookie(prn, "aud", "bad");
-
     const auto valid = unwrap(a.credentials->verify(prn, good.id, context()));
     CHECK(valid.verification.status == ports::VerificationStatus::valid);
     CHECK(valid.credential.last_verify_result == ports::VerifyOutcome::valid);
     CHECK(valid.credential.last_verified_at == a.clock->now());
     CHECK(valid.credential.version == good.version); // verification is not a new version
 
+    const auto bad = a.cookie(prn, "aud", "bad");
     const auto invalid = unwrap(a.credentials->verify(prn, bad.id, context()));
     CHECK(invalid.credential.status == ports::CredentialStatus::invalid);
     // A new secret clears the old verdict.
@@ -413,7 +430,9 @@ TEST_CASE("verification results belong to the version that was checked", "[accou
 
     // No verifier bound: unsupported, not guessed.
     const auto combo = a.cookie(prn, "both", "x=1");
-    CHECK(a.credentials->verify(prn, combo.id, context()).error().code == ErrorCode::capability_unsupported);
+    const auto unsupported = unwrap(a.credentials->verify(prn, combo.id, context()));
+    CHECK(unsupported.credential.last_verify_result == ports::VerifyOutcome::unknown);
+    CHECK(unsupported.credential.verification_error == "CAPABILITY_UNSUPPORTED");
 
     // A39: the credential changes while a verification is in flight; the late result
     // is not attached to the new version.
@@ -452,14 +471,14 @@ TEST_CASE("verification evidence is stored with the checked version", "[accounts
     CHECK(stored.expires_at == expiry);
     CHECK(stored.scopes == scopes);
 
-    // A verification without evidence keeps what is known.
+    // Cookie 再次查询失败时，会员和 scope 证据不能继续沿用旧结果。
     a.hooked_verdict = {ports::VerificationStatus::unknown, {}, {}, {}};
     const auto unknown = unwrap(a.credentials->verify(prn, cred.id, context()));
     CHECK(unknown.credential.expires_at == expiry);
-    CHECK(unknown.credential.scopes == scopes);
+    CHECK(unknown.credential.scopes.empty());
 
     // A label change keeps the evidence; a new secret forgets it.
-    CHECK(unwrap(a.credentials->update(prn, cred.id, {{}, std::string{"renamed"}, {}})).scopes == scopes);
+    CHECK(unwrap(a.credentials->update(prn, cred.id, {{}, std::string{"renamed"}, {}})).scopes.empty());
     const auto replaced = unwrap(a.credentials->update(prn, cred.id, {ports::SecretBytes{"v=2"}, {}, {}}));
     CHECK_FALSE(replaced.expires_at);
     CHECK(replaced.scopes.empty());
@@ -507,7 +526,7 @@ TEST_CASE("invalid or expired credentials are not selected or leased", "[account
           domain::AccountMode::anonymous);
 
     // A new secret returns it to active and the accepted binding leases again.
-    (void)unwrap(a.credentials->update(prn, bad.id, {ports::SecretBytes{"good"}, {}, {}}));
+    (void)unwrap(a.credentials->set_default(prn, "aud", bad.id, ports::SecretBytes{"good"}));
     CHECK(unwrap(a.credentials->lease(bound)).secret->reveal() == "good");
 
     // Past its expiry the credential stops leasing, also for an accepted binding.
@@ -536,11 +555,11 @@ TEST_CASE("default selection is owned, versioned and survives restarts", "[accou
     const auto foreign = a.cookie(other, "aud", "c=1");
     const auto wrong_source = a.cookie(prn, "both", "d=1");
 
-    CHECK(unwrap(a.credentials->get_default(prn, "aud")).selection_version == 0);
-    CHECK(unwrap(a.credentials->set_default(prn, "aud", first.id)).selection_version == 1);
-    CHECK(unwrap(a.credentials->set_default(prn, "aud", first.id)).selection_version == 1); // no-op
-    CHECK(unwrap(a.credentials->set_default(prn, "aud", second.id)).selection_version == 2);
-    const auto back = unwrap(a.credentials->set_default(prn, "aud", first.id)); // A -> B -> A
+    CHECK(unwrap(a.credentials->get_default(prn, "aud")).selection_version == 2);
+    CHECK(unwrap(a.credentials->set_default(prn, "aud", second.id)).selection_version == 2); // no-op
+    CHECK_FALSE(unwrap(a.credentials->get(prn, first.id)).enabled);
+    CHECK(a.credentials->set_default(prn, "aud", first.id).error().code == ErrorCode::validation_failed);
+    const auto back = unwrap(a.credentials->set_default(prn, "aud", first.id, ports::SecretBytes{"a=2"})); // A -> B -> A
     CHECK(back.selection_version == 3);
     CHECK(back.credential_id == first.id);
 
@@ -549,7 +568,7 @@ TEST_CASE("default selection is owned, versioned and survives restarts", "[accou
     CHECK(a.credentials->set_default(prn, "ghost", first.id).error().code == ErrorCode::unknown_provider);
     CHECK(a.credentials->get_default(prn, "Bad Source").error().code == ErrorCode::validation_failed);
     // Other owners have their own selection.
-    CHECK_FALSE(unwrap(a.credentials->get_default(other, "aud")).credential_id);
+    CHECK(unwrap(a.credentials->get_default(other, "aud")).credential_id == foreign.id);
 
     a.reopen();
     CHECK(unwrap(a.credentials->get_default(prn, "aud")).credential_id == first.id);
@@ -561,7 +580,7 @@ TEST_CASE("default selection is owned, versioned and survives restarts", "[accou
     CHECK(cleared.selection_version == 4);
     CHECK(a.credentials->set_default(prn, "aud", first.id).error().code == ErrorCode::validation_failed);
 
-    (void)unwrap(a.credentials->set_default(prn, "aud", second.id));
+    (void)unwrap(a.credentials->set_default(prn, "aud", second.id, ports::SecretBytes{"b=2"}));
     CHECK(unwrap(a.credentials->clear_default(prn, "aud")).selection_version == 6);
     CHECK(unwrap(a.credentials->clear_default(prn, "aud")).selection_version == 6); // already empty
     // Clearing works for sources that are no longer registered.
@@ -620,12 +639,10 @@ TEST_CASE("leases follow the fixed binding, never another account", "[accounts]"
     const auto prn = a.principal();
     const auto other = a.principal("other");
     const auto first = a.cookie(prn, "aud", "a=1");
-    const auto second = a.cookie(prn, "aud", "b=1");
-
-    // A38: two version-1 credentials of one principal and source are different identities.
-    (void)unwrap(a.credentials->set_default(prn, "aud", first.id));
     const auto bound = unwrap(a.credentials->resolve_binding(prn, "aud", "resolve_audio", std::nullopt)).binding;
     const auto lease_first = unwrap(a.credentials->lease(bound));
+    // A38: two version-1 credentials of one principal and source are different identities.
+    const auto second = a.cookie(prn, "aud", "b=1");
     const auto lease_second =
         unwrap(a.credentials->lease(unwrap(a.credentials->resolve_binding(prn, "aud", "resolve_audio", second.id))
                                         .binding));
@@ -635,14 +652,15 @@ TEST_CASE("leases follow the fixed binding, never another account", "[accounts]"
     CHECK(lease_first.identity.canonical() != lease_second.identity.canonical());
     CHECK(lease_first.secret->reveal() == "a=1");
 
-    // A39 / A47: switching the default does not move an accepted binding.
+    // Switching disables the old account; accepted bindings never move to another account.
     (void)unwrap(a.credentials->set_default(prn, "aud", second.id));
-    CHECK(unwrap(a.credentials->lease(bound)).secret->reveal() == "a=1");
+    CHECK(a.credentials->lease(bound).error().code == ErrorCode::credentials_required);
+    CHECK(a.credentials->update(prn, first.id, {ports::SecretBytes{"a=2"}, {}, {}}).error().code == ErrorCode::validation_failed);
 
-    // The binding leases the latest version of the same credential.
-    (void)unwrap(a.credentials->update(prn, first.id, {ports::SecretBytes{"a=2"}, {}, {}}));
+    // Reactivation requires a fresh secret; the fixed binding can lease that new version.
+    (void)unwrap(a.credentials->set_default(prn, "aud", first.id, ports::SecretBytes{"a=2"}));
     const auto renewed = unwrap(a.credentials->lease(bound));
-    CHECK(renewed.identity.versions().credential_version == 2);
+    CHECK(renewed.identity.versions().credential_version == 3);
     CHECK(renewed.secret->reveal() == "a=2");
     CHECK_FALSE(renewed.identity == lease_first.identity);
 
@@ -673,4 +691,321 @@ TEST_CASE("orphaned secrets are reclaimed", "[accounts]") {
     CHECK(a.secrets->get(stray).error().code == ErrorCode::not_found);
     CHECK(unwrap(a.secrets->get(*kept.secret_ref)).reveal() == "a=1");
     CHECK(unwrap(a.credentials->reclaim_orphan_secrets()) == 0);
+}
+
+TEST_CASE("disabled accounts keep metadata but no secrets and require fresh activation", "[accounts][activation]") {
+    Accounts a{"activation"};
+    const auto owner = a.principal();
+    const auto first = a.cookie(owner, "aud", "first=1");
+    const auto second = unwrap(a.credentials->create({owner, "aud", "备用账号", ports::CredentialKind::cookie,
+        "web_cookie", {}, {}, false}));
+    CHECK_FALSE(second.enabled);
+    CHECK_FALSE(second.secret_ref);
+    CHECK(a.stored_secrets() == 1);
+    CHECK(unwrap(a.credentials->get_default(owner, "aud")).credential_id == first.id);
+    CHECK_FALSE(a.credentials->create({owner, "aud", "", ports::CredentialKind::cookie,
+        "web_cookie", ports::SecretBytes{"discarded=1"}, {}, false}));
+    CHECK(a.credentials->set_default(owner, "aud", second.id).error().code == ErrorCode::validation_failed);
+    CHECK_FALSE(a.credentials->set_default(owner, "aud", second.id, ports::SecretBytes{"bad\n"}));
+    CHECK(unwrap(a.credentials->get(owner, first.id)).enabled);
+    CHECK(a.credentials->disable(a.principal("stranger"), first.id).error().code == ErrorCode::not_found);
+
+    REQUIRE(a.credentials->set_default(owner, "aud", second.id, ports::SecretBytes{"second=1"}));
+    const auto disabled = unwrap(a.credentials->get(owner, first.id));
+    CHECK_FALSE(disabled.enabled);
+    CHECK_FALSE(disabled.secret_ref);
+    CHECK_FALSE(disabled.secret_cleanup_pending);
+    CHECK(a.secrets->get(*first.secret_ref).error().code == ErrorCode::not_found);
+    CHECK(a.stored_secrets() == 1);
+    CHECK(a.credentials->resolve_binding(owner, "aud", "resolve_audio", first.id).error().code == ErrorCode::validation_failed);
+    CHECK_FALSE(a.credentials->verify(owner, first.id, context()));
+    CHECK_FALSE(a.credentials->update(owner, first.id, {ports::SecretBytes{"old=2"}, {}, {}}));
+    CHECK(unwrap(a.credentials->update(owner, first.id, {{}, std::string{"已停用"}, {}})).label == "已停用");
+    const auto selection = unwrap(a.credentials->get_default(owner, "aud"));
+    REQUIRE(a.credentials->disable(owner, first.id)); // 不影响另一个已启用账号。
+    CHECK(unwrap(a.credentials->get_default(owner, "aud")).selection_version == selection.selection_version);
+
+    const auto stopped = unwrap(a.credentials->disable(owner, second.id));
+    CHECK_FALSE(stopped.enabled);
+    CHECK(unwrap(a.credentials->disable(owner, second.id)).version == stopped.version);
+    CHECK_FALSE(unwrap(a.credentials->get_default(owner, "aud")).credential_id);
+    CHECK(a.stored_secrets() == 0);
+    CHECK(a.credentials->resolve_binding(owner, "aud", "resolve_audio", {}).error().code == ErrorCode::credentials_required);
+    CHECK(unwrap(a.credentials->clear_default(owner, "aud")).selection_version == selection.selection_version + 1);
+    a.reopen();
+    CHECK_FALSE(unwrap(a.credentials->get(owner, first.id)).enabled);
+    CHECK_FALSE(unwrap(a.credentials->get(owner, second.id)).enabled);
+    CHECK(a.credentials->set_default(owner, "aud", second.id).error().code == ErrorCode::validation_failed);
+    REQUIRE(a.credentials->set_default(owner, "aud", second.id, ports::SecretBytes{"second=2"}));
+    REQUIRE(a.credentials->clear_default(owner, "aud"));
+    CHECK(a.stored_secrets() == 0);
+}
+
+TEST_CASE("failed secret cleanup is durable visible and retried without reactivation", "[accounts][activation]") {
+    Accounts a{"activation-cleanup"};
+    const auto owner = a.principal();
+    const auto saved = a.cookie(owner, "aud", "session=1");
+    const auto binding = unwrap(a.credentials->resolve_binding(owner, "aud", "resolve_audio", {})).binding;
+    auto store = std::make_shared<FailingSecretRemoval>(a.secrets);
+    a.credentials = std::make_unique<CredentialService>(a.credential_repo, store, a.registry, a.clock);
+    CHECK(a.credentials->disable(owner, saved.id).error().code == ErrorCode::storage_unavailable);
+    auto disabled = unwrap(a.credentials->get(owner, saved.id));
+    CHECK_FALSE(disabled.enabled);
+    CHECK_FALSE(disabled.secret_ref);
+    CHECK(disabled.secret_cleanup_pending);
+    CHECK(a.credentials->lease(binding).error().code == ErrorCode::credentials_required);
+    CHECK_FALSE(unwrap(a.credentials->get_default(owner, "aud")).credential_id);
+    CHECK(a.stored_secrets() == 1);
+    CHECK(a.credentials->set_default(owner, "aud", saved.id, ports::SecretBytes{"new=1"}).error().code == ErrorCode::storage_unavailable);
+    CHECK(a.stored_secrets() == 1); // 清理失败时不写入新 Cookie。
+    SECTION("idempotent retry") {
+        store->fail = false;
+        disabled = unwrap(a.credentials->disable(owner, saved.id));
+    }
+    SECTION("restart cleanup") {
+        a.reopen();
+        CHECK(unwrap(a.credentials->get(owner, saved.id)).secret_cleanup_pending);
+        CHECK(unwrap(a.credentials->reclaim_orphan_secrets()) == 1);
+        disabled = unwrap(a.credentials->get(owner, saved.id));
+    }
+    CHECK_FALSE(disabled.enabled);
+    CHECK_FALSE(disabled.secret_cleanup_pending);
+    CHECK(a.stored_secrets() == 0);
+    CHECK(unwrap(a.credential_repo->pending_secret_deletions({}, {})).empty());
+}
+
+TEST_CASE("activation transaction rolls back the old account and cleanup queue on failure", "[accounts][activation]") {
+    Accounts a{"activation-rollback"};
+    const auto owner = a.principal();
+    const auto first = a.cookie(owner, "aud", "first=1");
+    const auto second = unwrap(a.credentials->create({owner, "aud", "second", ports::CredentialKind::cookie,
+        "web_cookie", {}, {}, false}));
+    REQUIRE(a.database->write([](Connection& db) {
+        return db.exec("CREATE TRIGGER fail_enable BEFORE UPDATE OF enabled ON credentials WHEN NEW.enabled = 1 "
+            "BEGIN SELECT RAISE(ABORT, 'activation failure'); END");
+    }));
+    CHECK_FALSE(a.credentials->set_default(owner, "aud", second.id, ports::SecretBytes{"second=1"}));
+    CHECK(unwrap(a.credentials->get(owner, first.id)).enabled);
+    CHECK(unwrap(a.credentials->get(owner, first.id)).version == first.version);
+    CHECK_FALSE(unwrap(a.credentials->get(owner, second.id)).enabled);
+    CHECK(unwrap(a.credentials->get_default(owner, "aud")).credential_id == first.id);
+    CHECK(unwrap(a.credential_repo->pending_secret_deletions({}, {})).empty());
+    CHECK(a.stored_secrets() == 1);
+    CHECK(unwrap(a.secrets->get(*first.secret_ref)).reveal() == "first=1");
+}
+
+TEST_CASE("concurrent account switches leave one selected account and one secret", "[accounts][activation]") {
+    Accounts a{"activation-concurrent"};
+    const auto owner = a.principal();
+    const auto first = unwrap(a.credentials->create({owner, "aud", "first", ports::CredentialKind::cookie,
+        "web_cookie", {}, {}, false}));
+    const auto second = unwrap(a.credentials->create({owner, "aud", "second", ports::CredentialKind::cookie,
+        "web_cookie", {}, {}, false}));
+    for (int round = 0; round < 8; ++round) {
+        REQUIRE(a.credentials->clear_default(owner, "aud"));
+        std::barrier gate{3};
+        std::optional<domain::Result<ports::DefaultSelection>> results[2];
+        std::jthread one{[&] { gate.arrive_and_wait(); results[0] = a.credentials->set_default(owner, "aud", first.id, ports::SecretBytes{"a=1"}); }};
+        std::jthread two{[&] { gate.arrive_and_wait(); results[1] = a.credentials->set_default(owner, "aud", second.id, ports::SecretBytes{"b=1"}); }};
+        gate.arrive_and_wait();
+        one.join(); two.join();
+        REQUIRE(results[0]->has_value()); REQUIRE(results[1]->has_value());
+        const auto selected = unwrap(a.credentials->get_default(owner, "aud"));
+        REQUIRE(selected.credential_id);
+        const auto records = unwrap(a.credentials->list(owner, "aud"));
+        CHECK(std::count_if(records.begin(), records.end(), [](const auto& record) { return record.enabled; }) == 1);
+        for (const auto& record : records) {
+            CHECK(record.enabled == (record.id == *selected.credential_id));
+            CHECK(record.secret_ref.has_value() == record.enabled);
+            CHECK_FALSE(record.secret_cleanup_pending);
+        }
+        CHECK(a.stored_secrets() == 1);
+    }
+}
+
+namespace {
+class DeferredVerificationExecutor final : public ports::WorkExecutor {
+public:
+    std::deque<Work> work;
+    bool reject{false};
+    domain::Result<void> submit(Work fn) override {
+        if (reject) return domain::Error{ErrorCode::service_busy, "test queue full", true, {}};
+        work.push_back(std::move(fn)); return domain::ok();
+    }
+    void next() {
+        REQUIRE_FALSE(work.empty());
+        auto fn = std::move(work.front()); work.pop_front(); fn({});
+    }
+};
+std::shared_ptr<DeferredVerificationExecutor> enable_automatic_verification(Accounts& a,
+    std::chrono::milliseconds budget = std::chrono::seconds(15)) {
+    auto executor = std::make_shared<DeferredVerificationExecutor>();
+    a.credentials = std::make_unique<CredentialService>(a.credential_repo, a.secrets, a.registry, a.clock, executor, budget);
+    return executor;
+}
+}
+
+TEST_CASE("cookie save automatically schedules and persists login and independent membership", "[accounts][membership]") {
+    Accounts a{"automatic-membership"};
+    auto executor = enable_automatic_verification(a);
+    auto owner = a.principal();
+    const auto expiry = a.clock->now() + std::chrono::hours(48);
+    a.hooked_verdict.membership = {"active", "svip", "测试超级会员", expiry, {}, {}};
+    auto pending = a.cookie(owner, "hooked", "session=1");
+    CHECK(pending.verification_state == "pending");
+    REQUIRE(pending.verification_id);
+    CHECK_FALSE(pending.last_verify_result);
+    CHECK(pending.membership.status == "unknown");
+    CHECK(executor->work.size() == 1);
+    CHECK(unwrap(a.credentials->schedule_verification(owner, pending.id)).verification_id == pending.verification_id);
+    CHECK(executor->work.size() == 1);
+    executor->next();
+    auto done = unwrap(a.credentials->get(owner, pending.id));
+    CHECK(done.verification_state == "complete");
+    CHECK(done.last_verify_result == ports::VerifyOutcome::valid);
+    CHECK(done.membership.type == "svip");
+    CHECK(done.membership.expires_at == expiry);
+    CHECK(done.membership.checked_at == a.clock->now());
+    CHECK_FALSE(done.expires_at); // 会员有效期不是 Cookie 有效期。
+    a.reopen();
+    auto persisted = unwrap(a.credentials->get(owner, pending.id));
+    CHECK(persisted.membership.expires_at == expiry);
+    CHECK(persisted.verification_id == pending.verification_id);
+    executor = enable_automatic_verification(a);
+    a.verify_hook = [] { throw std::runtime_error{"private response must never be returned"}; };
+    auto again = unwrap(a.credentials->schedule_verification(owner, pending.id));
+    CHECK(again.membership.status == "unknown");
+    executor->next();
+    done = unwrap(a.credentials->get(owner, pending.id));
+    CHECK(done.last_verify_result == ports::VerifyOutcome::unknown);
+    CHECK(done.verification_error == "INTERNAL_ERROR");
+    CHECK_FALSE(done.membership.expires_at);
+}
+
+TEST_CASE("cookie verification handles replacement cancellation and revocation races", "[accounts][membership]") {
+    Accounts a{"membership-races"};
+    auto executor = enable_automatic_verification(a);
+    const auto owner = a.principal();
+    auto first = a.cookie(owner, "hooked", "session=old");
+    bool changed = false;
+    a.verify_hook = [&] {
+        if (!std::exchange(changed, true))
+            REQUIRE(a.credentials->update(owner, first.id, {ports::SecretBytes{"session=new"}, {}, {}}));
+    };
+    executor->next();
+    auto current = unwrap(a.credentials->get(owner, first.id));
+    CHECK(current.version == 2);
+    CHECK(current.verification_state == "pending");
+    CHECK(current.verification_id != first.verification_id);
+    executor->next();
+    CHECK(unwrap(a.credentials->get(owner, first.id)).last_verify_result == ports::VerifyOutcome::valid);
+    auto pending = unwrap(a.credentials->schedule_verification(owner, first.id));
+    CHECK(a.credentials->cancel_verification("another-owner", first.id, *pending.verification_id).error().code == ErrorCode::not_found);
+    auto canceled = unwrap(a.credentials->cancel_verification(owner, first.id, *pending.verification_id));
+    CHECK(canceled.last_verify_result == ports::VerifyOutcome::unknown);
+    CHECK(canceled.verification_error == "CANCELED");
+    CHECK(unwrap(a.credentials->cancel_verification(owner, first.id, *pending.verification_id)).verification_error == "CANCELED");
+    auto newer = unwrap(a.credentials->schedule_verification(owner, first.id));
+    CHECK(a.credentials->cancel_verification(owner, first.id, *pending.verification_id).error().code == ErrorCode::version_conflict);
+    executor->next(); // 已取消的旧队列不能完成新版校验。
+    CHECK(unwrap(a.credentials->get(owner, first.id)).verification_id == newer.verification_id);
+    CHECK(unwrap(a.credentials->get(owner, first.id)).verification_state == "pending");
+    executor->next();
+    REQUIRE(a.credentials->schedule_verification(owner, first.id));
+    REQUIRE(a.credentials->revoke(owner, first.id));
+    executor->next();
+    auto revoked = unwrap(a.credentials->get(owner, first.id));
+    CHECK(revoked.status == ports::CredentialStatus::revoked);
+    CHECK(revoked.membership.status == "unknown");
+}
+
+TEST_CASE("automatic credential checks stay bounded and unknown on unsupported or overloaded platforms", "[accounts][membership]") {
+    Accounts a{"membership-bounds"};
+    auto executor = enable_automatic_verification(a);
+    const auto owner = a.principal();
+    for (int i = 0; i < 4; ++i) CHECK(a.cookie(owner, "aud", "good").verification_state == "pending");
+    const auto overloaded = a.cookie(owner, "aud", "good");
+    CHECK(overloaded.verification_state == "complete");
+    CHECK(overloaded.verification_error == "SERVICE_BUSY");
+    CHECK(overloaded.last_verify_result == ports::VerifyOutcome::unknown);
+    CHECK(executor->work.size() == 4);
+    const auto another = a.principal("another");
+    const auto unsupported = a.cookie(another, "both", "session=1");
+    while (!executor->work.empty()) executor->next();
+    CHECK(unwrap(a.credentials->get(another, unsupported.id)).verification_error == "CAPABILITY_UNSUPPORTED");
+    executor->reject = true;
+    const auto full = a.cookie(owner, "aud", "good");
+    CHECK(full.verification_error == "SERVICE_BUSY");
+    CHECK(full.membership.status == "unknown");
+}
+
+TEST_CASE("switching or disabling cancels old verification without overwriting the new account", "[accounts][membership][activation]") {
+    Accounts a{"activation-verification"};
+    auto executor = enable_automatic_verification(a);
+    const auto owner = a.principal();
+    const auto first = a.cookie(owner, "hooked", "first=1");
+    const auto second = a.cookie(owner, "hooked", "second=1");
+    bool ran = false;
+    a.verify_hook = [&] { ran = true; };
+    executor->next();
+    CHECK_FALSE(ran);
+    CHECK(unwrap(a.credentials->get(owner, first.id)).verification_error == "ACCOUNT_DISABLED");
+    CHECK(unwrap(a.credentials->get(owner, second.id)).verification_state == "pending");
+    executor->next();
+    CHECK(ran);
+    REQUIRE(a.credentials->schedule_verification(owner, second.id));
+    a.verify_hook = [&] { REQUIRE(a.credentials->disable(owner, second.id)); };
+    executor->next();
+    const auto stopped = unwrap(a.credentials->get(owner, second.id));
+    CHECK_FALSE(stopped.enabled);
+    CHECK(stopped.last_verify_result == ports::VerifyOutcome::unknown);
+    CHECK(stopped.membership.status == "unknown");
+    CHECK(stopped.verification_error == "ACCOUNT_DISABLED");
+    CHECK(a.stored_secrets() == 0);
+}
+
+TEST_CASE("queued credential deadline and interrupted restart never retain stale success", "[accounts][membership]") {
+    Accounts a{"membership-recovery"};
+    auto executor = enable_automatic_verification(a, std::chrono::milliseconds(1));
+    const auto owner = a.principal();
+    const auto queued = a.cookie(owner, "hooked", "session=1");
+    bool ran = false;
+    a.verify_hook = [&] { ran = true; };
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    executor->next();
+    CHECK_FALSE(ran);
+    CHECK(unwrap(a.credentials->get(owner, queued.id)).verification_error == "REQUEST_DEADLINE_EXCEEDED");
+    a.credentials.reset();
+    a.credentials = std::make_unique<CredentialService>(a.credential_repo, a.secrets, a.registry, a.clock);
+    auto interrupted = unwrap(a.credential_repo->begin_verification(owner, queued.id, 1));
+    REQUIRE(interrupted.verification_state == "pending");
+    a.reopen();
+    REQUIRE(a.credential_repo->recover_verifications());
+    auto recovered = unwrap(a.credentials->get(owner, queued.id));
+    CHECK(recovered.verification_state == "complete");
+    CHECK(recovered.last_verify_result == ports::VerifyOutcome::unknown);
+    CHECK(recovered.verification_error == "INTERRUPTED");
+    CHECK(recovered.membership.status == "unknown");
+}
+
+TEST_CASE("credential persistence failure is visible as unknown and can be retried", "[accounts][membership]") {
+    Accounts a{"membership-storage-failure"};
+    auto executor = enable_automatic_verification(a);
+    const auto owner = a.principal();
+    const auto record = a.cookie(owner, "hooked", "session=1");
+    REQUIRE(a.database->write([](Connection& db) {
+        return db.exec("CREATE TRIGGER fail_verify BEFORE UPDATE OF last_verified_at ON credentials "
+            "BEGIN SELECT RAISE(ABORT, 'test storage failure'); END");
+    }));
+    CHECK_THROWS(executor->next());
+    auto failed = unwrap(a.credentials->get(owner, record.id));
+    CHECK(failed.verification_state == "complete");
+    CHECK(failed.verification_error == "STORAGE_UNAVAILABLE");
+    CHECK(failed.last_verify_result == ports::VerifyOutcome::unknown);
+    CHECK(failed.membership.status == "unknown");
+    CHECK(unwrap(a.credentials->list(owner, {})).at(0).verification_error == "STORAGE_UNAVAILABLE");
+    REQUIRE(a.database->write([](Connection& db) { return db.exec("DROP TRIGGER fail_verify"); }));
+    REQUIRE(a.credentials->schedule_verification(owner, record.id));
+    executor->next();
+    CHECK(unwrap(a.credentials->get(owner, record.id)).last_verify_result == ports::VerifyOutcome::valid);
 }

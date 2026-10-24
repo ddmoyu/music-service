@@ -65,6 +65,7 @@ Error credentials_required(std::string message) {
 // renewed account can become usable again.
 std::optional<std::string> unusable_reason(const ports::CredentialRecord& record,
                                            std::chrono::system_clock::time_point now) {
+    if (!record.enabled) return "is disabled";
     if (record.refresh_state == "reauthorization_required") return "requires OAuth authorization again";
     switch (record.status) {
     case ports::CredentialStatus::revoked:
@@ -97,13 +98,6 @@ ports::VerifyOutcome to_outcome(ports::VerificationStatus status) {
 
 } // namespace
 
-CredentialService::CredentialService(std::shared_ptr<ports::CredentialRepository> credentials,
-                                     std::shared_ptr<ports::SecretStore> secrets,
-                                     std::shared_ptr<const ports::ProviderDirectory> providers,
-                                     std::shared_ptr<const ports::Clock> clock)
-    : credentials_(std::move(credentials)), secrets_(std::move(secrets)),
-      providers_(std::move(providers)), clock_(std::move(clock)) {}
-
 domain::Result<ports::CredentialRecord> CredentialService::create(NewCredentialRequest request) {
     if (auto profile = providers_->describe_auth_profile(request.source, request.auth_profile); !profile) {
         if (profile.error().code == ErrorCode::capability_unsupported) {
@@ -113,38 +107,48 @@ domain::Result<ports::CredentialRecord> CredentialService::create(NewCredentialR
     } else if (profile->kind != request.kind) {
         return Error::validation("kind", "does not match the auth profile");
     }
-    if (auto valid = check_secret(request.kind, request.secret); !valid) {
-        return valid.error();
-    }
-    if (auto valid = providers_->validate_secret(request.source, request.auth_profile, request.kind, request.secret); !valid)
-        return valid.error();
+    if (request.enabled) {
+        if (auto valid = check_secret(request.kind, request.secret); !valid) return valid.error();
+        if (auto valid = providers_->validate_secret(request.source, request.auth_profile, request.kind, request.secret); !valid)
+            return valid.error();
+    } else if (!request.secret.empty()) return Error::validation("secret", "must be absent for a disabled account");
     if (auto valid = check_label(request.label); !valid) {
         return valid.error();
     }
 
-    auto ref = secrets_->put(request.secret);
-    if (!ref) {
-        return std::move(ref).error();
+    if (auto cleaned = cleanup_secrets(request.owner_id, request.source); !cleaned) return cleaned.error();
+    std::string ref;
+    if (request.enabled) {
+        auto saved = secrets_->put(request.secret);
+        if (!saved) return saved.error();
+        ref = *saved;
     }
     auto stored = credentials_->insert(ports::NewCredential{
         request.owner_id, request.source, request.label, std::string{ports::to_string(request.kind)},
-        request.auth_profile, ref.value(), request.expires_at});
+        request.auth_profile, ref, request.expires_at, {}, {}, 0, {}, request.enabled});
     if (!stored) {
         // Best effort; a leftover is reclaimed as an orphan.
-        (void)secrets_->remove(ref.value());
+        if (!ref.empty()) (void)secrets_->remove(ref);
         return std::move(stored).error();
     }
+    interrupt_inactive_verifications(request.owner_id, request.source);
+    if (auto cleaned = cleanup_secrets(request.owner_id, request.source); !cleaned) return cleaned.error();
+    if (stored->enabled && stored->kind == "cookie" && verification_) return schedule_verification(stored->owner_id, stored->id);
     return stored;
 }
 
 domain::Result<ports::CredentialRecord> CredentialService::get(const std::string& owner_id,
                                                                const std::string& id) {
-    return credentials_->get(owner_id, id);
+    auto record = credentials_->get(owner_id, id);
+    if (record) apply_verification_overlay(*record);
+    return record;
 }
 
 domain::Result<std::vector<ports::CredentialRecord>>
 CredentialService::list(const std::string& owner_id, const std::optional<std::string>& source) {
-    return credentials_->list(owner_id, source);
+    auto records = credentials_->list(owner_id, source);
+    if (records) for (auto& record : *records) apply_verification_overlay(record);
+    return records;
 }
 
 domain::Result<ports::CredentialRecord> CredentialService::update(const std::string& owner_id,
@@ -167,6 +171,7 @@ domain::Result<ports::CredentialRecord> CredentialService::update(const std::str
     }
     std::optional<std::string> new_ref;
     if (update.secret) {
+        if (!current->enabled) return Error::validation("secret", "enable the account with a new secret through credential-defaults");
         const auto kind = parse_kind(current->kind);
         if (!kind) {
             return Error{ErrorCode::internal, "stored credential kind is unknown", false, {}};
@@ -192,10 +197,10 @@ domain::Result<ports::CredentialRecord> CredentialService::update(const std::str
         }
         return std::move(replaced).error();
     }
-    if (replaced->previous_secret_ref) {
-        (void)secrets_->remove(*replaced->previous_secret_ref);
-    }
-    return std::move(replaced->credential);
+    if (auto cleaned = cleanup_secrets(owner_id, current->source); !cleaned) return cleaned.error();
+    if (replaced->credential.kind == "cookie" && verification_ && (new_ref || current->verification_state == "pending"))
+        return schedule_verification(owner_id, id);
+    return get(owner_id, id);
 }
 
 domain::Result<ports::CredentialRecord> CredentialService::revoke(const std::string& owner_id,
@@ -204,58 +209,100 @@ domain::Result<ports::CredentialRecord> CredentialService::revoke(const std::str
     if (!revoked) {
         return std::move(revoked).error();
     }
-    // The database no longer leases it; a failed removal leaves an orphan to reclaim.
-    if (revoked->previous_secret_ref) {
-        (void)secrets_->remove(*revoked->previous_secret_ref);
+    interrupt_verifications(owner_id, id);
+    if (auto cleaned = cleanup_secrets(owner_id, revoked->credential.source); !cleaned) return cleaned.error();
+    return get(owner_id, id);
+}
+
+domain::Result<ports::CredentialRecord> CredentialService::disable(const std::string& owner, const std::string& id) {
+    auto result = credentials_->disable(owner, id);
+    if (!result) return result.error();
+    interrupt_inactive_verifications(owner, result->source);
+    if (auto cleaned = cleanup_secrets(owner, result->source); !cleaned) return cleaned.error();
+    return get(owner, id);
+}
+
+domain::Result<void> CredentialService::cleanup_secrets(const std::optional<std::string>& owner,
+    const std::optional<std::string>& source) {
+    auto pending = credentials_->pending_secret_deletions(owner, source);
+    if (!pending) return pending.error();
+    for (const auto& ref : *pending) {
+        if (auto removed = secrets_->remove(ref); !removed)
+            return Error{ErrorCode::storage_unavailable, "account state saved; secret cleanup is pending, retry this operation", true, {}};
+        if (auto done = credentials_->finish_secret_deletion(ref); !done) return done.error();
     }
-    return std::move(revoked->credential);
+    auto remaining = credentials_->pending_secret_deletions(owner, source);
+    if (!remaining) return remaining.error();
+    if (!remaining->empty()) return Error{ErrorCode::service_busy, "secret cleanup is pending, retry this operation", true, {}};
+    return domain::ok();
 }
 
 domain::Result<VerifyResult> CredentialService::verify(const std::string& owner_id, const std::string& id,
-                                                       const ports::OperationContext& context) {
+    const ports::OperationContext& context, std::optional<std::uint64_t> expected_version,
+    std::optional<std::string> verification_id) {
     auto record = credentials_->get(owner_id, id);
     if (!record) {
         return std::move(record).error();
     }
-    if (record->status == ports::CredentialStatus::revoked || !record->secret_ref) {
-        return Error::validation("credential", "is revoked");
+    if (record->status == ports::CredentialStatus::revoked || !record->enabled || !record->secret_ref) {
+        return Error::validation("credential", "is revoked or disabled");
     }
-    const auto kind = parse_kind(record->kind);
-    if (!kind) {
-        return Error{ErrorCode::internal, "stored credential kind is unknown", false, {}};
-    }
-    auto verifier = providers_->require_verifier(record->source, record->auth_profile, *kind);
-    if (!verifier) {
-        return std::move(verifier).error();
-    }
-    auto source = domain::SourceId::parse(record->source);
-    if (!source) {
-        return std::move(source).error();
-    }
-    auto binding = domain::AccountBinding::make(owner_id, std::move(source).value(),
-                                                domain::AccountMode::user, record->auth_profile, id,
-                                                std::nullopt);
-    if (!binding) {
-        return std::move(binding).error();
-    }
-    auto identity = domain::AuthIdentityKey::make(std::move(binding).value(), {record->version, {}, {}, {}});
-    if (!identity) {
-        return std::move(identity).error();
-    }
-    auto secret = secrets_->get(*record->secret_ref);
-    if (!secret) {
-        return std::move(secret).error();
-    }
+    if ((expected_version && record->version != *expected_version) ||
+        (verification_id && (record->verification_id != verification_id || record->verification_state != "pending")))
+        return Error{ErrorCode::version_conflict, "credential changed before verification", true, {}};
+    auto perform = [&]() -> domain::Result<ports::CredentialVerification> {
+        if (context.stop.stop_requested()) return Error{ErrorCode::canceled, "verification canceled", false, {}};
+        if (context.expired(std::chrono::steady_clock::now()))
+            return Error{ErrorCode::deadline_exceeded, "verification deadline exceeded", true, {}};
+        const auto kind = parse_kind(record->kind);
+        if (!kind) {
+            return Error{ErrorCode::internal, "stored credential kind is unknown", false, {}};
+        }
+        auto verifier = providers_->require_verifier(record->source, record->auth_profile, *kind);
+        if (!verifier) {
+            return std::move(verifier).error();
+        }
+        auto source = domain::SourceId::parse(record->source);
+        if (!source) {
+            return std::move(source).error();
+        }
+        auto binding = domain::AccountBinding::make(owner_id, std::move(source).value(),
+                                                    domain::AccountMode::user, record->auth_profile, id,
+                                                    std::nullopt);
+        if (!binding) {
+            return std::move(binding).error();
+        }
+        auto identity = domain::AuthIdentityKey::make(std::move(binding).value(), {record->version, {}, {}, {}});
+        if (!identity) {
+            return std::move(identity).error();
+        }
+        auto secret = secrets_->get(*record->secret_ref);
+        if (!secret) {
+            return std::move(secret).error();
+        }
 
-    auto verification = verifier.value()->verify({identity.value(), secret.value()}, context);
+        return verifier.value()->verify({identity.value(), secret.value()}, context);
+    };
+    domain::Result<ports::CredentialVerification> verification = Error{ErrorCode::internal, "verification failed", false, {}};
+    try { verification = perform(); } catch (...) { /* 边界异常只保存脱敏错误类别。 */ }
+    if (context.stop.stop_requested()) verification = Error{ErrorCode::canceled, "verification canceled", false, {}};
+    else if (context.expired(std::chrono::steady_clock::now()) &&
+             (!verification || verification->status != ports::VerificationStatus::valid))
+        verification = Error{ErrorCode::deadline_exceeded, "verification deadline exceeded", true, {}};
+    std::optional<std::string> error;
     if (!verification) {
-        return std::move(verification).error();
+        error = std::string{domain::to_string(verification.error().code)};
+        verification = ports::CredentialVerification{};
     }
+    if (verification->status != ports::VerificationStatus::valid) verification->membership = {};
+    verification->membership.checked_at = clock_->now();
+    if (error) verification->membership.error_code = error;
     // Stored only for the version that was checked; a later secret is not judged by
     // an earlier result.
     auto stored = credentials_->record_verification(
         owner_id, id, record->version,
-        {to_outcome(verification->status), clock_->now(), verification->expires_at, verification->scopes});
+        {to_outcome(verification->status), clock_->now(), verification->expires_at, verification->scopes,
+         verification->membership, verification_id, error});
     if (!stored) {
         return std::move(stored).error();
     }
@@ -272,7 +319,8 @@ domain::Result<ports::DefaultSelection> CredentialService::get_default(const std
 
 domain::Result<ports::DefaultSelection> CredentialService::set_default(const std::string& owner_id,
                                                                        const std::string& source,
-                                                                       const std::string& credential_id) {
+                                                                       const std::string& credential_id,
+                                                                       std::optional<ports::SecretBytes> secret) {
     if (auto known = providers_->check_source(source); !known) {
         return known.error();
     }
@@ -283,15 +331,33 @@ domain::Result<ports::DefaultSelection> CredentialService::set_default(const std
     if (record->source != source) {
         return Error::validation("credential_id", "belongs to another source");
     }
-    if (auto reason = unusable_reason(record.value(), clock_->now())) {
-        return Error::validation("credential_id", *reason);
-    }
+    if (record->status == ports::CredentialStatus::revoked) return Error::validation("credential_id", "is revoked");
+    if (!secret && !record->enabled) return Error::validation("secret", "a new secret is required to enable a disabled account");
+    if (!secret) if (auto reason = unusable_reason(record.value(), clock_->now())) return Error::validation("credential_id", *reason);
     auto profile = providers_->describe_auth_profile(source, record->auth_profile);
     if (!profile || ports::to_string(profile->kind) != record->kind) {
         return Error::validation("credential_id", "its auth profile is no longer registered");
     }
-    // The repository re-checks owner, source and status inside the transaction.
-    return credentials_->set_default(owner_id, source, credential_id);
+    if (auto cleaned = cleanup_secrets(owner_id, source); !cleaned) return cleaned.error();
+    std::optional<std::string> new_ref;
+    if (secret) {
+        if (auto valid = check_secret(profile->kind, *secret); !valid) return valid.error();
+        if (auto valid = providers_->validate_secret(source, record->auth_profile, profile->kind, *secret); !valid) return valid.error();
+        auto saved = secrets_->put(*secret);
+        if (!saved) return saved.error();
+        new_ref = *saved;
+    }
+    auto selected = credentials_->set_default(owner_id, source, credential_id, record->version, new_ref);
+    if (!selected) {
+        if (new_ref) (void)secrets_->remove(*new_ref);
+        return selected.error();
+    }
+    interrupt_inactive_verifications(owner_id, source);
+    if (auto cleaned = cleanup_secrets(owner_id, source); !cleaned) return cleaned.error();
+    if (new_ref && record->kind == "cookie" && verification_) {
+        if (auto scheduled = schedule_verification(owner_id, credential_id); !scheduled) return scheduled.error();
+    }
+    return selected;
 }
 
 domain::Result<ports::DefaultSelection> CredentialService::clear_default(const std::string& owner_id,
@@ -299,7 +365,11 @@ domain::Result<ports::DefaultSelection> CredentialService::clear_default(const s
     if (auto valid = domain::SourceId::parse(source); !valid) {
         return std::move(valid).error();
     }
-    return credentials_->clear_default(owner_id, source);
+    auto result = credentials_->clear_default(owner_id, source);
+    if (!result) return result.error();
+    interrupt_inactive_verifications(owner_id, source);
+    if (auto cleaned = cleanup_secrets(owner_id, source); !cleaned) return cleaned.error();
+    return result;
 }
 
 domain::Result<ResolvedBinding> CredentialService::resolve_binding(const std::string& owner_id,
@@ -469,7 +539,9 @@ domain::Result<ports::CredentialRecord> CredentialService::create_oauth(const st
     auto stored = credentials_->insert({owner, application.source, label, "oauth2", application.auth_profile,
         *ref, issued_at + grant.expires_in, grant.scopes, application.id, application.version,
         refresh_after(issued_at, grant.expires_in)});
-    if (!stored) (void)secrets_->remove(*ref);
+    if (!stored) { (void)secrets_->remove(*ref); return stored.error(); }
+    interrupt_inactive_verifications(owner, application.source);
+    if (auto cleaned = cleanup_secrets(owner, application.source); !cleaned) return cleaned.error();
     return stored;
 }
 
@@ -519,8 +591,8 @@ domain::Result<ports::CredentialRecord> CredentialService::refresh_oauth(const p
             *ref, issued_at + grant->expires_in, grant->scopes, refresh_after(issued_at, grant->expires_in));
         if (!result) { (void)secrets_->remove(*ref); return result.error(); }
         committed = true;
-        if (result->previous_secret_ref) (void)secrets_->remove(*result->previous_secret_ref);
-        return std::move(result->credential);
+        if (auto cleaned = cleanup_secrets(candidate.owner_id, candidate.source); !cleaned) return cleaned.error();
+        return get(candidate.owner_id, candidate.id);
     } catch (...) {
         return Error{ErrorCode::upstream_failed, "OAuth refresh failed; authorize again", false, {}};
     }
@@ -544,6 +616,16 @@ domain::Result<std::size_t> CredentialService::reclaim_orphan_secrets(const std:
                 return done.error();
             }
             ++removed;
+        }
+    }
+    // 已移除孤儿文件后确认持久清理队列；只有启动阶段执行，尚无并发写入。
+    for (;;) {
+        auto pending = credentials_->pending_secret_deletions({}, {});
+        if (!pending) return pending.error();
+        if (pending->empty()) break;
+        for (const auto& ref : *pending) {
+            if (in_use.count(ref)) return Error{ErrorCode::storage_unavailable, "cleanup references an active secret", false, {}};
+            if (auto done = credentials_->finish_secret_deletion(ref); !done) return done.error();
         }
     }
     return removed;

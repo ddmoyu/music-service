@@ -1,6 +1,7 @@
 #pragma once
 
 #include "application/ports/providers/provider.hpp"
+#include "application/ports/providers/membership.hpp"
 #include "application/ports/storage/secret_store.hpp"
 #include "domain/result.hpp"
 
@@ -30,6 +31,7 @@ struct CredentialVerification {
     std::optional<std::string> account_hint; // non-secret display hint, e.g. a nickname
     std::vector<std::string> scopes;
     std::optional<std::chrono::system_clock::time_point> expires_at;
+    MembershipInfo membership{};
 };
 
 class ICredentialVerifier {

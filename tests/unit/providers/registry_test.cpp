@@ -94,7 +94,13 @@ TEST_CASE("the built-in manifest registers Kuwo", "[providers]") {
     CHECK(kuwo.supports("parse_links"));
     CHECK(kuwo.supports("resolve_audio"));
     CHECK(kuwo.supports("lyrics"));
-    CHECK(kuwo.auth_methods.empty()); // standard quality needs no account
+    CHECK(kuwo.supports("verify_credentials"));
+    REQUIRE(kuwo.auth_methods.size() == 1);
+    CHECK(kuwo.auth_methods[0].auth_profile == "web_cookie");
+    CHECK(kuwo.auth_methods[0].supports_verify);
+    const auto kuwo_audio = unwrap(registry->describe_capability("kuwo", "resolve_audio"));
+    CHECK(kuwo_audio.credentials == ports::CredentialRequirement::optional);
+    CHECK(kuwo_audio.auth_profiles == std::vector<std::string>{"web_cookie"});
     // Networked capabilities need the upstream client; link parsing does not.
     CHECK(registry->require<ports::ITrackSearch>("kuwo").error().code == domain::ErrorCode::internal);
     CHECK(registry->require<ports::ILinkParser>("kuwo").has_value());

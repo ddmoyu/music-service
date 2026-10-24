@@ -2,6 +2,7 @@
 # ports in ports/, built on domain types.
 add_library(music_service_application STATIC
     accounts/credential_service.cpp
+    accounts/credential_verification.cpp
     accounts/identity_admin.cpp
     accounts/oauth_service.cpp
     catalog/asset_service.cpp

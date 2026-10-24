@@ -149,6 +149,9 @@ domain::Track track(const Json& j) {
             out.duration_ms = (h * 3600LL + m * 60LL + s) * 1000;
     }
     out.artwork = image(j);
+    // A positive paid-audition marker is evidence of a playback charge. Zero alone
+    // does not prove a full free resource; vipType's empty/unknown enums stay unknown.
+    if (number(j, "chargeAuditions") == 1) out.pay.pay_play = 1;
     if (auto n = number(j, "trackNumber"); n && *n) {
         if (*n > 10000)
             throw std::invalid_argument{"track number"};

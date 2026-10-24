@@ -186,7 +186,7 @@ TEST_CASE("OAuth login binds browser owner app and PKCE and consumes the code on
     CHECK(record.scopes == std::vector<std::string>{"read"});
     CHECK(f.protocol->got_code == "test-code");
     CHECK(unwrap(f.codec->pkce_challenge(f.protocol->got_verifier)) == parameter(started.browser.authorization_url, "code_challenge"));
-    CHECK_FALSE(unwrap(f.credentials->get_default(f.owner, "oauthsrc")).credential_id);
+    CHECK(unwrap(f.credentials->get_default(f.owner, "oauthsrc")).credential_id == record.id);
 }
 
 TEST_CASE("OAuth sessions are bounded cancellable expiring and authorization aware", "[oauth][accounts]") {

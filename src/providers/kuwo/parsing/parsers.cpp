@@ -114,6 +114,37 @@ std::vector<domain::ArtistSummary> artists_from(std::string_view names, std::str
 
 } // namespace
 
+domain::Result<domain::TrackPay> parse_pay(const json& item) {
+    const auto flag = [](const json& object, const char* key) -> domain::Result<std::optional<std::uint32_t>> {
+        const auto it = object.find(key);
+        if (it == object.end() || it->is_null()) return std::optional<std::uint32_t>{};
+        if (it->is_boolean()) return std::optional<std::uint32_t>{it->get<bool>() ? 1U : 0U};
+        if (it->is_number_unsigned() && it->get<std::uint64_t>() > UINT32_MAX)
+            return protocol_error("pay flag out of range");
+        const auto value = as_int(*it);
+        if (!value || *value < 0 || *value > UINT32_MAX) return protocol_error("invalid pay flag");
+        return *value <= 1 ? std::optional<std::uint32_t>{static_cast<std::uint32_t>(*value)} : std::nullopt;
+    };
+    domain::TrackPay out;
+    auto play = flag(item, item.contains("tpay") ? "tpay" : "isListenFee");
+    auto down = flag(item, "fpay");
+    if (!play) return play.error();
+    if (!down) return down.error();
+    out.pay_play = *play; out.pay_down = *down;
+    const auto info = item.find("payInfo");
+    if (info != item.end() && !info->is_null()) {
+        if (!info->is_object()) return protocol_error("invalid payInfo");
+        const auto fee = info->find("feeType");
+        if (fee != info->end() && !fee->is_null()) {
+            if (!fee->is_object()) return protocol_error("invalid feeType");
+            auto month = flag(*fee, "vip");
+            if (!month) return month.error();
+            out.pay_month = *month;
+        }
+    }
+    return out;
+}
+
 bool is_valid_rid(std::string_view rid) noexcept {
     return !rid.empty() && rid.size() <= 18 && rid.front() != '0' &&
            std::all_of(rid.begin(), rid.end(), [](char c) { return c >= '0' && c <= '9'; });
@@ -201,6 +232,9 @@ domain::Result<SearchPage> parse_search(std::string_view body) {
         }
         domain::Track track{std::move(*ref), title, artists_from(as_string(item, "ARTIST"), as_string(item, "ARTISTID")),
                             std::nullopt, std::nullopt, {}};
+        auto pay = parse_pay(item);
+        if (!pay) return pay.error();
+        track.pay = *pay;
         if (auto album = decode_text(as_string(item, "ALBUM")); !album.empty()) {
             track.album = domain::AlbumSummary{std::move(album), ref_for(as_string(item, "ALBUMID"))};
         }

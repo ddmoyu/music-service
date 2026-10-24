@@ -1,6 +1,6 @@
 # 音乐后端服务设计
 
-更新：2026-10-20。状态：工程骨架已初始化，开发任务已拆分，以下业务设计尚未实现。
+更新：2026-10-24。本目录维护后端设计与接口契约；当前实现和验收范围见[功能状态](../../../feature-status.md)。账号启停、Cookie 自动校验和会员到期字段已接入，其他设计不能仅凭文档存在判定已实现。
 
 本项目是纯后端，不包含 GUI。独立常驻进程 `music-service` 通过 HTTP 服务网页、Electron、Tauri、Qt、Win32 和 CLI 等外部客户端；必须支持跨平台与 Docker 部署，不依赖桌面会话或前端进程。principal 表示调用方身份，同一身份的多个客户端共享权限与任务。
 
@@ -15,6 +15,7 @@
 | [模块边界](module-boundary-review.md) | 前后端分工与范围限制 |
 | [数据模型](data-models.md) | 字段语义、实体与存储 |
 | [API](api-contract.md) | 路由、权限、请求、响应与错误 |
+| [平台账号接入指南](../../../account-management.md) | 新增、切换、停用、重新启用、会员显示与错误重试 |
 | [内部契约](internal-contracts.md) | 端口、所有权、事务与恢复 |
 | [运行时](runtime-and-tasks.md) | 线程、配额、任务状态机与流传输 |
 | [配置与部署](configuration-and-deployment.md) | 纯后端边界、系统／架构矩阵、跨平台约束、Docker、默认值与生命周期 |
@@ -57,7 +58,7 @@
 
 见[系统总图](../architecture.md#图-1系统进程与部署边界)和[详细架构图](../architecture-details.md)。控制、媒体、SSE 是同一进程中的三个协议入口，各自拥有 HTTP 工作池，共享应用用例、身份和存储。持久下载由 Scheduler／Runner 执行，实际网络操作统一经过 runtime/admission；已提交的任务快照经有界 EventHub 通知客户端。
 
-编译依赖与运行调用分图表达：application 通过自身端口调用外部实现，具体实例由 src/server 组装；Provider 和 HTTP 适配器不拥有第二套任务状态或持久队列。所有业务组件仍待实现。
+编译依赖与运行调用分图表达：application 通过自身端口调用外部实现，具体实例由 src/server 组装；Provider 和 HTTP 适配器不拥有第二套任务状态或持久队列。
 
 ## 功能分期
 

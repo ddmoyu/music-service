@@ -1,6 +1,7 @@
 # 酷我原生协议：JSON、歌词 base64／zlib，字符转换使用系统能力。
 add_library(music_service_provider_kuwo STATIC
     bundle.cpp
+    auth.cpp
     artists.cpp
     capabilities.cpp
     client.cpp

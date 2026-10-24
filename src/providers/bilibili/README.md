@@ -10,7 +10,7 @@
 | `track_detail` | 读取指定视频分 P 的标题、实际 cid、时长和封面 |
 | `parse_links` | 离线解析 BV 号、`bilibili:BV…` 和 bilibili.com／www.bilibili.com／m.bilibili.com 的 `/video/BV…?p=N` 链接 |
 | `resolve_audio` | 取得单个完整 URL 的 DASH AAC 音轨，保存为 M4A，复用公共文件验证、标签、取消、恢复和复用逻辑 |
-| `verify_credentials` | 用官方 nav 接口验证用户提供的 `SESSDATA` Cookie；不由登录结果推断会员等级或视频购买权限 |
+| `verify_credentials` | 用官方 nav 接口验证 SESSDATA，读取 vipType／vipStatus／vipDueDate 的月度或年度大会员证据；缺失字段为 unknown，不推断具体视频购买权限 |
 
 匿名请求支持上述公开目录和音轨；搜索在缺少 buvid3 时通过官方 SPI 接口取得临时访客 Cookie，仅在当前操作的秘密请求头中使用，不写入凭证库或跨调用方缓存。上游风控、地区和视频权限仍可能限制访问。账号 Cookie 是可选凭证，经现有 credentials 接口保存后使用，不填写在服务配置或命令行里。
 

@@ -155,6 +155,10 @@ TEST_CASE("kuwo playlist, album and chart pages", "[providers][kuwo]") {
     CHECK(playlist.tracks[0].artists[0].name == "陈雅森");
     CHECK(playlist.tracks[0].album->ref == ref("507999"));
     CHECK(playlist.tracks[0].duration_ms == 253000);
+    CHECK(playlist.tracks[0].pay.pay_play == 0);
+    CHECK(playlist.tracks[0].pay.pay_down == 1);
+    CHECK(playlist.tracks[0].pay.pay_month == 1);
+    CHECK(playlist.tracks[1].pay.pay_play == 1);
     // Kuwo answers an unknown pid with another, empty playlist.
     CHECK(parsing::parse_playlist_page(fixture("playlist-missing.json"), "999999999999").error().code ==
           ErrorCode::not_found);
@@ -181,6 +185,9 @@ TEST_CASE("kuwo playlist, album and chart pages", "[providers][kuwo]") {
     REQUIRE(chart.tracks.size() == 2);
     CHECK(chart.tracks[0].ref == ref("624683929"));
     CHECK(chart.tracks[0].duration_ms == 209000); // song_duration, not the clip's duration
+    CHECK(chart.tracks[0].pay.pay_play == 1);
+    CHECK(chart.tracks[0].pay.pay_down == 1);
+    CHECK(chart.tracks[0].pay.pay_month == 1);
     CHECK(parsing::parse_chart_page(fixture("chart-missing.json"), "999999").error().code == ErrorCode::not_found);
 }
 

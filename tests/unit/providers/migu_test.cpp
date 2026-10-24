@@ -119,6 +119,17 @@ TEST_CASE("Migu registers only implemented native capabilities without network",
     CHECK(f.upstream->calls.empty());
 }
 
+TEST_CASE("Migu payment metadata only records explicit paid audition evidence", "[providers][migu][pay]") {
+    auto doc = song(); doc["chargeAuditions"] = "1"; doc["vipType"] = "";
+    auto value = mg::parsing::track(doc);
+    CHECK(value.pay.pay_play == 1); CHECK_FALSE(value.pay.pay_down); CHECK_FALSE(value.pay.pay_month);
+    for (const auto& flag : {Json("0"), Json("2"), Json(nullptr)}) {
+        doc["chargeAuditions"] = flag;
+        value = mg::parsing::track(doc);
+        CHECK_FALSE(value.pay.pay_play); CHECK_FALSE(value.pay.pay_down); CHECK_FALSE(value.pay.pay_month);
+    }
+}
+
 TEST_CASE("Migu fixed search windows preserve every item across public limits",
           "[providers][migu]") {
     Fixture f;

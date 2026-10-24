@@ -53,6 +53,7 @@ add_executable(music_service_unit_tests
     unit/infrastructure/secret_store_test.cpp
     unit/providers/kuwo_collections_test.cpp
     unit/providers/kuwo_test.cpp
+    unit/providers/membership_test.cpp
     unit/providers/kuwo_artists_test.cpp
     unit/providers/registry_test.cpp
     unit/runtime/admission_ledger_test.cpp
@@ -137,6 +138,9 @@ if("fivesing" IN_LIST MUSIC_SERVICE_PROVIDERS)
 endif()
 if("migu" IN_LIST MUSIC_SERVICE_PROVIDERS)
     target_sources(music_service_integration_tests PRIVATE integration/migu_z3d_download_test.cpp)
+endif()
+if("kugou" IN_LIST MUSIC_SERVICE_PROVIDERS)
+    target_sources(music_service_integration_tests PRIVATE integration/kugou_cookie_audio_test.cpp)
 endif()
 target_link_libraries(music_service_integration_tests PRIVATE
     music_service::application

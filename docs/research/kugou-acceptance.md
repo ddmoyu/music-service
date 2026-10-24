@@ -2,6 +2,42 @@
 
 日期：2026-10-23。范围为酷狗原生适配器的匿名发现、四类搜索、歌手与集合目录、歌词、封面和下载链路。与同工作区其他平台的修改分别记录。
 
+## Cookie 取流与 VIP 样本（协议包 0.1.18）
+
+日期：2026-10-24。新增 optional `web_cookie`，播放和下载共用账号取流实现；目录继续匿名。下面是本次实现与验收，后文 0.1.17／0.1.10 是当时的历史范围。
+
+协议核对来自[官网播放器](https://www.kugou.com/yy/static/js/play/playbyAudio.js)、[网页账号参数](https://staticssl.kugou.com/common/js/min/npm/getBaseInfo.min.js)和[H5 签名实现](https://staticssl.kugou.com/common/js/min/infSign.min.js)。直接给旧 getSongInfo 接口添加 Cookie，对 VIP 样本仍返回 status=0／空 URL；新实现按官网使用 HTTPS songinfo，先提交 hash，再提交返回的 encode_album_audio_id，保持两次歌曲身份一致。Cookie 的用户 ID、token 和设备参数参与签名，未构造或购买任何权益。
+
+Cookie 仅发送到 songinfo 的秘密请求头；官方 GET 协议中的登录 token 保留在私有请求参数中，两次请求均禁止重定向。URL、Cookie 和上游正文不进入 API 响应、错误或日志，CDN 请求不携带账号 Cookie。全链路使用既有身份、凭证租约、超时与额度机制，没有新增依赖。绑定账号缺少登录字段时直接失败；已选账号的上游失败不重试匿名。
+
+目前只确认官网账号 standard MP3，strict 高档请求明确失败；allow_lower 仍使用原账号请求 standard。匿名接口保留已有三档候选。没有接入登录／会员验证工厂，两个状态为 unknown，不能由此判断用户是否拥有会员。
+
+### 本次在线样本
+
+使用用户提供的 Cookie，在独立临时服务中执行真实 API、代理 Range 读取、后台下载与文件回读。Cookie 只存于已忽略的本地秘密文件，记录不含账号信息或音源 URL。
+
+| 样本 | pay_play／pay_down／pay_month | 匿名 | 使用所提供 Cookie |
+| --- | --- | --- | --- |
+| 林俊杰《江南》，b83dbb8e3dd3fcf86bf32690b91547f5 | 1／1／1 | 整曲解析和下载均 CREDENTIALS_REQUIRED | 官网 is_free_part=1；默认整曲解析／下载均 PREVIEW_REJECTED |
+| 林俊杰《美人鱼》，cdae8c7e2faf7f08dc18e78a1d65117b | 1／1／1 | 整曲解析和下载均 CREDENTIALS_REQUIRED | 官网 is_free_part=1；默认整曲解析／下载均 PREVIEW_REJECTED |
+| 贝瓦儿歌《两只老虎》，89a84d23c85b70e0d7a23f5c427ba075 | 0／0／0 | 整曲代理读取、下载及文件回读成功 | 整曲代理读取、下载及文件回读成功，未跨账号复用 |
+
+两首 VIP 歌显式 allow_preview=true 后，代理均读取到 65,536 字节，解析结果仍为 preview。试听下载均返回 AUDIO_INVALID，原因是“实际音频帧数少于文件头声明”，因此没有发布试听文件；没有放宽 MP3 完整性校验。
+
+免费歌两种模式产物均为 2,000,980 字节，处理器测得 125,022 ms，SHA-256 为 `903b2b16004cd12dd73b254e8bd73f7137013e1207afa4fc0c75e16e4fcf6daf`。全部停用账号后，VIP 样本恢复匿名的 CREDENTIALS_REQUIRED。API 与运行日志的 Cookie／token 检查通过。
+
+**本次确认了账号参数接入和权限／试听处理，没有验证 VIP 整曲授权成功，也不能凭该结果断言 Cookie 过期、账号没有 VIP 或平台全部会员歌不可用。** 高品质账号取流、会员等级与到期时间、Linux／macOS 本轮未验收。
+
+### 构建和自动化验证
+
+- Windows MSVC x64 Debug 服务、单元及集成目标构建通过。共享集成测试 EXE 曾被另一项测试占用，期间使用相同对象／库链接独立测试 EXE；其结束后标准 CMake 目标与测试已复核，不停止其他任务。
+- 酷狗单元测试 44 项、1,927 个断言通过，包含签名复用、Cookie 字段、账号交替、身份错配、试听、音质策略、失败／取消／限流和秘密隔离。
+- 平台单元测试共 239 项：235 通过、4 个在线门控跳过，11,649 个断言通过。
+- 酷狗及账号集成测试 32 项、1,748 个断言通过；其中新增酷狗场景验证创建／选择账号、切换后清除旧秘密、旧排队任务重启后明确失败、重新启用和替换 Cookie、显式账号下载、全部停用后匿名、不同账号不复用结果及 CDN／日志无秘密。
+- 在线脚本 [`kugou_cookie_audio_e2e.py`](../../packaging/e2e/kugou_cookie_audio_e2e.py) 完成上述三首歌的两种模式对照。执行完成表示证据收集与限制断言通过，不能等同于 VIP 整曲下载成功。
+
+本地证据：`out/kugou-cookie-final-build.log`、`out/kugou-cookie-unit.log`、`out/kugou-cookie-providers-unit.log`、`out/kugou-cookie-final-integration.log`、`out/kugou-cookie-audio-live.json`、`out/kugou-cookie-audio-live.log`。正式 API 使用说明见[酷狗适配器](../../src/providers/kugou/README.md#cookie-使用与验证)。
+
 ## 歌手目录与审查修复（协议包 0.1.17）
 
 按用户要求新增歌手搜索、详情、歌曲与专辑分页，能力从 17 项增至 21 项；增加歌手链接解析，复用公共路由、身份、游标和下载链路。本次使用独立构建目录 `out/build/kugou-msvc-debug`，配置为 `kuwo;fivesing;netease;qq;kugou`。两组在线验收使用应用 0.1.17；随后工作区同期代码更新，增量构建应用 0.1.18 并复测失败项与酷狗用例。酷狗协议包版本均为 0.1.17。

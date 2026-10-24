@@ -2,6 +2,7 @@
 
 #include "application/ports/providers/directory.hpp"
 #include "application/ports/runtime/clock.hpp"
+#include "application/ports/runtime/executor.hpp"
 #include "application/ports/runtime/operation_context.hpp"
 #include "application/ports/storage/credential_repository.hpp"
 #include "application/ports/storage/secret_store.hpp"
@@ -29,6 +30,7 @@ struct NewCredentialRequest {
     std::string auth_profile;
     ports::SecretBytes secret;
     std::optional<std::chrono::system_clock::time_point> expires_at;
+    bool enabled{true};
 };
 
 // Same kind and profile only; changing either needs a new credential.
@@ -69,10 +71,14 @@ public:
     CredentialService(std::shared_ptr<ports::CredentialRepository> credentials,
                       std::shared_ptr<ports::SecretStore> secrets,
                       std::shared_ptr<const ports::ProviderDirectory> providers,
-                      std::shared_ptr<const ports::Clock> clock);
+                      std::shared_ptr<const ports::Clock> clock,
+                      std::shared_ptr<ports::WorkExecutor> verification_executor = {},
+                      std::chrono::milliseconds verification_budget = std::chrono::seconds(15));
+    ~CredentialService();
 
     // Writes the secret under a new reference, then the description. A failed insert
-    // removes the new secret again. Never becomes a default by itself.
+    // removes the new secret again. Enabled accounts become the selection and
+    // disable the previous account; disabled metadata records contain no secret.
     domain::Result<ports::CredentialRecord> create(NewCredentialRequest request);
     domain::Result<ports::CredentialRecord> get(const std::string& owner_id, const std::string& id);
     domain::Result<std::vector<ports::CredentialRecord>> list(const std::string& owner_id,
@@ -84,19 +90,31 @@ public:
     // Revokes and clears a default pointing here in one transaction, then removes the
     // secret. Repeating it succeeds. Does not touch accepted tasks or reselect.
     domain::Result<ports::CredentialRecord> revoke(const std::string& owner_id, const std::string& id);
+    // Keeps metadata, clears the selection and secret, and blocks all new leases.
+    // Repeating succeeds once durable secret cleanup has completed.
+    domain::Result<ports::CredentialRecord> disable(const std::string& owner_id, const std::string& id);
     // Runs the platform verifier on the current version and stores the result only if
     // that version is still current (VERSION_CONFLICT otherwise).
     domain::Result<VerifyResult> verify(const std::string& owner_id, const std::string& id,
-                                        const ports::OperationContext& context);
+        const ports::OperationContext& context, std::optional<std::uint64_t> expected_version = {},
+        std::optional<std::string> verification_id = {});
+    // 入队立即返回；结果通过 get/list 查询。相同版本的在途校验复用同一编号。
+    domain::Result<ports::CredentialRecord> schedule_verification(const std::string& owner_id, const std::string& id);
+    domain::Result<ports::CredentialRecord> cancel_verification(const std::string& owner_id,
+        const std::string& id, const std::string& verification_id);
+    void stop_verifications();
 
     // Reading and clearing work for sources no longer registered; setting needs the
     // source registered, the credential owned, of that source, not revoked and its
-    // profile still registered with the same kind.
+    // profile still registered with the same kind. Selecting a disabled account
+    // requires a fresh secret and disables the previous selection. Clearing
+    // disables all accounts of this owner/source and removes their secrets.
     domain::Result<ports::DefaultSelection> get_default(const std::string& owner_id,
                                                         const std::string& source);
     domain::Result<ports::DefaultSelection> set_default(const std::string& owner_id,
                                                         const std::string& source,
-                                                        const std::string& credential_id);
+                                                        const std::string& credential_id,
+                                                        std::optional<ports::SecretBytes> secret = {});
     domain::Result<ports::DefaultSelection> clear_default(const std::string& owner_id,
                                                           const std::string& source);
 
@@ -108,7 +126,7 @@ public:
                                                     std::string_view capability,
                                                     const std::optional<std::string>& credential_id);
 
-    // The latest valid version of exactly this binding. A revoked or deleted
+    // The latest valid version of exactly this binding. A disabled or revoked
     // credential is CREDENTIALS_REQUIRED; it never falls back to another account.
     domain::Result<CredentialLease> lease(const domain::AccountBinding& binding);
 
@@ -125,6 +143,13 @@ public:
         const ports::OAuthApplication& application, const ports::OperationContext& context);
 
 private:
+    struct VerificationState;
+    std::shared_ptr<VerificationState> verification_;
+    std::shared_ptr<ports::WorkExecutor> verification_executor_;
+    void interrupt_verifications(const std::string& owner, const std::string& id);
+    void interrupt_inactive_verifications(const std::string& owner, const std::string& source);
+    domain::Result<void> cleanup_secrets(const std::optional<std::string>& owner, const std::optional<std::string>& source);
+    void apply_verification_overlay(ports::CredentialRecord& record);
     std::shared_ptr<ports::CredentialRepository> credentials_;
     std::shared_ptr<ports::SecretStore> secrets_;
     std::shared_ptr<const ports::ProviderDirectory> providers_;

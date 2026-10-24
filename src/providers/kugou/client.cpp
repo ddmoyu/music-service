@@ -1,8 +1,10 @@
 #include "providers/kugou/client.hpp"
+#include "application/transport/url.hpp"
 #include <algorithm>
 #include <array>
 #include <charconv>
 #include <mbedtls/sha256.h>
+#include <mbedtls/md5.h>
 
 namespace music_service::providers::kugou {
 bool decimal(std::string_view v, bool zero) {
@@ -118,8 +120,30 @@ void api_success(const Json& doc) {
                 false,
                 {{"kugou_code", std::to_string(code)}}};
 }
+std::string signed_web_url(std::string_view endpoint, std::map<std::string, std::string> params) {
+    // 官网 infSign.min.js 的公开 H5 签名种子，不是账号凭证。
+    constexpr std::string_view seed = "NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt";
+    std::string input{seed};
+    for (const auto& [key, value] : params) input += key + "=" + value;
+    input += seed;
+    std::array<unsigned char, 16> bytes{};
+    if (mbedtls_md5(reinterpret_cast<const unsigned char*>(input.data()), input.size(), bytes.data()) != 0)
+        throw Error{ErrorCode::internal, "Kugou web signing failed", false, {}};
+    std::string signature;
+    for (const auto b : bytes) {
+        signature += "0123456789ABCDEF"[b >> 4];
+        signature += "0123456789ABCDEF"[b & 15];
+    }
+    params["signature"] = std::move(signature);
+    std::string url{endpoint};
+    for (const auto& [key, value] : params) {
+        url += url.size() == endpoint.size() ? '?' : '&';
+        url += key + "=" + application::transport::encode_query_component(value);
+    }
+    return url;
+}
 Json Client::get(std::string_view op, std::string url,
-                 const ports::ProviderContext& context) const {
+                 const ports::ProviderContext& context, bool cookie) const {
     ports::HttpRequest request;
     request.url = std::move(url);
     request.operation = op;
@@ -128,6 +152,16 @@ Json Client::get(std::string_view op, std::string url,
                        {"Accept", "application/json"}};
     request.max_response_bytes = 4 * 1024 * 1024;
     request.plaintext_endpoints = plaintext_endpoints();
+    if (cookie) {
+        // songinfo 的官方 GET 协议要求签名查询中包含 token；整个请求禁止重定向。
+        // URL、响应正文和 Cookie 都不得进入错误或日志，CDN 只接收 ResolvedAudio 的头。
+        if (!request.url.starts_with("https://wwwapi.kugou.com/play/songinfo?") ||
+            op != "resolve_audio" || !context.secret || context.secret->reveal().empty())
+            throw Error{ErrorCode::credentials_required, "Kugou audio requires the selected Cookie", false, {}};
+        request.secret_headers.push_back({"Cookie", std::string{context.secret->reveal()}});
+        request.headers[1].value = "https://www.kugou.com/";
+        request.allow_redirects = false;
+    }
     ports::AdmissionRequest admission{context.identity.binding().principal_id(),
                                       setup_.source,
                                       request.operation,

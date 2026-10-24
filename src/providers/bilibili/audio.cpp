@@ -1,4 +1,5 @@
 #include "providers/bilibili/internal.hpp"
+#include "providers/bilibili/membership.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -175,7 +176,7 @@ class Verifier final : public ports::ICredentialVerifier {
             const bool valid = doc.at("code") == 0 && doc.at("data").at("isLogin").get<bool>();
             result.status =
                 valid ? ports::VerificationStatus::valid : ports::VerificationStatus::invalid;
-            // 不暴露昵称／UID，不由登录状态推断大会员或具体视频权限。
+            if (valid) result.membership = parse_membership(doc.at("data"), std::chrono::system_clock::now());
             return result;
         });
     }

@@ -100,6 +100,12 @@ public:
                                                 const ports::OperationContext&) override {
         record(request);
         const auto& url = request.url;
+        if (url == "https://vip1.kuwo.cn/vip/v2/sysinfo") {
+            return answer(200, "application/json", R"({"meta":{"code":200},"data":{"UID":"12345"}})", url);
+        }
+        if (url == "https://vip1.kuwo.cn/vip/v2/user/vip") {
+            return answer(200, "application/json", R"({"meta":{"code":200},"ctime":1800000000000,"data":{"svipExpire":"0","vipLuxuryExpire":"2000000000000","vipExpire":"0","vipmExpire":"0"}})", url);
+        }
         if (url.starts_with("https://newlyric.kuwo.cn/newlyric.lrc?")) {
             return answer(200, "application/octet-stream", fixture("lyric-synthetic.bin"), url);
         }
@@ -220,9 +226,9 @@ struct Gate {
         return h;
     }
 
-    std::unique_ptr<RunningService> start(const std::shared_ptr<KuwoUpstream>& upstream) {
+    std::unique_ptr<RunningService> start(const std::shared_ptr<KuwoUpstream>& upstream, bool paused = false) {
         return std::make_unique<RunningService>(d, std::make_shared<infrastructure::observability::MemorySink>(), kuwo(),
-                                                false, upstream);
+                                                paused, upstream);
     }
 
     Deployment d;
@@ -266,6 +272,89 @@ std::string read_file(const fs::path& path) {
 }
 
 } // namespace
+
+TEST_CASE("Kuwo playback and queued downloads use their selected cookie without leaking it to the CDN", "[gate][kuwo][cookie-audio]") {
+    Gate g{"kuwo-cookie-audio"};
+    auto upstream = std::make_shared<KuwoUpstream>(mp3());
+    auto service = g.start(upstream, true);
+    auto api = service->client(g.token);
+    const auto latest_cookie = [&]() -> std::string {
+        const auto calls = upstream->requests();
+        for (auto it = calls.rbegin(); it != calls.rend(); ++it) {
+            if (!it->url.starts_with("https://mobi.kuwo.cn/mobi.s?")) continue;
+            if (it->secret_headers.empty()) return std::string{};
+            REQUIRE(it->secret_headers.size() == 1);
+            CHECK(it->secret_headers[0].name == "Cookie");
+            CHECK_FALSE(it->allow_redirects);
+            return it->secret_headers[0].value;
+        }
+        FAIL("no Kuwo resolver request was recorded");
+    };
+    REQUIRE(api.Post("/api/v1/assets/resolve", download_body, "application/json")->status == 200);
+    CHECK(latest_cookie().empty());
+    const auto create_cookie = [&](const std::string& cookie) {
+        const auto created = api.Post("/api/v1/credentials", json{{"source", "kuwo"}, {"kind", "cookie"},
+            {"auth_profile", "web_cookie"}, {"secret", {{"cookie", cookie}}}}.dump(), "application/json");
+        REQUIRE(created->status == 201);
+        const auto id = body(created)["data"]["credential_id"].get<std::string>();
+        const auto deadline = std::chrono::steady_clock::now() + 5s;
+        json status;
+        do {
+            status = body(api.Get("/api/v1/credentials/" + id))["data"];
+            if (status["verification"]["state"] == "complete") break;
+            std::this_thread::sleep_for(20ms);
+        } while (std::chrono::steady_clock::now() < deadline);
+        REQUIRE(status["login_status"] == "valid");
+        return id;
+    };
+    const std::string cookie_a = "userid=12345; websid=synthetic-cookie-a";
+    const std::string cookie_b = "userid=12345; websid=synthetic-cookie-b";
+    const auto first = create_cookie(cookie_a);
+    REQUIRE(api.Put("/api/v1/credential-defaults/kuwo", json{{"credential_id", first}}.dump(), "application/json")->status == 200);
+    const auto resolved = api.Post("/api/v1/assets/resolve", download_body, "application/json");
+    REQUIRE(resolved->status == 200);
+    CHECK(latest_cookie() == cookie_a);
+    CHECK(resolved->body.find("synthetic-cookie") == std::string::npos);
+    const auto created = api.Post("/api/v1/downloads", key("kuwo-cookie-fixed-account"), download_body, "application/json");
+    REQUIRE(created->status == 202);
+    const auto task_id = body(created)["data"]["task_id"].get<std::string>();
+    CHECK(body(api.Get("/api/v1/downloads/" + task_id))["data"]["status"] == "queued");
+    const auto second = create_cookie(cookie_b);
+    REQUIRE(api.Put("/api/v1/credential-defaults/kuwo", json{{"credential_id", second}}.dump(), "application/json")->status == 200);
+    REQUIRE(api.Post("/api/v1/assets/resolve", download_body, "application/json")->status == 200);
+    CHECK(latest_cookie() == cookie_b);
+    REQUIRE(service->stop().code == server::exit_ok);
+    service.reset();
+
+    // The queued task retains A's binding, but A is disabled: never use B's Cookie instead.
+    service = g.start(upstream);
+    auto restarted = service->client(g.token);
+    const auto failed = wait_status(restarted, task_id, "failed");
+    CHECK(failed["error"]["code"] == "CREDENTIALS_REQUIRED");
+    CHECK(latest_cookie() == cookie_b);
+    REQUIRE(restarted.Put("/api/v1/credential-defaults/kuwo",
+        json{{"credential_id", first}, {"secret", {{"cookie", cookie_a}}}}.dump(), "application/json")->status == 200);
+    const auto renewed = restarted.Post("/api/v1/downloads", key("kuwo-cookie-reactivated"), download_body, "application/json");
+    REQUIRE(renewed->status == 202);
+    const auto completed = wait_status(restarted, body(renewed)["data"]["task_id"].get<std::string>(), "completed");
+    CHECK(latest_cookie() == cookie_a);
+    CHECK(completed.dump().find("synthetic-cookie") == std::string::npos);
+    const auto file_id = completed["result"]["file_id"].get<std::string>();
+    CHECK(body(restarted.Get("/api/v1/files/" + file_id))["data"]["size_bytes"].get<std::size_t>() > 100000);
+    REQUIRE(restarted.Delete("/api/v1/credential-defaults/kuwo")->status == 200);
+    REQUIRE(restarted.Post("/api/v1/assets/resolve", download_body, "application/json")->status == 200);
+    CHECK(latest_cookie().empty());
+    bool cdn_requested = false;
+    for (const auto& request : upstream->requests()) {
+        CHECK(request.url.find("synthetic-cookie") == std::string::npos);
+        if (request.url.starts_with(cdn)) {
+            cdn_requested = true;
+            CHECK(request.secret_headers.empty());
+            CHECK_FALSE(header(request, "Cookie"));
+        }
+    }
+    CHECK(cdn_requested);
+}
 
 TEST_CASE("S1 gate: Kuwo search to a published file over HTTP, SSE and media", "[gate][kuwo]") {
     Gate g{"gate-loop"};

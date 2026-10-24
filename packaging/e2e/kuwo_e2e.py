@@ -77,6 +77,15 @@ class Http:
             raise Failure(f"{method} {path}: HTTP {status} {data[:400]!r}")
         return status, response_headers, json.loads(data)["data"]
 
+    def wait_credential(self, credential_id, timeout=20):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            credential = self.json("GET", f"/api/v1/credentials/{credential_id}")[2]
+            if credential["verification"]["state"] != "pending":
+                return credential
+            time.sleep(0.05)
+        raise Failure("credential verification did not finish within its deadline")
+
 
 class Sse:
     """One SSE stream read on its own thread; frames end at a blank line."""
@@ -152,8 +161,8 @@ class OwnService:
             json.dump({"config_version": 1,
                        "data_dir": os.path.join(self.work, "data"),
                        "control": {"port": port},
-                       "media": {"port": port + 1},
-                       "events": {"port": port + 2},
+                       "media": {"port": port + 1 if port else 0},
+                       "events": {"port": port + 2 if port else 0},
                        "destinations": [{"id": "dst_default", "name": "downloads", "root": self.downloads,
                                          "principals": ["prn_local"]}]}, f, ensure_ascii=False)
         subprocess.run([self.binary, "--config", self.config, "init"], check=True, stdout=subprocess.DEVNULL)

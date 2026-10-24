@@ -94,12 +94,12 @@ def run(service, cookie_file, report):
     report["anonymous"] = {"lossless_strict": "QUALITY_UNAVAILABLE", "lossless_allow_lower": "high",
                            "member_song": "CREDENTIALS_REQUIRED"}
     invalid = create_cookie("MUSIC_U=invalid-local-acceptance-session")
-    verification = api.json("POST", f"/api/v1/credentials/{invalid}/verify", {})[2]
-    check(verification["result"] == "invalid", "invalid session is invalid online")
+    verification = api.wait_credential(invalid)
+    check(verification["login_status"] == "invalid", "invalid session is invalid online")
     report["invalid_session"] = "invalid"
     credential = create_cookie(cookie_file.read_text(encoding="utf-8").strip())
-    verified = api.json("POST", f"/api/v1/credentials/{credential}/verify", {})[2]
-    check(verified["result"] == "valid", "provided account verifies online")
+    verified = api.wait_credential(credential)
+    check(verified["login_status"] == "valid", "provided account verifies online")
     report["verification"] = "valid"
     api.json("PUT", "/api/v1/credential-defaults/netease", {"credential_id": credential})
     expect_error(resolve("210049", "hires"), "QUALITY_UNAVAILABLE")

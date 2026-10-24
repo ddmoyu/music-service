@@ -265,7 +265,18 @@ json credential_json(const ports::CredentialRecord& c) {
                 {"expires_at", optional_time(c.expires_at)},
                 {"version", c.version},
                 {"status", to_string(c.status)},
+                {"enabled", c.enabled},
+                {"secret_cleanup_pending", c.secret_cleanup_pending},
                 {"refresh_state", c.refresh_state},
+                {"login_status", c.last_verify_result ? outcome_json(c.last_verify_result) : json("unknown")},
+                {"verification", {{"id", optional_string(c.verification_id)}, {"state", c.verification_state},
+                    {"error_code", optional_string(c.verification_error)},
+                    {"retry_after_seconds", c.verification_error == "SERVICE_BUSY" ? json(1) : json(nullptr)}}},
+                {"membership", {{"status", c.membership.status}, {"type", c.membership.type},
+                    {"name", optional_string(c.membership.name)}, {"expires_at", optional_time(c.membership.expires_at)},
+                    {"expires_on", optional_string(c.membership.expires_on)},
+                    {"expiry_precision", c.membership.expires_at ? "datetime" : c.membership.expires_on ? "date" : "unknown"},
+                    {"checked_at", optional_time(c.membership.checked_at)}, {"error_code", optional_string(c.membership.error_code)}}},
                 {"last_verified_at", optional_time(c.last_verified_at)},
                 {"last_verify_result", outcome_json(c.last_verify_result)},
                 {"created_at", utc(c.created_at)}};
@@ -321,6 +332,9 @@ json track_json(const domain::Track& track) {
                 {"artwork", optional_string(track.artwork)},
                 {"track_number", track.track_number ? json(*track.track_number) : json(nullptr)},
                 {"track_total", track.track_total ? json(*track.track_total) : json(nullptr)},
+                {"pay", {{"pay_play", track.pay.pay_play ? json(*track.pay.pay_play) : json(nullptr)},
+                         {"pay_down", track.pay.pay_down ? json(*track.pay.pay_down) : json(nullptr)},
+                         {"pay_month", track.pay.pay_month ? json(*track.pay.pay_month) : json(nullptr)}}},
                 // No supported source needs private context yet.
                 {"context_ref", nullptr}};
 }
@@ -1031,9 +1045,15 @@ struct ControlApi::Impl {
         server.Put(R"(/api/v1/credentials/([A-Za-z0-9_]+))",
                    guard(Access::scoped, credentials, [this](Call& call) { update_credential(call); }));
         server.Post(R"(/api/v1/credentials/([A-Za-z0-9_]+)/verify)",
-                    guard(Access::scoped, credentials, [this](Call& call) { verify_credential(call); }, true));
+                    guard(Access::scoped, credentials, [this](Call& call) { verify_credential(call); }));
+        server.Get(R"(/api/v1/credentials/([A-Za-z0-9_]+))",
+                    guard(Access::scoped, credentials, [this](Call& call) { get_credential(call); }));
+        server.Post(R"(/api/v1/credentials/([A-Za-z0-9_]+)/verify/([A-Za-z0-9_]+)/cancel)",
+                    guard(Access::scoped, credentials, [this](Call& call) { cancel_credential_verification(call); }));
         server.Delete(R"(/api/v1/credentials/([A-Za-z0-9_]+))",
                       guard(Access::scoped, credentials, [this](Call& call) { revoke_credential(call); }));
+        server.Post(R"(/api/v1/credentials/([A-Za-z0-9_]+)/disable)",
+                      guard(Access::scoped, credentials, [this](Call& call) { disable_credential(call); }));
         server.Get(R"(/api/v1/credential-defaults/([a-z0-9_]+))",
                    guard(Access::scoped, credentials, [this](Call& call) { get_default(call); }));
         server.Put(R"(/api/v1/credential-defaults/([a-z0-9_]+))",
@@ -1149,7 +1169,8 @@ struct ControlApi::Impl {
                 return;
             }
             const auto active = std::count_if(owned->begin(), owned->end(), [](const ports::CredentialRecord& c) {
-                return c.status != ports::CredentialStatus::revoked;
+                return c.enabled && c.status == ports::CredentialStatus::active && c.secret_ref &&
+                    c.refresh_state != "reauthorization_required";
             });
             items.push_back(provider_json(view, {{"usable", active},
                                                  {"default_credential_id", optional_string(selection->credential_id)},
@@ -2238,7 +2259,7 @@ struct ControlApi::Impl {
         if (!only_params(call, {})) {
             return;
         }
-        auto body = body_object(call, {"source", "label", "kind", "auth_profile", "secret"});
+        auto body = body_object(call, {"source", "label", "kind", "auth_profile", "secret", "enabled"});
         if (!body) {
             return;
         }
@@ -2259,15 +2280,20 @@ struct ControlApi::Impl {
             call.fail(bad_request("kind", "must be cookie, oauth2 or api_key"));
             return;
         }
-        if (!kind || !profile || !body->contains("secret")) {
-            call.fail(bad_request("secret", "kind, auth_profile and secret are required"));
+        if (body->contains("enabled") && !(*body)["enabled"].is_boolean()) {
+            call.fail(bad_request("enabled", "must be a boolean")); return;
+        }
+        const bool enabled = body->value("enabled", true);
+        if (!kind || !profile || (enabled && !body->contains("secret"))) {
+            call.fail(bad_request("secret", "kind and auth_profile are required; enabled accounts also require secret"));
             return;
         }
+        if (!enabled && body->contains("secret")) { call.fail(bad_request("secret", "must be absent for a disabled account")); return; }
         const auto& kind_text = *kind;
         if (!read_credential_secret(call, *body, kind_text, cookie)) {
             return;
         }
-        if (!cookie) {
+        if (enabled && !cookie) {
             call.fail(bad_request("secret", "is required"));
             return;
         }
@@ -2276,7 +2302,7 @@ struct ControlApi::Impl {
                                                             : ports::CredentialKind::cookie;
         auto created = services.credentials->create({call.principal(), *source, label.value_or(""),
                                                      credential_kind, *profile,
-                                                     ports::SecretBytes{std::move(*cookie)}, std::nullopt});
+                                                     ports::SecretBytes{cookie.value_or("")}, std::nullopt, enabled});
         if (!created) {
             call.fail(created.error());
             return;
@@ -2318,18 +2344,30 @@ struct ControlApi::Impl {
         if (!only_params(call, {}) || !body_object(call, {}, true)) {
             return;
         }
-        const ports::OperationContext context{SteadyClock::now() + options.catalog.total_budget, {}};
-        auto verified = services.credentials->verify(call.principal(), call.req.matches[1], context);
+        auto verified = services.credentials->schedule_verification(call.principal(), call.req.matches[1]);
         if (!verified) {
             call.fail(verified.error());
             return;
         }
-        const auto status = verified->verification.status;
-        call.ok({{"result", status == ports::VerificationStatus::valid     ? "valid"
-                            : status == ports::VerificationStatus::invalid ? "invalid"
-                                                                           : "unknown"},
-                 {"account_hint", optional_string(verified->verification.account_hint)},
-                 {"credential", credential_json(verified->credential)}});
+        if (verified->verification_error == "SERVICE_BUSY") {
+            call.fail(domain::Error{ErrorCode::service_busy, "credential verification capacity is not available", true, {}});
+            return;
+        }
+        call.ok(credential_json(*verified), verified->verification_state == "pending" ? 202 : 200);
+    }
+
+    void get_credential(Call& call) {
+        if (!only_params(call, {})) return;
+        auto result = services.credentials->get(call.principal(), call.req.matches[1]);
+        if (!result) { call.fail(result.error()); return; }
+        call.ok(credential_json(*result));
+    }
+
+    void cancel_credential_verification(Call& call) {
+        if (!only_params(call, {}) || !body_object(call, {}, true)) return;
+        auto result = services.credentials->cancel_verification(call.principal(), call.req.matches[1], call.req.matches[2]);
+        if (!result) { call.fail(result.error()); return; }
+        call.ok(credential_json(*result));
     }
 
     void revoke_credential(Call& call) {
@@ -2344,6 +2382,13 @@ struct ControlApi::Impl {
         call.ok(credential_json(revoked.value()));
     }
 
+    void disable_credential(Call& call) {
+        if (!only_params(call, {}) || !body_object(call, {}, true)) return;
+        auto disabled = services.credentials->disable(call.principal(), call.req.matches[1]);
+        if (!disabled) { call.fail(disabled.error()); return; }
+        call.ok(credential_json(*disabled));
+    }
+
     void get_default(Call& call) {
         if (!only_params(call, {})) {
             return;
@@ -2356,7 +2401,7 @@ struct ControlApi::Impl {
         if (!only_params(call, {})) {
             return;
         }
-        auto body = body_object(call, {"credential_id"});
+        auto body = body_object(call, {"credential_id", "secret"});
         if (!body) {
             return;
         }
@@ -2368,7 +2413,13 @@ struct ControlApi::Impl {
             call.fail(bad_request("credential_id", "is required"));
             return;
         }
-        auto selection = services.credentials->set_default(call.principal(), call.req.matches[1], *credential_id);
+        auto record = services.credentials->get(call.principal(), *credential_id);
+        if (!record) { call.fail(record.error()); return; }
+        std::optional<std::string> value;
+        if (!read_credential_secret(call, *body, record->kind, value)) return;
+        std::optional<ports::SecretBytes> secret;
+        if (value) secret.emplace(std::move(*value));
+        auto selection = services.credentials->set_default(call.principal(), call.req.matches[1], *credential_id, std::move(secret));
         if (!selection) {
             // The request is well-formed; a credential of another source, revoked or
             // otherwise unusable is an invalid selection (422), not a bad request.

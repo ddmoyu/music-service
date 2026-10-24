@@ -562,20 +562,21 @@ TEST_CASE("results are cached per identity and identical calls merge", "[catalog
 TEST_CASE("personal playlist caches and cursors follow account principal version and revocation", "[catalog][stage-d]") {
     Catalog c{"personal"};
     const auto owner = c.principal(), other = c.principal("other");
-    const auto a = c.cookie(owner,"alpha","a=1"), b = c.cookie(owner,"alpha","b=1");
     ListRequest request{owner,"alpha","",2,{}};
     CHECK(c.catalog->user_playlists(request).error().code == ErrorCode::credentials_required);
+    const auto a = c.cookie(owner,"alpha","a=1");
     REQUIRE(c.credentials->set_default(owner,"alpha",a));
     auto first = unwrap(c.catalog->user_playlists(request));
     CHECK(first.items.front().name == a);
     CHECK(unwrap(c.catalog->user_playlists(request)).cache.hit);
     auto next = request; next.cursor = first.page.next_cursor;
     REQUIRE(next.cursor);
+    const auto b = c.cookie(owner,"alpha","b=1");
     REQUIRE(c.credentials->set_default(owner,"alpha",b));
     CHECK(c.catalog->user_playlists(next).error().code == ErrorCode::cursor_expired);
     auto second = unwrap(c.catalog->user_playlists(request));
     CHECK(second.items.front().name == b); CHECK_FALSE(second.cache.hit);
-    REQUIRE(c.credentials->set_default(owner,"alpha",a));
+    REQUIRE(c.credentials->set_default(owner,"alpha",a,ports::SecretBytes{"a=1"}));
     CHECK(c.catalog->user_playlists(next).error().code == ErrorCode::cursor_expired);
     next.cursor = unwrap(c.catalog->user_playlists(request)).page.next_cursor;
     REQUIRE(c.credentials->update(owner,a,{ports::SecretBytes{"a=2"},{},{}}));
@@ -595,7 +596,6 @@ TEST_CASE("accounts partition caches and cursors", "[catalog]") {
     Catalog c{"identity"};
     const auto owner = c.principal();
     const auto a = c.cookie(owner, "alpha", "a=1");
-    const auto b = c.cookie(owner, "alpha", "b=1");
     REQUIRE(c.credentials->set_default(owner, "alpha", a));
 
     // A38: two version-1 credentials never share results.
@@ -603,6 +603,7 @@ TEST_CASE("accounts partition caches and cursors", "[catalog]") {
     CHECK(with_a.items.at(0).title == "song@" + a + "#0");
     const auto cursor = *with_a.sources[0].page->next_cursor;
     CHECK(cursor.rfind("cur_", 0) == 0);
+    const auto b = c.cookie(owner, "alpha", "b=1");
     REQUIRE(c.credentials->set_default(owner, "alpha", b));
     const auto with_b = c.search(owner, {"alpha"});
     CHECK(with_b.items.at(0).title == "song@" + b + "#0");
@@ -610,12 +611,12 @@ TEST_CASE("accounts partition caches and cursors", "[catalog]") {
 
     // A47: the cursor made under A is dead after the switch, even after switching back.
     CHECK(c.search_error(owner, {"alpha"}, "song", cursor).code == ErrorCode::cursor_expired);
-    REQUIRE(c.credentials->set_default(owner, "alpha", a));
+    REQUIRE(c.credentials->set_default(owner, "alpha", a, ports::SecretBytes{"a=1"}));
     CHECK(c.search_error(owner, {"alpha"}, "song", cursor).code == ErrorCode::cursor_expired);
-    // A's own cache partition is still A's.
+    // Reactivation advances A's credential version, so old cache entries cannot return.
     const auto back = c.search(owner, {"alpha"});
     CHECK(back.items.at(0).title == "song@" + a + "#0");
-    CHECK(back.sources[0].cache->hit);
+    CHECK_FALSE(back.sources[0].cache->hit);
 
     // A fresh cursor continues under the same selection; it pages the same account.
     const auto fresh = *back.sources[0].page->next_cursor;

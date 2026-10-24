@@ -36,6 +36,14 @@ domain::Artwork artwork(std::string value) {
     return url->str();
 }
 namespace {
+std::optional<std::uint32_t> pay_flag(const Json& pay, const char* key) {
+    const auto it = pay.find(key);
+    if (it == pay.end() || it->is_null()) return std::nullopt;
+    const auto value = number(pay, key);
+    if (value > std::numeric_limits<std::uint32_t>::max()) throw std::invalid_argument{"pay flag range"};
+    if (value > 1) return std::nullopt;
+    return static_cast<std::uint32_t>(value);
+}
 std::vector<domain::ArtistSummary> singers(const Json& list) {
     if (!list.is_array() || list.size() > 100) throw std::invalid_argument{"singers"};
     std::vector<domain::ArtistSummary> out;
@@ -61,6 +69,11 @@ domain::Track track(const Json& j) {
     }
     if (j.contains("index_album")) { const auto n = number(j, "index_album"); if (n > 0 && n <= 10000) t.track_number = static_cast<std::uint32_t>(n); }
     const auto subtitle = text(j, "subtitle"); if (!subtitle.empty()) t.version.label = subtitle;
+    const auto pay = j.find("pay");
+    if (pay != j.end() && !pay->is_null()) {
+        if (!pay->is_object()) throw std::invalid_argument{"pay object"};
+        t.pay = {pay_flag(*pay, "pay_play"), pay_flag(*pay, "pay_down"), pay_flag(*pay, "pay_month")};
+    }
     return t;
 }
 domain::Playlist playlist(const Json& j) {

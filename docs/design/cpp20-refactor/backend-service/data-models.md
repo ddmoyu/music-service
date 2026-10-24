@@ -57,15 +57,16 @@ AccountBinding 表达稳定的账号选择，不含 token、Cookie、secret_ref 
 
 创建下载时将请求平台的默认选择解析为 AccountBinding 并保存。执行时可租用同一绑定的最新有效版本，不改用其他默认账号或其他平台。账号撤销或权限不足按现有错误规则处理；应用模式与匿名模式必须由该能力明确允许。
 
-默认用户凭证的唯一事实来源是 SQLite 的 `credential_defaults`，按 owner + source 保存 credential_id（可为 null）与单调递增的 selection_version。配置文件不保存另一份用户默认账号；设置与清除使用[默认凭证 API](api-contract.md#111-默认平台凭证)。新增凭证不自动成为默认，清除或撤销默认凭证也不自动改选另一用户账号；没有默认时仅可按能力使用 application／anonymous，否则返回 CREDENTIALS_REQUIRED。
+默认用户凭证的唯一事实来源是 SQLite 的 `credential_defaults`，按 owner + source 保存 credential_id（可为 null）与单调递增的 selection_version。`credentials.enabled` 表示账号是否允许使用，部分唯一索引保证同一 owner + source 最多一项启用，并在同一事务同步平台选择。新建账号默认启用并选中，停用原账号；enabled=false 仅创建不含秘密的记录。切换到停用账号必须提交新 secret。清除选择会全部停用，停用或撤销不改选另一账号；没有启用账号时仅可按能力使用 application／anonymous，否则返回 CREDENTIALS_REQUIRED。配置文件不管理用户选择，接口见[默认凭证 API](api-contract.md#111-默认平台凭证)。
 
-默认选择提交后立即影响新请求。使用隐式默认选择的分页句柄还绑定 selection_version；即使默认账号从 A 改到 B 再改回 A，旧选择句柄仍失效。缓存内容继续按 AuthIdentityKey 分区，selection_version 不加入稳定 AccountBinding 或下载指纹；已受理任务使用原绑定。撤销凭证与清空其默认引用在同一事务提交。
+默认选择提交后立即影响新请求。使用隐式默认选择的分页句柄还绑定 selection_version；即使默认账号从 A 改到 B 再改回 A，旧选择句柄仍失效。缓存内容继续按 AuthIdentityKey 分区，selection_version 不加入稳定 AccountBinding 或下载指纹；已受理任务使用原绑定，原账号停用后不再取得秘密快照，也不改选其他账号。停用和撤销同事务清空秘密引用、推进账号版本和选择版本，并将旧引用加入 credential_secret_deletions；文件清理完成才移除待清理项。重启继续清理，不保留可恢复的旧 Cookie。
 
 ## 歌曲与集合
 
 | 模型 | 字段 |
 | --- | --- |
-| `Track` | ref、title、artists、album、duration_ms、version、artwork、track_number、track_total、context_ref、links、可选 external_ids（如 isrc，附证据来源） |
+| `Track` | ref、title、artists、album、duration_ms、version、artwork、track_number、track_total、pay、context_ref、links、可选 external_ids（如 isrc，附证据来源） |
+| `TrackPay` | pay_play、pay_down、pay_month；统一为 0／1／null，分别表示歌曲播放收费、下载收费、会员相关收费标记；不代表当前账号权限 |
 | `Artist` | ref、name、artwork；可选 description、alternate_name、country、birth_date、birthplace、gender、language、height、weight、constellation；可选非负计数 track_count、album_count、mv_count；未知字段为 null |
 | `ArtistSummary` | name，ref 可为 null；多个艺术家保留数组，不只拼成展示字符串 |
 | `AlbumSummary` | title、ref，可为空；保留与歌单不同的语义 |
@@ -79,6 +80,24 @@ AccountBinding 表达稳定的账号选择，不含 token、Cookie、secret_ref 
 | `Chart` | ref、name、description、update_hint、updated_at、track_count、catalog_kind |
 
 缩略图首版只暴露可公开访问的展示 URL；需要秘密头的封面在缺少专用图片代理时返回 null／警告，不复用音频 asset 路由伪装支持。`links` 是服务自身的资源链接，不包含带账号秘密的上游 URL。
+
+### 歌曲付费元数据
+
+`Track.pay` 是平台适配器归一化的展示元数据。固定返回三个键，0／1 为明确否／是，null 为未知；不提供原始私有权限对象、账号购买状态或会员身份。未知枚举不作为免费，错误类型通过既有上游错误返回。当前映射如下：
+
+| 来源 | 已确认映射 | 保留未知的部分 |
+| --- | --- | --- |
+| QQ | `pay.pay_play/pay_down/pay_month` 的 0／1 原样映射 | 缺失、null、未确认枚举 |
+| 网易云 | `fee=0 → (0,0,0)`；`1 → (1,1,1)`；`4 → (1,1,0)`；`8 → (0,1,1)`；括号顺序为 play、down、month | 未知 fee；不使用账号级 `privilege.pl/dl/payed` 推断 |
+| 酷我 | `tpay → pay_play`，网页响应的 `isListenFee` 在没有 tpay 时映射播放；`fpay → pay_down`；`payInfo.feeType.vip → pay_month` | 缺少对应字段时未知；不从 PAY 位串、价格、禁止播放／下载或高品质要求猜测 |
+| 酷狗 | 基础档 `PayType/pay_type=0 → (0,0,0)`；1／2／3 标记收费下载；2 标记单独购买（month=0），3 标记音乐包（month=1）；上述收费类型且基础档 `Privilege/128privilege/privilege=10` 时 play=1 | 类型 1 的会员属性未知；其他 privilege 的播放属性未知；HQ／SQ 字段不冒充基础档 |
+| 千千 | `isVip=0/1 → pay_month`；isVip=1 或 pay_model=3 时 play=1；pay_model=2 且 isVip=0 时 play=0 | 下载收费无独立证据；不使用账号级 isPaid 反推歌曲免费 |
+| 咪咕 | `chargeAuditions=1 → pay_play=1` | 0／缺失不能证明整曲免费；vipType 的空值与未确认枚举、下载和会员属性均未知 |
+| Bilibili | 详情的 `rights.pay/ugc_pay/ugc_pay_preview/arc_pay` 任一明确为 1 时 play=1 | 搜索缺少对应证据；付费 UGC 不推断大会员或下载属性，其他值不推断免费 |
+| 5sing | 当前均为 null | 现有 isFree 的含义不足以映射三项，不把成功取流当免费证据 |
+| Jamendo | 当前均为 null | isDownloadable 描述作者是否允许下载，不等于是否收费；许可类型也不等于会员要求 |
+
+2026-10-24 核对了 QQ 搜索／详情／取流、网易云歌曲详情、酷狗搜索／详情、千千搜索、咪咕搜索的官方响应及现有录制样本。酷我的官方网页播放器使用 isListenFee 判断付费播放；现有搜索／集合样本同时保留 tpay、fpay、payInfo。核对只证明所观察协议和字段，未覆盖全部会员等级、购买状态、地区与音质。统一字段用于展示，音源权限校验仍由原来的取流链路负责。
 
 `context_ref` 是平台 hash、资源参数等附加上下文的服务端句柄，按 AuthIdentityKey、实体、实现／schema 版本与有效期绑定。客户端可以原样回传，不能自行构造平台扩展 JSON。句柄过期或授权身份不匹配时不能复用其私有数据，先按 ref 在当前授权下重新取详情；只有确实无法恢复所需上下文时返回 `422 CONTEXT_REQUIRED`。下载被接收前，将必要的非秘密上下文保存到任务私有快照，记录生成它的授权身份和 schema；执行时版本改变则重新获取，不能盲用旧账号上下文。
 
@@ -173,7 +192,7 @@ phase 用 status 表达，`stage` 用于 processing 内部的 decrypt／validate
 | `MediaAccessDescriptor` | target（file／asset）、delivery、url、auth、expires_at 与媒体属性；不分配新的播放 ID，不保存播放器状态 |
 | `MediaTicket` | 随机高熵 token 的哈希、owner、目标 kind/id、到期时刻；默认有效期使用 lifetimes，申请范围见 API |
 | `Destination` | destination_id、名称、可用性、accept_new_tasks 与允许的 principal；根目录首次注册后与 ID 永久绑定，见[目标目录规则](configuration-and-deployment.md#目标目录绑定与变更) |
-| `CredentialDescriptor` | credential_id、source、label、kind、auth_profile、scope 摘要、expires_at（可空）、version、状态、验证时间；不包含 Cookie、token、API key 或应用秘密 |
+| `CredentialDescriptor` | credential_id、source、label、kind、auth_profile、scope 摘要、expires_at（可空）、version、status、enabled、secret_cleanup_pending、login_status、verification（id／state／error_code／retry_after_seconds）、membership（status／type／name／expires_at／expires_on／expiry_precision／checked_at／error_code）、验证时间；会员到期时刻与日期互斥，独立于凭证有效期，不包含 Cookie、token、API key 或应用秘密 |
 
 媒体票据在新请求入场时检查到期，允许有效期内多次 Range 请求，不是一次性票据。入场成功的单次传输可继续到完成，但受传输时间／空闲限制及身份撤销约束。asset 票据不得超过 asset 有效期；票据续发不能延长音源寿命。file 票据到期不删除文件，重新授权读取即可。
 
@@ -186,7 +205,7 @@ phase 用 status 表达，`stage` 用于 processing 内部的 decrypt／validate
 | `schema_metadata` | 单行 id=1、version、checksum、created_at；只校验当前结构，与 HTTP API 版本独立 |
 | `principals` | id、display_name、role、enabled |
 | `access_tokens` | token_id、principal_id、token_hash、scopes、created_at、revoked_at；不存可直接使用的明文 token |
-| `credentials` | id、owner_id、source、label、kind、auth_profile、secret_ref、version、status、scope_summary、expires_at、last_verified_at、last_verify_result、revoked_at；与 CredentialDescriptor 字段对应，秘密由 SecretStore 管理 |
+| `credentials` | id、owner_id、source、label、kind、auth_profile、secret_ref、version、status、scope_summary、expires_at、last_verified_at、last_verify_result、revoked_at、verification_id／state／error、membership_status／type／name／expires_at／expires_on／checked_at／error；到期时刻和日期以数据库约束保证互斥，expiry_precision 由这两个字段推导；校验提交同时核对凭证版本和在途编号，秘密由 SecretStore 管理 |
 | `credential_defaults` | owner_id + source 为主键，credential_id 可空、selection_version；清除后保留版本行，不回收默认选择世代 |
 | `destinations` | id、canonical_root；持久保存不可变位置绑定，名称、ACL 与是否接受新任务按启动配置校验应用 |
 | `download_tasks` | id、owner_id、status、version、execution_id、指纹及 schema、normalized_intent、请求／执行快照、租约、next_retry_at、wait_reason、resume_stage、attempt_open；schema v2 增加 execution（公开执行事实：actual_track、actual_quality、容器、警告）、checkpoint（私有续传证据：已刷写字节、总长、校验器、传输是否完整）与 attempt_used_ms（未关闭尝试的已用运行时间，不含入场暂停）；索引 owner/status/created_at/id 与 status/next_retry_at |
@@ -219,7 +238,7 @@ T05 的实现约定：表使用 STRICT 模式；库内时间存为 UTC 毫秒整
 
 ## 0.1.6 本地产物集合扩展
 
-- 所有下载意图统一使用 schema 5，完整包含输出设置、两个导出标志、`sidecars_required` 与歌词选择，全部参与当前 schema 2 复用指纹；仅接受这一种快照结构。SQLite 使用当前 schema 4，不维护历史迁移。
+- 所有下载意图统一使用 schema 5，完整包含输出设置、两个导出标志、`sidecars_required` 与歌词选择，全部参与当前 schema 2 复用指纹；仅接受这一种快照结构。SQLite 使用当前 schema 7，不维护历史迁移。
 - 开启导出时，finalization_intents 的 workspace_file／reserved_path 指向整个目录，evidence.properties.bundle 保存 audio／lyrics／cover 的文件名、大小、SHA-256。各文件在工作区写入并刷新后，保存意图，再独占重命名目录；SQLite 事务只在全部成员匹配时发布一个 file_id。目录是唯一预留键，资产 relative_path 指向目录内音频。恢复逐项比对，丢失或改写不完成。
 - file_assets.properties.bundle 是同一资产的产物清单，不生成彼此独立的无主侧文件；成员共用 owner、destination ACL、生命周期与文件票据。读取／复用校验整个集合。历史 result 保留元数据及侧文件状态；原有单文件记录继续读写。
 - import-ncm 任务使用内部来源 local_ncm、输入内容摘要作引用，保存的意图不含本机输入绝对路径。CLI 对输入复核哈希、保留原文件；相同输入与产品选项可复用完整资产。中断的未发布本地任务标记 LOCAL_IMPORT_INTERRUPTED，不交给在线平台调度；持久发布意图仍走通用恢复。

@@ -118,6 +118,21 @@ domain::Track track(const Json& j, bool detail) {
     out.artwork = artwork(first(j, {"Image", "album_sizable_cover", "album_img"}));
     if (!out.artwork && j.contains("trans_param"))
         out.artwork = artwork(text(j.at("trans_param"), "union_cover"));
+    const auto pay_key = j.contains("PayType") ? "PayType" : "pay_type";
+    if (j.contains(pay_key) && !j.at(pay_key).is_null()) {
+        const auto type = number(j, pay_key);
+        if (type == 0) out.pay = {0, 0, 0};
+        else if (type == 1 || type == 2 || type == 3) {
+            out.pay.pay_down = 1;
+            if (type == 2) out.pay.pay_month = 0; // separate purchase
+            if (type == 3) out.pay.pay_month = 1; // music package
+            const auto privilege_key = j.contains("Privilege") ? "Privilege" :
+                j.contains("128privilege") ? "128privilege" : "privilege";
+            // Only the verified paid standard tier; HQ/SQ privileges are separate.
+            if (j.contains(privilege_key) && !j.at(privilege_key).is_null() && number(j, privilege_key) == 10)
+                out.pay.pay_play = 1;
+        }
+    }
     return out;
 }
 domain::Playlist playlist(const Json& j) {
