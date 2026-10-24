@@ -6,6 +6,7 @@
 ARG BASE=ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
 
 FROM ${BASE} AS build
+ARG BUILD_JOBS=3
 RUN apt-get update \
  && apt-get install -y --no-install-recommends g++ git ca-certificates python3-pip \
  && rm -rf /var/lib/apt/lists/*
@@ -16,7 +17,7 @@ COPY CMakeLists.txt CMakePresets.json ./
 COPY cmake cmake
 COPY src src
 RUN cmake --preset linux-gcc-release \
- && cmake --build --preset linux-gcc-release --target music_service_server \
+ && cmake --build --preset linux-gcc-release --target music_service_server --parallel ${BUILD_JOBS} \
  && strip out/build/linux-gcc-release/src/server/music-service
 
 FROM ${BASE}

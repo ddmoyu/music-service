@@ -4,13 +4,22 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CMAKE_BUILD_PARALLEL_LEVEL: "3"
+
 jobs:
   windows-msvc:
     runs-on: windows-2025
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Configure, build and test
@@ -22,7 +31,7 @@ jobs:
           where cl || exit /b 1
           cmake --preset windows-msvc-debug || exit /b 1
           cmake --build --preset windows-msvc-debug || exit /b 1
-          ctest --preset windows-msvc-debug || exit /b 1
+          ctest --preset windows-msvc-debug --timeout 120 || exit /b 1
       - name: Upstream HTTPS through the system trust store
         shell: pwsh
         env:
@@ -59,7 +68,17 @@ jobs:
         run: python -I packaging/e2e/kuwo_e2e.py --binary out/build/windows-msvc-debug/src/server/music-service.exe --source fivesing
 
   linux-gcc:
-    runs-on: ubuntu-24.04
+    name: linux-gcc (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Install build tools
@@ -71,7 +90,7 @@ jobs:
           ldd --version | head -n 1
           cmake --preset linux-gcc-debug
           cmake --build --preset linux-gcc-debug
-          ctest --preset linux-gcc-debug
+          ctest --preset linux-gcc-debug --timeout 120
       - name: Upstream HTTPS through the system CA files
         env:
           MUSIC_SERVICE_ONLINE_TESTS: "1"
@@ -91,7 +110,17 @@ jobs:
         run: python3 -I packaging/e2e/kuwo_e2e.py --binary out/build/linux-gcc-debug/src/server/music-service --source fivesing
 
   macos-clang:
-    runs-on: macos-15
+    name: macos-clang (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x86_64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Install build tools
@@ -106,13 +135,18 @@ jobs:
           uname -m
           cmake --preset macos-clang-debug
           cmake --build --preset macos-clang-debug --parallel 3
-          ctest --preset macos-clang-debug
+          ctest --preset macos-clang-debug --timeout 120
       - name: Upstream HTTPS through the system Keychain
         env:
           MUSIC_SERVICE_ONLINE_TESTS: "1"
         run: out/build/macos-clang-debug/tests/music_service_integration_tests "[online]"
       - name: Runtime smoke test
         run: bash packaging/linux/smoke.sh out/build/macos-clang-debug/src/server/music-service
+      - name: Release build and runtime smoke test
+        run: |
+          cmake --preset macos-clang-release
+          cmake --build --preset macos-clang-release
+          bash packaging/linux/smoke.sh out/build/macos-clang-release/src/server/music-service
       - name: Kuwo online loop
         continue-on-error: true
         run: python3 -I packaging/e2e/kuwo_e2e.py --binary out/build/macos-clang-debug/src/server/music-service
@@ -121,11 +155,21 @@ jobs:
         run: python3 -I packaging/e2e/kuwo_e2e.py --binary out/build/macos-clang-debug/src/server/music-service --source fivesing
 
   docker:
-    runs-on: ubuntu-24.04
+    name: docker (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Build the image
-        run: docker build -f packaging/docker/Dockerfile -t music-service:ci .
+        run: docker build --build-arg BUILD_JOBS="$CMAKE_BUILD_PARALLEL_LEVEL" -f packaging/docker/Dockerfile -t music-service:ci .
       - name: Container smoke test
         run: packaging/docker/smoke.sh music-service:ci
       - name: Kuwo online loop in the container
