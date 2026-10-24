@@ -10,8 +10,14 @@ work=$(mktemp -d)
 work=$(cd "$work" && pwd -P)
 agent=''
 cleanup() {
-    if [[ -n "$agent" ]]; then bash "$agent" uninstall || true; fi
+    local result=$?
+    trap - EXIT
+    if [[ -n "$agent" ]] && ! bash "$agent" uninstall; then
+        echo "agent cleanup failed; preserving its configuration and data at $work" >&2
+        exit 1
+    fi
     rm -rf "$work"
+    exit "$result"
 }
 trap cleanup EXIT
 deep="$work/中文目录 with spaces/独立发行包"
@@ -64,6 +70,10 @@ bash "$here/../linux/smoke.sh" "$exe"
 echo '== launchd agent'
 # Never replace a user agent already present on a developer's machine.
 [[ ! -e "$HOME/Library/LaunchAgents/io.github.ddmoyu.music-service.plist" ]]
+if /bin/launchctl print "gui/$(id -u)/io.github.ddmoyu.music-service" >/dev/null 2>&1; then
+    echo 'refusing to replace an already-loaded music-service agent' >&2
+    exit 1
+fi
 state="$work/用户配置 with spaces"
 mkdir -p "$state/downloads"
 cp "$root/share/music-service/config.macos.example.json" "$state/config.json"

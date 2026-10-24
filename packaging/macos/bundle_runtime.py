@@ -56,7 +56,7 @@ def expand_path(value, loader, executable):
     for variable, directory in (("@loader_path/", loader.parent), ("@executable_path/", executable.parent)):
         if value.startswith(variable):
             return directory / value[len(variable):]
-    if value.startswith("/"):
+    if Path(value).is_absolute():
         return Path(value)
     raise ValueError(f"Unsupported runtime search path: {value}")
 
@@ -150,7 +150,7 @@ def bundle(prefix, llvm_root, identity):
         "architecture": run("/usr/bin/lipo", "-archs", executable).strip(),
         "minimum_macos": max(versions, key=lambda value: tuple(int(part) for part in value.split("."))),
         "compiler": compiler_version,
-        "signing": "ad-hoc" if identity == "-" else "developer-id",
+        "signing": "ad-hoc" if identity == "-" else "configured-identity",
         "notarized": False,
         "files": [
             {"path": str(path.relative_to(prefix)), "bytes": path.stat().st_size,

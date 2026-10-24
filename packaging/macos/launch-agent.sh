@@ -36,6 +36,7 @@ case "${1:-}" in
     install)
         [[ $# == 2 ]] || { echo "usage: $0 install CONFIG.json" >&2; exit 2; }
         [[ ! -e "$plist" ]] || { echo "agent already installed: $plist; uninstall it first" >&2; exit 1; }
+        if loaded; then echo 'agent is already loaded; stop it before installing' >&2; exit 1; fi
         /bin/launchctl print "$domain" >/dev/null
         config="$(cd "$(dirname "$2")" && pwd -P)/$(basename "$2")"
         "$bin" --config "$config" check-config
