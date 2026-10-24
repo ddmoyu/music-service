@@ -75,6 +75,8 @@ FetchContent_Declare(music_service_taglib
 FetchContent_Declare(music_service_sqlite
     URL "${MUSIC_SERVICE_SQLITE_URL}"
     URL_HASH "SHA3_256=${MUSIC_SERVICE_SQLITE_SHA3_256}"
+    TIMEOUT 120
+    INACTIVITY_TIMEOUT 30
     # Extraction time, not the archive time: an upgraded source must look newer than
     # objects built from the previous version, or Ninja would keep the old objects.
     DOWNLOAD_EXTRACT_TIMESTAMP FALSE
@@ -95,6 +97,8 @@ set(ZLIB_INSTALL OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(music_service_zlib
     URL "${MUSIC_SERVICE_ZLIB_URL}"
     URL_HASH "SHA256=${MUSIC_SERVICE_ZLIB_SHA256}"
+    TIMEOUT 120
+    INACTIVITY_TIMEOUT 30
     DOWNLOAD_EXTRACT_TIMESTAMP FALSE
     EXCLUDE_FROM_ALL
 )
