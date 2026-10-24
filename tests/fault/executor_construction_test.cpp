@@ -4,10 +4,12 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <future>
+#include <memory>
 #include <new>
 #include <thread>
 
@@ -71,4 +73,40 @@ TEST_CASE("an executor whose later thread fails to start still unwinds", "[runti
     }
     CHECK(constructed);
     CHECK(failures >= 3); // at least the reserve and the threads themselves
+}
+
+TEST_CASE("executor stop drains queued work without allocating or holding its lock", "[runtime][executor][fault]") {
+    BoundedExecutor executor{"stop-fault", 1, 4};
+    std::promise<void> started;
+    auto running = started.get_future();
+    std::atomic<bool> queued_ran{false};
+    bool released = false;
+    REQUIRE(executor.submit([&](std::stop_token stop) {
+        started.set_value();
+        while (!stop.stop_requested()) std::this_thread::sleep_for(1ms);
+    }));
+    REQUIRE(running.wait_for(2s) == std::future_status::ready);
+    // Re-entering stats() detects cleanup accidentally moved under mutex_.
+    auto owned = std::shared_ptr<int>{new int{0}, [&](int* value) {
+        (void)executor.stats();
+        released = true;
+        delete value;
+    }};
+    REQUIRE(executor.submit([&, owned = std::move(owned)](std::stop_token) { queued_ran = true; }));
+
+    bool allocated = false;
+    fail_countdown = 0;
+    try {
+        executor.request_stop();
+    } catch (const std::bad_alloc&) {
+        allocated = true;
+    }
+    fail_countdown = -1;
+    // Clean up even when the assertion is going to fail.
+    executor.request_stop();
+    executor.join();
+    CHECK_FALSE(allocated);
+    CHECK_FALSE(queued_ran.load());
+    CHECK(released);
+    CHECK(executor.stats().queued == 0);
 }

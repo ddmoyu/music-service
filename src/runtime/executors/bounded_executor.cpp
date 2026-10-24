@@ -68,7 +68,7 @@ void BoundedExecutor::run(std::stop_token stop) {
         {
             std::unique_lock lock{mutex_};
             // Wakes on new work or on the executor's stop request.
-            if (!work_available_.wait(lock, stop, [this] { return !queue_.empty(); })) {
+            if (!work_available_.wait(lock, stop, [this] { return stopping_ || !queue_.empty(); }) || stopping_) {
                 return;
             }
             work = std::move(queue_.front());
@@ -102,18 +102,30 @@ bool BoundedExecutor::wait_idle(std::chrono::milliseconds budget) {
 }
 
 void BoundedExecutor::request_stop() {
-    std::deque<Work> dropped;
     {
         const std::lock_guard lock{mutex_};
         accepting_ = false;
+        stopping_ = true;
         stats_.queued = 0;
-        dropped.swap(queue_);
     }
     stop_.request_stop();
     work_available_.notify_all();
+    // Even an empty deque can allocate (libstdc++). Shutdown also runs during
+    // construction failure and destruction, so move one item at a time without
+    // allocating. stopping_ prevents workers from taking the remaining items;
+    // concurrent stop requests can safely share the drain under mutex_.
+    while (true) {
+        Work dropped;
+        {
+            const std::lock_guard lock{mutex_};
+            if (queue_.empty()) break;
+            dropped = std::move(queue_.front());
+            queue_.pop_front();
+        }
+        // Destructors may release task claims or call back into the executor.
+        // Never destroy queued work while holding the executor lock.
+    }
     idle_.notify_all();
-    // Destructors may publish broken promises or release task claims. Never run
-    // that cleanup while holding the executor lock.
 }
 
 void BoundedExecutor::join() {

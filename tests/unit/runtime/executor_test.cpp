@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -114,6 +115,40 @@ TEST_CASE("stop signals running work and drops queued work", "[runtime][executor
     executor.join();
     CHECK(saw_stop);
     CHECK_FALSE(queued_ran);
+}
+
+TEST_CASE("concurrent executor stops discard each queued task once", "[runtime][executor]") {
+    BoundedExecutor executor{"concurrent-stop", 1, 16};
+    std::promise<void> started;
+    auto running = started.get_future();
+    std::atomic<int> discarded{0};
+    std::atomic<int> ran{0};
+    REQUIRE(executor.submit([&](std::stop_token stop) {
+        started.set_value();
+        while (!stop.stop_requested()) std::this_thread::sleep_for(1ms);
+    }));
+    REQUIRE(running.wait_for(2s) == std::future_status::ready);
+    for (int i = 0; i < 16; ++i) {
+        auto owned = std::shared_ptr<int>{new int{i}, [&](int* value) {
+            (void)executor.stats();
+            ++discarded;
+            delete value;
+        }};
+        REQUIRE(executor.submit([&, owned = std::move(owned)](std::stop_token) { ++ran; }));
+    }
+    std::promise<void> release;
+    auto go = release.get_future().share();
+    std::jthread first{[&] { go.wait(); executor.request_stop(); }};
+    std::jthread second{[&] { go.wait(); executor.request_stop(); }};
+    release.set_value();
+    first.join();
+    second.join();
+    executor.join();
+    CHECK(discarded == 16);
+    CHECK(ran == 0);
+    CHECK(executor.stats().queued == 0);
+    CHECK(executor.stats().running == 0);
+    CHECK(executor.wait_idle(0ms));
 }
 
 TEST_CASE("shutdown sequence drains within the soft budget", "[runtime][shutdown]") {

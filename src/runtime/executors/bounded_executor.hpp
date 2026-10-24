@@ -74,6 +74,7 @@ private:
     std::condition_variable idle_;
     std::deque<Work> queue_;
     bool accepting_{true};
+    bool stopping_{false};
     Stats stats_;
     std::stop_source stop_;
     std::vector<std::jthread> workers_;
