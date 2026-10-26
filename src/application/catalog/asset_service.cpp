@@ -68,6 +68,8 @@ struct AssetService::Asset {
             text(descriptor.asset_id) + ref(descriptor.original_track) + ref(descriptor.actual_track) +
             optional(descriptor.container) + descriptor.warnings.capacity() * sizeof(domain::ResourceWarning);
         for (const auto& [key, value] : audio.request_headers) size += text(key) + text(value);
+        size += descriptor.attempted_sources.capacity() * sizeof(std::string);
+        for (const auto& source : descriptor.attempted_sources) size += text(source);
         if (audio.decryption_key) size += audio.decryption_key->reveal().size();
         if (evidence) size += optional(evidence->etag) + optional(evidence->last_modified);
         return size;
@@ -79,13 +81,16 @@ AssetService::AssetService(config::Lifetimes lifetimes, config::Handles handles,
                            std::shared_ptr<accounts::CredentialService> credentials,
                            std::shared_ptr<ports::UpstreamHttp> upstream, std::shared_ptr<const ports::Clock> clock,
                            std::function<std::string()> new_asset_id, std::chrono::milliseconds budget,
-                           std::shared_ptr<ports::MemoryBudget> handle_budget)
+                           std::shared_ptr<ports::MemoryBudget> handle_budget,
+                           std::shared_ptr<SourceRetryService> source_retry)
     : providers_(std::move(providers)), credentials_(std::move(credentials)), upstream_(std::move(upstream)),
       clock_(std::move(clock)), lifetimes_(lifetimes), budget_(budget),
       assets_(std::make_shared<HandleTable<Asset>>(
           handles.assets, std::max<std::size_t>(1, handles.assets / std::max<std::size_t>(1, per_owner_share)),
           std::move(new_asset_id), handle_budget ? std::move(handle_budget) : std::make_shared<ports::MemoryBudget>(handles.total_bytes),
-          [](const Asset& value) { return value.bytes(); })) {}
+          [](const Asset& value) { return value.bytes(); })), source_retry_(std::move(source_retry)) {
+    if (!source_retry_) source_retry_ = std::make_shared<SourceRetryService>(providers_, credentials_);
+}
 
 void AssetService::collect_expired() { assets_->collect_expired(clock_->now()); }
 
@@ -94,15 +99,72 @@ domain::Result<AssetDescriptor> AssetService::resolve(const ResolveRequest& requ
     if (auto known = providers_->check_source(source); !known) {
         return known.error();
     }
+    const ports::OperationContext operation{SteadyClock::now() + budget_, {}};
+    if (request.switch_source) {
+        auto attempted = request.attempted_sources;
+        if (attempted.size() > SourceRetryService::max_sources)
+            return Error::validation("attempted_sources", "at most 32 unique sources");
+        std::sort(attempted.begin(), attempted.end());
+        if (std::adjacent_find(attempted.begin(), attempted.end()) != attempted.end())
+            return Error::validation("attempted_sources", "sources must be unique");
+        for (const auto& item : attempted) {
+            if (auto known = providers_->check_source(item); !known) return known.error();
+        }
+        if (std::find(attempted.begin(), attempted.end(), source) == attempted.end()) attempted.push_back(source);
+        if (attempted.size() > SourceRetryService::max_sources)
+            return Error::validation("attempted_sources", "at most 32 sources including the original source");
+        const auto failure = [&](Error error) {
+            for (const auto& item : attempted) {
+                if (std::none_of(error.details.begin(), error.details.end(), [&](const auto& detail) {
+                        return detail.field == "attempted_sources" && detail.reason == item;
+                    })) error.details.push_back({"attempted_sources", item});
+            }
+            return error;
+        };
+        auto original = source_retry_->identity(request.owner_id, request.track, operation);
+        if (!original) return failure(original.error());
+        auto bindings = source_retry_->bindings(request.owner_id);
+        if (!bindings) return failure(bindings.error());
+        while (attempted.size() <= SourceRetryService::max_sources) {
+            auto selected = source_retry_->next(request.owner_id, *original, *bindings, attempted, operation);
+            if (!selected) return failure(selected.error());
+            const auto bound = std::find_if(bindings->begin(), bindings->end(),
+                [&](const auto& binding) { return binding.source() == selected->ref.source; });
+            if (bound == bindings->end()) return Error{ErrorCode::internal, "source binding is missing", false, {}};
+            auto resolved = resolve_one(request, selected->ref, *bound, operation, attempted);
+            if (!resolved) {
+                if (source_failure(resolved.error().code)) continue;
+                return failure(resolved.error());
+            }
+            auto probe = probe_until(request.owner_id, resolved->asset_id, operation);
+            // 播放候选必须能读取且文件头可识别；探测不代表播放器一定能解码完整文件。
+            if (probe && probe->accessible && probe->format &&
+                (!resolved->container || *probe->format == *resolved->container)) {
+                auto facts = delivery(request.owner_id, resolved->asset_id);
+                if (facts && !facts->needs_processing) return resolved;
+            }
+            assets_->expire(request.owner_id, resolved->asset_id);
+            assets_->collect_expired(clock_->now());
+            if (!probe && !source_failure(probe.error().code)) return failure(probe.error());
+        }
+        return Error{ErrorCode::source_exhausted, "no playable strictly matching source remains", false, {}};
+    }
     auto binding = credentials_->resolve_binding(request.owner_id, source, "resolve_audio", std::nullopt);
     if (!binding) {
         return std::move(binding).error();
     }
-    auto lease = credentials_->lease(binding->binding);
+    return resolve_one(request, request.track, binding->binding, operation, {source});
+}
+
+domain::Result<AssetDescriptor> AssetService::resolve_one(const ResolveRequest& request,
+    const domain::TrackRef& actual, const domain::AccountBinding& binding, ports::OperationContext operation,
+    const std::vector<std::string>& attempted) {
+    if (operation.expired(SteadyClock::now())) return Error{ErrorCode::deadline_exceeded, "source retry time budget exhausted", true, {}};
+    auto lease = credentials_->lease(binding);
     if (!lease) {
         return std::move(lease).error();
     }
-    auto resolver = providers_->asset_resolver(source);
+    auto resolver = providers_->asset_resolver(actual.source.value());
     if (!resolver) {
         return std::move(resolver).error();
     }
@@ -110,11 +172,13 @@ domain::Result<AssetDescriptor> AssetService::resolve(const ResolveRequest& requ
     if (lease->secret) {
         secret = std::make_shared<const ports::SecretBytes>(std::move(*lease->secret));
     }
-    const ports::ProviderContext context{{SteadyClock::now() + budget_, {}}, lease->identity, std::nullopt, secret};
-    auto audio = resolver.value()->resolve_audio(context, request.track, request.requirement);
+    const ports::ProviderContext context{operation, lease->identity, std::nullopt, secret};
+    auto audio = resolver.value()->resolve_audio(context, actual, request.requirement);
     if (!audio) {
         return std::move(audio).error();
     }
+    if (operation.expired(SteadyClock::now())) return Error{ErrorCode::deadline_exceeded, "source retry time budget exhausted", true, {}};
+    if (audio->actual_track != actual) return Error{ErrorCode::upstream_failed, "the platform returned another track", false, {}};
     auto verdict = domain::evaluate_resource(request.requirement, {audio->actual_quality, audio->completeness});
     if (!verdict) {
         return std::move(verdict).error();
@@ -141,8 +205,8 @@ domain::Result<AssetDescriptor> AssetService::resolve(const ResolveRequest& requ
                                audio->bitrate_bps,
                                audio->completeness,
                                expires_at,
-                               verdict->warnings};
-    Asset asset{binding->binding,   lease->identity.canonical(), request.track, std::move(audio).value(),
+                               verdict->warnings, attempted};
+    Asset asset{binding,   lease->identity.canonical(), request.track, std::move(audio).value(),
                 descriptor,         request.requirement,         secret != nullptr, std::nullopt};
     auto id = assets_->put(request.owner_id, std::move(asset), expires_at, now);
     if (!id) {
@@ -163,6 +227,11 @@ domain::Result<AssetDescriptor> AssetService::describe(const std::string& owner_
 }
 
 domain::Result<ProbeReport> AssetService::probe(const std::string& owner_id, const std::string& asset_id) {
+    return probe_until(owner_id, asset_id, {SteadyClock::now() + budget_, {}});
+}
+
+domain::Result<ProbeReport> AssetService::probe_until(const std::string& owner_id, const std::string& asset_id,
+                                                     ports::OperationContext operation) {
     auto found = assets_->get(owner_id, asset_id, clock_->now());
     if (!found) {
         return std::move(found).error();
@@ -185,11 +254,11 @@ domain::Result<ProbeReport> AssetService::probe(const std::string& owner_id, con
 
     const auto& actual = asset.audio.actual_track;
     ports::AdmissionRequest base{owner_id,       actual.source, "probe", ports::TrafficClass::short_request,
-                                 lease->identity, {},            {},      SteadyClock::now() + budget_};
+                                 lease->identity, {},            {},      operation.deadline};
     ports::HttpResponseHead head;
     std::string leading;
     auto result = upstream_->stream(
-        std::move(request), base, {SteadyClock::now() + budget_, {}},
+        std::move(request), base, operation,
         [&](const ports::HttpResponseHead& h) {
             head = h;
             return h.status == 200 || h.status == 206;

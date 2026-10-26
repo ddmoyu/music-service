@@ -172,12 +172,12 @@ phase 用 status 表达，`stage` 用于 processing 内部的 decrypt／validate
 | 指纹内容 | 归一规则 |
 | --- | --- |
 | owner 与 original_track | source + 不透明 id 保持原值，不对平台 ID 大小写折叠 |
-| 音源选择 | 仅使用 original_track 的来源；没有换源选择字段或占位类型 |
+| 音源选择 | 首次使用 original_track，失败时严格换源；执行快照保存原始身份、实际曲目与已尝试平台 |
 | 账号 | 原曲及手动／auto 目标所需的 AccountBinding；来源映射按稳定键编码，默认选择在提交时固定 |
 | 音质与内容 | requested_quality、quality_policy、allow_preview |
 | 产物 | metadata_policy、destination_id 及目标配置版本、命名与元数据配置版本；包含封面／歌词等会影响产物的有效配置 |
 
-账号绑定只保留原曲平台，同一来源出现不同绑定即拒绝。客户端省略与显式提交相同默认值生成同一下载意图，但幂等请求哈希仍按各自输入判定。临时句柄、token／URL、授权版本、request_id、task_id、时间和 duplicate_policy 不进入下载指纹；凭证刷新不会单独制造一个新下载意图。
+账号绑定保留原曲及可用候选平台（最多 32 个），同一来源出现不同绑定即拒绝。客户端省略与显式提交相同默认值生成同一下载意图，但幂等请求哈希仍按各自输入判定。临时句柄、token／URL、授权版本、request_id、task_id、时间和 duplicate_policy 不进入下载指纹；凭证刷新不会单独制造一个新下载意图。
 
 默认 duplicate_policy=reuse：只复用规范化意图相同的活动任务或合格的已完成结果，不跨不同策略“猜测兼容”。完成结果还要满足当前文件访问权限、文件存在性、原曲、品质／试听限制与 metadata_policy；best_effort 可复用带相同报告的部分结果，required 不能复用未满足必需产物的文件。检查文件和结果证据后，在提交事务内重验相关版本；不合格完成结果不复用，正常创建新任务。force 可绕过完成结果，但相同活动意图仍返回 409 ACTIVE_DUPLICATE。
 
@@ -238,7 +238,7 @@ T05 的实现约定：表使用 STRICT 模式；库内时间存为 UTC 毫秒整
 
 ## 0.1.6 本地产物集合扩展
 
-- 所有下载意图统一使用 schema 5，完整包含输出设置、两个导出标志、`sidecars_required` 与歌词选择，全部参与当前 schema 2 复用指纹；仅接受这一种快照结构。SQLite 使用当前 schema 7，不维护历史迁移。
+- 所有下载意图统一使用 schema 6，完整包含候选平台账号、输出设置、两个导出标志、`sidecars_required` 与歌词选择，全部参与当前 schema 3 复用指纹；仅接受这一种快照结构。SQLite 使用当前 schema 8，新增按 owner/source 汇总的 source_download_statistics，不维护历史迁移。
 - 开启导出时，finalization_intents 的 workspace_file／reserved_path 指向整个目录，evidence.properties.bundle 保存 audio／lyrics／cover 的文件名、大小、SHA-256。各文件在工作区写入并刷新后，保存意图，再独占重命名目录；SQLite 事务只在全部成员匹配时发布一个 file_id。目录是唯一预留键，资产 relative_path 指向目录内音频。恢复逐项比对，丢失或改写不完成。
 - file_assets.properties.bundle 是同一资产的产物清单，不生成彼此独立的无主侧文件；成员共用 owner、destination ACL、生命周期与文件票据。读取／复用校验整个集合。历史 result 保留元数据及侧文件状态；原有单文件记录继续读写。
 - import-ncm 任务使用内部来源 local_ncm、输入内容摘要作引用，保存的意图不含本机输入绝对路径。CLI 对输入复核哈希、保留原文件；相同输入与产品选项可复用完整资产。中断的未发布本地任务标记 LOCAL_IMPORT_INTERRUPTED，不交给在线平台调度；持久发布意图仍走通用恢复。

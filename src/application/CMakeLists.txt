@@ -6,6 +6,7 @@ add_library(music_service_application STATIC
     accounts/identity_admin.cpp
     accounts/oauth_service.cpp
     catalog/asset_service.cpp
+    catalog/source_retry.cpp
     catalog/catalog_entities.cpp
     catalog/catalog_service.cpp
     events/publishing_publication_repository.cpp

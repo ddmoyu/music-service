@@ -17,7 +17,7 @@ music-service [--config FILE] [--data-dir DIR] [COMMAND]
 - 管理命令离线执行：先取得 data_dir 实例锁，服务运行时直接失败，不绕开单实例约束改数据库。`backup` 例外：它用 SQLite 在线备份读取一致快照（含已提交的 WAL 内容），服务运行时也可执行，不取锁、不改数据库。
 - `backup --output FILE` 写出单个独立的数据库文件（回滚日志模式），先写到 `FILE.partial`、通过 integrity_check 与当前 schema 校验后再改名；目标已存在即失败（CONFLICT）。备份不含 `secrets/`，需与数据库一起另行保存。
 - `restore --input FILE` 需要实例锁（服务须停止）：备份和当前数据库都必须通过完整性及当前 schema／校验和检查，再把当前数据库一致复制为 `backups/replaced-<UTC 时间>.sqlite3`（可再次 restore 撤销），然后替换数据库并删除旧的 -wal／-shm。不修改 `secrets/`。
-- 启动只在空库中原子初始化当前 schema 7；已有库的 schema 和校验和必须与程序完全一致。非当前开发数据明确报错，不执行迁移或自动备份转换；需要时指定新的 `data_dir`，原数据不自动删除。
+- 启动只在空库中原子初始化当前 schema 8；已有库的 schema 和校验和必须与程序完全一致。非当前开发数据明确报错，不执行迁移或自动备份转换；需要时指定新的 `data_dir`，原数据不自动删除。
 - token 明文只写入新建的仅所有者可读文件（init 写 `secrets/bootstrap-token.txt`，issue 写 `--output`），目标已存在即失败；控制台只输出 token_id、scope 和文件位置。
 - `serve` 就绪后在 stdout 输出一行 JSON（`event`=`ready`、`instance_id`、`api_base_url`、媒体／事件地址；未启用时为 null），供桌面启动器读取实际端口；日志写 stderr。
 - `check-config` 校验配置、构建能力与目标根；已有数据库时以只读连接比对目录绑定，不改动持久状态。

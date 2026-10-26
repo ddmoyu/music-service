@@ -114,7 +114,12 @@ Result<NormalizedDownloadIntent> NormalizedDownloadIntent::normalize(DownloadInt
         return Error::validation("product", "configuration versions must be set");
     }
 
-    const std::vector<SourceId> needed{draft.original_track.source};
+    std::vector<SourceId> needed{draft.original_track.source};
+    if (draft.account_bindings.size() > 32)
+        return Error::validation("account_bindings", "at most 32 sources are supported");
+    for (const auto& binding : draft.account_bindings) needed.push_back(binding.source());
+    std::sort(needed.begin(), needed.end(), [](const auto& a, const auto& b) { return a.value() < b.value(); });
+    needed.erase(std::unique(needed.begin(), needed.end()), needed.end());
     auto bindings = normalize_bindings(draft.owner_id, needed, std::move(draft.account_bindings));
     if (!bindings) {
         return std::move(bindings).error();

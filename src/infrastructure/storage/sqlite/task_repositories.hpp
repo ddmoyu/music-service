@@ -3,6 +3,7 @@
 #include "application/ports/storage/maintenance.hpp"
 #include "application/ports/storage/publication_repository.hpp"
 #include "application/ports/storage/task_repository.hpp"
+#include "application/ports/storage/source_statistics.hpp"
 #include "infrastructure/storage/sqlite/account_repositories.hpp"
 
 #include <chrono>
@@ -16,10 +17,14 @@ struct TaskRepositoryOptions {
     std::chrono::hours idempotency_retention{24};
 };
 
-class SqliteTaskRepository final : public application::ports::TaskRepository {
+class SqliteTaskRepository final : public application::ports::TaskRepository,
+                                  public application::ports::SourceStatisticsRepository {
 public:
     SqliteTaskRepository(RepositoryContext context, TaskRepositoryOptions options)
         : ctx_(std::move(context)), options_(options) {}
+
+    domain::Result<std::vector<application::ports::SourceDownloadStatistics>>
+    source_statistics(const std::string& owner) override;
 
     domain::Result<std::optional<application::ports::StoredResponse>>
     find_idempotent(const std::string& owner_id, const std::string& route,

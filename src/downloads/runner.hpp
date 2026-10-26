@@ -1,6 +1,7 @@
 #pragma once
 
 #include "application/accounts/credential_service.hpp"
+#include "application/catalog/source_retry.hpp"
 #include "application/ports/processing/audio_processor.hpp"
 #include "application/ports/providers/directory.hpp"
 #include "application/ports/runtime/clock.hpp"
@@ -92,6 +93,7 @@ struct RunnerServices {
     std::shared_ptr<const ports::Clock> clock;
     // Display text (title, artist) -> one safe path component.
     std::function<std::string(std::string_view)> file_name;
+    std::shared_ptr<application::catalog::SourceRetryService> source_retry{};
 };
 
 // Runs one claimed execution of a download (runtime-and-tasks.md, 执行阶段) until the task

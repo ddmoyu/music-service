@@ -5,8 +5,10 @@
 // checkpoints and resume (A27), fair dispatch and the pause policy.
 
 #include "../unit/providers/mock_providers.hpp"
+#include "service_harness.hpp"
 
 #include "application/accounts/credential_service.hpp"
+#include "application/catalog/asset_service.hpp"
 #include "application/tasks/download_service.hpp"
 #include "application/transport/upstream_client.hpp"
 #include "audio_processing/verifying_processor.hpp"
@@ -197,9 +199,10 @@ struct ResolverScript {
     std::function<domain::Result<ports::ResolvedAudio>(const domain::TrackRef&)> answer;
     std::function<domain::Result<domain::Track>(const domain::TrackRef&)> detail;
     std::function<domain::Result<domain::TrackLyrics>(const ports::ProviderContext&)> lyrics;
+    std::function<domain::Result<ports::TrackSearchPage>(const ports::ProviderContext&, const ports::TrackSearchQuery&)> search;
 };
 
-class MetadataScript final : public ports::ITrackDetail, public ports::ILyrics {
+class MetadataScript final : public ports::ITrackDetail, public ports::ILyrics, public ports::ITrackSearch {
 public:
     explicit MetadataScript(std::shared_ptr<ResolverScript> s) : script(std::move(s)) {}
     domain::Result<domain::Track> track_detail(const ports::ProviderContext&, const domain::TrackRef& ref) override {
@@ -211,6 +214,10 @@ public:
         return domain::TrackLyrics{{}, {}, {}, true, {}};
     }
     std::shared_ptr<ResolverScript> script;
+    domain::Result<ports::TrackSearchPage> search_tracks(const ports::ProviderContext& c, const ports::TrackSearchQuery& q) override {
+        if (script->search) return script->search(c, q);
+        return MockSearch{c.identity.binding().source()}.search_tracks(c, q);
+    }
 };
 
 class ScriptedResolver final : public ports::IAssetResolver {
@@ -242,6 +249,10 @@ private:
 // Catalog (search, detail "detail") plus anonymous audio from the script.
 ports::ProviderBundle scripted(std::string_view name, std::shared_ptr<ResolverScript> script) {
     auto bundle = mock_catalog(name);
+    bundle.bindings[0] = ports::CapabilityBinding::bind<ports::ITrackSearch>(
+        [script](const ports::ProviderSetup&) -> domain::Result<std::shared_ptr<ports::ITrackSearch>> {
+            return std::shared_ptr<ports::ITrackSearch>{std::make_shared<MetadataScript>(script)};
+        });
     bundle.bindings[1] = ports::CapabilityBinding::bind<ports::ITrackDetail>(
         [script](const ports::ProviderSetup&) -> domain::Result<std::shared_ptr<ports::ITrackDetail>> {
             return std::shared_ptr<ports::ITrackDetail>{std::make_shared<MetadataScript>(script)};
@@ -272,7 +283,7 @@ downloads::RunnerOptions quick_options() {
 struct Runs {
     explicit Runs(std::string_view name, downloads::RunnerOptions options = quick_options(),
                   runtime::AdmissionLimits limits = {}, std::shared_ptr<ports::AudioProcessor> processor = {},
-                  std::size_t processing_workers = 1)
+                  std::size_t processing_workers = 1, bool three_sources = false)
         : dir(fs::temp_directory_path() /
               infrastructure::filesystem::path_from_utf8("music-service-执行-" + std::string{name})) {
         fs::remove_all(dir);
@@ -290,7 +301,9 @@ struct Runs {
         owner = unwrap(identities->create_principal("owner", ports::PrincipalRole::user, std::nullopt)).id;
         other = unwrap(identities->create_principal("other", ports::PrincipalRole::user, std::nullopt)).id;
 
-        registry = unwrap(providers::ProviderRegistry::build({scripted("src", script), scripted("busy", script)}, {}));
+        std::vector<ports::ProviderBundle> bundles{scripted("src", script), scripted("busy", script)};
+        if (three_sources) bundles.push_back(scripted("third", script));
+        registry = unwrap(providers::ProviderRegistry::build(std::move(bundles), {}));
         credentials = std::make_shared<application::accounts::CredentialService>(
             std::make_shared<sqlite::SqliteCredentialRepository>(ctx),
             std::make_shared<infrastructure::secrets::FileSecretStore>(dir / "secrets"), registry, clock);
@@ -306,6 +319,8 @@ struct Runs {
         services.tasks = tasks;
         services.providers = registry;
         services.credentials = credentials;
+        source_retry = std::make_shared<application::catalog::SourceRetryService>(registry, credentials, tasks);
+        services.source_retry = source_retry;
         services.upstream = std::make_shared<application::transport::UpstreamClient>(ledger, transport, clock);
         services.work_files = files;
         services.files = files;
@@ -342,6 +357,7 @@ struct Runs {
                                           {"dst_main", "d1", "n1", "m1"}};
         draft.product.output = output;
         draft.metadata_policy = metadata_policy;
+        if (switchable) draft.account_bindings = unwrap(source_retry->bindings(who, anonymous(who, source)));
         auto intent = unwrap(domain::NormalizedDownloadIntent::normalize(std::move(draft)));
         const auto key = "key-" + std::string{source} + "-" + std::string{id} + "-" + who;
         return unwrap(tasks->create({std::move(intent), key, "h", false})).task.task_id;
@@ -358,6 +374,18 @@ struct Runs {
     ports::TaskRecord get(const std::string& task_id, const std::string& who = {}) {
         return unwrap(tasks->get(who.empty() ? owner : who, task_id));
     }
+    void enable_source_retry() {
+        switchable = true;
+        output.name_format = "title";
+        script->detail = [](const domain::TrackRef& ref) -> domain::Result<domain::Track> {
+            return domain::Track{ref, "detail", {{"singer", {}}}, {}, 30010, {}};
+        };
+        script->search = [](const ports::ProviderContext& c, const ports::TrackSearchQuery&) -> domain::Result<ports::TrackSearchPage> {
+            ports::TrackSearchPage page;
+            page.page.items.push_back({track(c.identity.binding().source().value(), "matched"), "detail", {{"singer", {}}}, {}, 30010, {}});
+            return page;
+        };
+    }
     json progress(const ports::TaskRecord& task) const { return json::parse(task.progress_json.value_or("null")); }
 
     fs::path dir;
@@ -372,6 +400,8 @@ struct Runs {
     std::shared_ptr<sqlite::SqlitePublicationRepository> publications;
     std::shared_ptr<const providers::ProviderRegistry> registry;
     std::shared_ptr<application::accounts::CredentialService> credentials;
+    std::shared_ptr<application::catalog::SourceRetryService> source_retry;
+    bool switchable{false};
     std::shared_ptr<runtime::AdmissionLedger> ledger;
     std::shared_ptr<ScriptedTransport> transport = std::make_shared<ScriptedTransport>();
     std::shared_ptr<ResolverScript> script = std::make_shared<ResolverScript>();
@@ -777,6 +807,7 @@ TEST_CASE("admission pauses keep the attempt, new executions refuse old writes (
     runtime::AdmissionLimits limits;
     limits.per_source[ports::TrafficClass::download] = 1;
     Runs r{"admission", quick_options(), limits};
+    r.enable_source_retry();
     const auto id = r.create();
 
     // Another transfer of this source holds the only download slot.
@@ -832,6 +863,7 @@ TEST_CASE("attempts and the absolute deadline are budgets, not restarts (A26)", 
         auto options = quick_options();
         options.max_attempts = 2;
         Runs r{"attempts", options};
+        r.enable_source_retry();
         r.transport->answer = [](const ports::HttpRequest&) { return Reply{429, {}, {}}; };
         const auto id = r.create();
         CHECK(r.run_next().outcome == RunOutcome::waiting_retry);
@@ -972,8 +1004,9 @@ TEST_CASE("a 416 completes only with matching evidence, otherwise starts over (A
     CHECK(r.get(id).attempt == 1);
 }
 
-TEST_CASE("an expired address is resolved again and the same resource resumes (A16)", "[downloads][runner]") {
+TEST_CASE("an expired address switches source and discards the original partial", "[downloads][runner]") {
     Runs r{"expired"};
+    r.enable_source_retry();
     int resolved = 0;
     r.script->answer = [&](const domain::TrackRef& t) -> domain::Result<ports::ResolvedAudio> {
         ++resolved;
@@ -1012,14 +1045,16 @@ TEST_CASE("an expired address is resolved again and the same resource resumes (A
     const auto requests = r.transport->requests();
     const auto& last = requests.back();
     CHECK(last.url == "https://cdn.test/signed-2.mp3");
-    CHECK(header(last, "Range") == "bytes=90000-"); // same track, quality and validator
-    CHECK(header(last, "If-Range") == "\"v1\"");
+    CHECK_FALSE(header(last, "Range"));
+    CHECK_FALSE(header(last, "If-Range"));
+    CHECK(json::parse(*r.get(id).execution_json)["actual_track"]["source"] == "busy");
     CHECK(without_id3v2(read_bytes(r.root / "detail.mp3")) == r.audio);
     CHECK(r.get(id).attempt == 2);
 }
 
 TEST_CASE("an expired address changing quality discards the partial file", "[downloads][runner][stage-c]") {
     Runs r{"quality-change"};
+    r.enable_source_retry();
     int resolved = 0;
     r.script->answer = [&](const domain::TrackRef& t) -> domain::Result<ports::ResolvedAudio> {
         ++resolved;
@@ -1221,7 +1256,8 @@ TEST_CASE("Retry-After moves the next attempt later, within its cap", "[download
     options.max_retry_after = 120s;
     runtime::AdmissionLimits limits;
     limits.max_cooldown = 0s; // only the task's own wait is under test here
-    Runs r{"retry-after", options, limits};
+    Runs r{"retry-after", options, limits, {}, 1, true};
+    r.enable_source_retry();
     std::string wait = "30";
     r.transport->answer = [&](const ports::HttpRequest&) {
         return Reply{503, {{"Retry-After", wait}}, {}};
@@ -1316,7 +1352,7 @@ TEST_CASE("queued processing can be canceled expired or dropped without leaving 
         control.request(downloads::StopReason::canceled);
         expected = RunOutcome::canceled;
     }
-    SECTION("deadline stops waiting for an unstarted operation") { expected = RunOutcome::waiting_retry; }
+    SECTION("deadline stops waiting for an unstarted operation") { expected = RunOutcome::failed; }
     const bool ready = result.wait_for(3s) == std::future_status::ready;
     r.processing->request_stop();
     REQUIRE(ready);
@@ -1546,4 +1582,248 @@ TEST_CASE("executions a crash left running are due again at their resume stage",
     CHECK_FALSE(r.get(downloading).execution_id);
     CHECK(r.run_next().outcome == RunOutcome::completed);
     CHECK(r.run_next().outcome == RunOutcome::completed);
+}
+
+namespace {
+void matching_sources(const std::shared_ptr<ResolverScript>& script) {
+    script->detail = [](const domain::TrackRef& ref) -> domain::Result<domain::Track> {
+        return domain::Track{ref, "同一首歌", {{"同一歌手", {}}}, {}, 30010, {}};
+    };
+    script->search = [](const ports::ProviderContext& c, const ports::TrackSearchQuery&) -> domain::Result<ports::TrackSearchPage> {
+        ports::TrackSearchPage page;
+        page.page.items.push_back({track(c.identity.binding().source().value(), "matched"), "同一首歌", {{"同一歌手", {}}}, {}, 30010, {}});
+        return page;
+    };
+}
+
+ports::SourceDownloadStatistics stats_for(Runs& r, std::string_view source) {
+    auto statistics = unwrap(r.tasks->source_statistics(r.owner));
+    for (const auto& value : statistics) if (value.source == source) return value;
+    return {std::string{source}};
+}
+} // namespace
+
+TEST_CASE("download failures switch source with strict identity and atomically count outcomes", "[source-retry][runner]") {
+    Runs r{"strict-source-switch"};
+    r.switchable = true;
+    matching_sources(r.script);
+    bool corrupt = false;
+    SECTION("forbidden CDN") {}
+    SECTION("downloaded audio is invalid") { corrupt = true; }
+    r.transport->answer = [&](const ports::HttpRequest& req) {
+        if (req.url.find("/src/") != std::string::npos)
+            return corrupt ? Reply{200, {{"Content-Type", "text/html"}}, "<html>not audio</html>"} : Reply{403};
+        return serve_range(req, r.audio);
+    };
+    const auto id = r.create();
+    REQUIRE(r.run_next().outcome == RunOutcome::waiting_retry);
+    auto task = r.get(id);
+    CHECK_FALSE(task.checkpoint_json);
+    CHECK(stats_for(r, "src").failures == 1);
+    CHECK(unwrap(r.tasks->source_statistics(r.other)).empty());
+    const auto runnable = unwrap(r.tasks->runnable(*task.next_retry_at, 10, 10));
+    REQUIRE(runnable.size() == 1);
+    CHECK(runnable[0].source.empty()); // 不再被原平台冷却阻塞
+    REQUIRE(r.run_next(*task.next_retry_at).outcome == RunOutcome::completed);
+    task = r.get(id);
+    const auto execution = json::parse(*task.execution_json);
+    CHECK(execution["actual_track"]["source"] == "busy");
+    CHECK(execution["source_switched"] == true);
+    CHECK(execution["source_retry"]["attempted_sources"] == json::array({"src", "busy"}));
+    CHECK(stats_for(r, "src").failures == 1);
+    CHECK(stats_for(r, "busy").successes == 1);
+    const auto requests = r.transport->requests();
+    REQUIRE(requests.size() == 2);
+    CHECK_FALSE(header(requests[1], "Range"));
+    // 新连接回读数据库，统计不是进程内临时状态。
+    auto reopened = unwrap(sqlite::Database::open(r.dir / "service.sqlite3", {}));
+    sqlite::SqliteTaskRepository repository{{reopened.get(), r.clock, r.ids}, {}};
+    const auto persisted = unwrap(repository.source_statistics(r.owner));
+    REQUIRE(persisted.size() == 2);
+    CHECK(persisted[0].source == "busy");
+    CHECK(persisted[0].successes == 1);
+}
+
+TEST_CASE("source switch survives shutdown and stale writes cannot duplicate statistics", "[source-retry][runner]") {
+    Runs r{"source-resume"};
+    r.switchable = true;
+    matching_sources(r.script);
+    bool hold = true;
+    r.transport->answer = [&](const ports::HttpRequest& req) {
+        if (req.url.find("/src/") != std::string::npos) return Reply{403};
+        auto response = serve_range(req, r.audio);
+        response.hold = hold;
+        return response;
+    };
+    const auto id = r.create();
+    REQUIRE(r.run_next().outcome == RunOutcome::waiting_retry);
+    const auto initial = r.get(id);
+    auto claimed = unwrap(r.tasks->claim(id, *initial.next_retry_at));
+    REQUIRE(claimed);
+    downloads::ExecutionControl control;
+    auto running = std::async(std::launch::async, [&] { return r.runner->run(*claimed, control); });
+    const auto entered = eventually([&] { return r.transport->holding.load(); });
+    control.request(downloads::StopReason::shutdown);
+    REQUIRE(running.wait_for(5s) == std::future_status::ready);
+    REQUIRE(entered);
+    CHECK(running.get().outcome == RunOutcome::waiting_admission);
+    CHECK(json::parse(*r.get(id).execution_json)["actual_track"]["source"] == "busy");
+    CHECK(stats_for(r, "busy").failures == 0);
+    ports::DeferCommand stale;
+    stale.task_id = id;
+    stale.execution_id = *claimed->execution_id;
+    stale.expected_version = claimed->version;
+    stale.reason = domain::WaitReason::upstream_retry;
+    stale.next_retry_at = r.clock->now();
+    stale.source_failure = "busy";
+    REQUIRE_FALSE(r.tasks->defer(stale));
+    CHECK(stats_for(r, "busy").failures == 0);
+    hold = false;
+    // 模拟恢复扫描；已保存的候选和身份不会退回原平台。
+    REQUIRE(r.tasks->requeue_interrupted(r.clock->now()));
+    REQUIRE(r.run_next().outcome == RunOutcome::completed);
+    CHECK(r.get(id).attempt == 2);
+    CHECK(stats_for(r, "src").failures == 1);
+    CHECK(stats_for(r, "busy").successes == 1);
+    const auto requests = r.transport->requests();
+    REQUIRE(requests.size() == 3);
+    CHECK(requests.back().url.find("/busy/") != std::string::npos);
+    CHECK(header(requests.back(), "Range").has_value());
+}
+
+TEST_CASE("canceling a pending source retry does not create another platform failure", "[source-retry][runner]") {
+    Runs r{"source-cancel"};
+    r.enable_source_retry();
+    r.transport->answer = [](const ports::HttpRequest&) { return Reply{503}; };
+    const auto id = r.create();
+    REQUIRE(r.run_next().outcome == RunOutcome::waiting_retry);
+    REQUIRE(r.tasks->request_cancel(r.owner, id));
+    CHECK(r.get(id).status == TaskStatus::canceled);
+    CHECK(stats_for(r, "src").failures == 1);
+    CHECK(stats_for(r, "busy").failures == 0);
+    CHECK(r.transport->requests().size() == 1);
+}
+
+TEST_CASE("source retry rejects different singers versions and mismatched detail", "[source-retry][runner]") {
+    Runs r{"strict-rejection"};
+    r.switchable = true;
+    matching_sources(r.script);
+    SECTION("different singer") {
+        r.script->search = [](const ports::ProviderContext& c, const ports::TrackSearchQuery&) -> domain::Result<ports::TrackSearchPage> {
+            ports::TrackSearchPage page;
+            page.page.items.push_back({track(c.identity.binding().source().value(), "matched"), "同一首歌", {{"另一个人", {}}}, {}, 30010, {}});
+            return page;
+        };
+    }
+    SECTION("detail contradicts search") {
+        r.script->detail = [](const domain::TrackRef& ref) -> domain::Result<domain::Track> {
+            return domain::Track{ref, "同一首歌", {{ref.source.value() == "src" ? "同一歌手" : "另一歌手", {}}}, {}, 30010, {}};
+        };
+    }
+    SECTION("live metadata") {
+        r.script->detail = [](const domain::TrackRef& ref) -> domain::Result<domain::Track> {
+            domain::Track result{ref, "同一首歌", {{"同一歌手", {}}}, {}, 30010, {}};
+            if (ref.source.value() != "src") result.version.kind = domain::VersionKind::live;
+            return result;
+        };
+    }
+    r.script->answer = [](const domain::TrackRef&) -> domain::Result<ports::ResolvedAudio> {
+        return domain::Error{ErrorCode::credentials_required, "not entitled", false, {}};
+    };
+    const auto id = r.create();
+    REQUIRE(r.run_next().outcome == RunOutcome::waiting_retry);
+    REQUIRE(r.run_next(*r.get(id).next_retry_at).outcome == RunOutcome::failed);
+    CHECK(json::parse(*r.get(id).error_json)["code"] == "SOURCE_EXHAUSTED");
+    CHECK(r.script->calls == 1);
+    CHECK(stats_for(r, "busy").failures == 0); // 搜索无匹配不计下载失败
+}
+
+TEST_CASE("manual source retry keeps exclusions and idempotency", "[source-retry][runner]") {
+    auto options = quick_options();
+    options.max_attempts = 1;
+    Runs r{"manual-source-retry", options};
+    r.switchable = true;
+    matching_sources(r.script);
+    r.transport->answer = [&](const ports::HttpRequest& req) {
+        return req.url.find("/src/") != std::string::npos ? Reply{403} : serve_range(req, r.audio);
+    };
+    const auto id = r.create();
+    REQUIRE(r.run_next().outcome == RunOutcome::failed);
+    application::tasks::DownloadService service{r.tasks, r.registry, r.credentials,
+        {{"dst_main", infrastructure::filesystem::path_to_utf8(r.root), {r.owner}, true}}, {}, {}, 100};
+    auto retried = unwrap(service.retry(r.owner, id, "manual-source-key-0001", "retry"));
+    const auto replay = unwrap(service.retry(r.owner, id, "manual-source-key-0001", "retry"));
+    CHECK(replay.replayed);
+    CHECK(replay.view.task.task_id == retried.view.task.task_id);
+    REQUIRE(r.run_next().outcome == RunOutcome::completed);
+    CHECK(json::parse(*r.get(retried.view.task.task_id).execution_json)["actual_track"]["source"] == "busy");
+    CHECK(stats_for(r, "src").failures == 1);
+}
+
+TEST_CASE("source ranking follows persisted user evidence and honors cancellation", "[source-retry]") {
+    Runs r{"source-ranking", quick_options(), {}, {}, 1, true};
+    matching_sources(r.script);
+    REQUIRE(r.database->write([&](sqlite::Connection& db) -> domain::Result<void> {
+        auto s = db.prepare("INSERT INTO source_download_statistics VALUES (?, 'busy', 1, 9), (?, 'third', 9, 1)");
+        if (!s) return s.error();
+        s->bind(1, r.owner).bind(2, r.owner);
+        return s->run();
+    }));
+    auto original = unwrap(r.script->detail(track("src", "1")));
+    auto bindings = unwrap(r.source_retry->bindings(r.owner));
+    std::vector<std::string> attempted{"src"};
+    const auto selected = unwrap(r.source_retry->next(r.owner, original, bindings, attempted, {std::chrono::steady_clock::now() + 10s, {}}));
+    CHECK(selected.ref.source.value() == "third");
+    attempted = {"src"};
+    std::stop_source stop;
+    stop.request_stop();
+    auto canceled = r.source_retry->next(r.owner, original, bindings, attempted, {std::chrono::steady_clock::now() + 10s, stop.get_token()});
+    REQUIRE_FALSE(canceled);
+    CHECK(canceled.error().code == ErrorCode::canceled);
+    CHECK(attempted == std::vector<std::string>{"src"});
+    auto timed_out = r.source_retry->next(r.owner, original, bindings, attempted, {std::chrono::steady_clock::now() - 1ms, {}});
+    REQUIRE_FALSE(timed_out);
+    CHECK(timed_out.error().code == ErrorCode::deadline_exceeded);
+}
+
+TEST_CASE("HTTP audition source switching is explicit probes candidates and preserves exclusions", "[source-retry][server]") {
+    Deployment d{"audition-switch-http"};
+    REQUIRE(d.run({"init"}).code == server::exit_ok);
+    const auto token = d.read(d.bootstrap());
+    auto script = std::make_shared<ResolverScript>();
+    matching_sources(script);
+    auto transport = std::make_shared<ScriptedTransport>();
+    const auto audio = mp3();
+    transport->answer = [&](const ports::HttpRequest& req) {
+        return req.url.find("/busy/") != std::string::npos ? Reply{403} : serve_range(req, audio);
+    };
+    RunningService service{d, std::make_shared<infrastructure::observability::MemorySink>(),
+        std::vector<ports::ProviderBundle>{scripted("src", script), scripted("busy", script), scripted("third", script)}, false, transport};
+    auto client = service.client(token);
+    auto anonymous_client = service.client();
+    const json input{{"track", {{"source", "src"}, {"id", "original"}}}, {"attempted_sources", {"src"}}};
+    CHECK(anonymous_client.Post("/api/v1/assets/switch-source", input.dump(), "application/json")->status == 401);
+    auto response = client.Post("/api/v1/assets/switch-source", input.dump(), "application/json");
+    REQUIRE(response);
+    INFO(response->body);
+    REQUIRE(response->status == 200);
+    const auto value = body(response)["data"];
+    CHECK(value["source_switched"] == true);
+    CHECK(value["original_track"]["source"] == "src");
+    CHECK(value["actual_track"]["source"] == "third");
+    CHECK(value["source_retry"]["attempted_sources"] == json::array({"src", "busy", "third"}));
+    CHECK(response->body.find("https://cdn.test") == std::string::npos);
+    CHECK(transport->requests().size() == 2);
+    auto exhausted = input;
+    exhausted["attempted_sources"] = value["source_retry"]["attempted_sources"];
+    auto end = client.Post("/api/v1/assets/switch-source", exhausted.dump(), "application/json");
+    CHECK(end->status == 422);
+    CHECK(error_code(end) == "SOURCE_EXHAUSTED");
+    exhausted["attempted_sources"] = {"src", "src"};
+    CHECK(client.Post("/api/v1/assets/switch-source", exhausted.dump(), "application/json")->status == 400);
+    CHECK(client.Post("/api/v1/assets/resolve", input.dump(), "application/json")->status == 400);
+    const auto statistics = client.Get("/api/v1/source-statistics");
+    REQUIRE(statistics->status == 200);
+    CHECK(body(statistics)["data"]["items"].empty()); // 试听不能冒充下载成功
+    CHECK(service.stop().code == server::exit_ok);
 }

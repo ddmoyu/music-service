@@ -176,14 +176,16 @@ queued／waiting_retry 可立即转 canceled。运行阶段先持久记录 cance
 | 瞬时连接中断／空闲超时 | 按 downloads.transport_retries 和 retry 配置进行有限退避与抖动 |
 | 本地额度不足／已知配额冷却 | waiting_retry，wait_reason=admission；释放执行槽，按恢复位置继续，不额外消耗 attempt |
 | 实际请求收到 429／上游 5xx | 按 RetryPolicy 结束本次逻辑尝试，waiting_retry 的 wait_reason=upstream_retry；尊重有上限的 Retry-After，总尝试数受 downloads.max_attempts 限制 |
-| CDN 403／404／410 | 不盲目重复同一 URL；重新解析同一实际曲目，检查资源身份后再续传或重下 |
-| 会员／凭证失效／能力不支持 | 返回业务错误，不用网络重试掩盖 |
+| CDN 403／404／410、实际平台取流／传输／音频校验失败 | 结束本次尝试并严格换源，清除原续传证据；每个平台最多选择一次 |
+| 会员／凭证失效、品质或整曲不可用 | 不更换同平台账号或绕过权限，使用其他严格匹配平台；无候选则明确失败 |
 | 磁盘不足／路径无权限／标签 required 失败 | 明确失败，等待用户处理后创建重试任务 |
 | 用户取消 | 不重试 |
 
 waiting_retry 释放执行线程与在途额度，next_retry_at 存 DB，由调度器到时重新领取，不能让下载工作线程 sleep 很久。upstream_retry 同时关闭旧尝试（attempt_open=false）并设置 resume_stage=resolving；admission 保持原 attempt_open 和已验证恢复位置。重新领取只能由 begin_attempt 为已关闭的尝试开始新计数。
 
 续传要求部分文件与资源身份匹配：优先使用强 ETag、可用的 Last-Modified／If-Range、总大小、平台文件 hash 和实际歌曲／品质。只有 URL 相同、文件名相同或时长相近不够可靠；证据不足就重下。
+
+平台失败后的逻辑重试不再次选择原平台。每平台最多检查首 10 条搜索结果、3 个详情，单平台 5 秒，后台选源总计最多 30 秒且不超过现有尝试／绝对预算。原始身份先持久化，缺失时不猜测。候选平台账号在接单时固定，source_retry 和 actual_track 随任务保存；恢复沿用实际平台，待选源任务不受原平台冷却阻塞。手动 retry 继承身份与排除列表。平台统计与失败／完成状态同事务提交，重复状态写入不重复计数。
 
 用户取消后清理未发布工作文件；失败工作文件按 filesystem 配置保留供诊断与受控检查，手动新建重试任务不承诺复用它。service_shutdown 与崩溃恢复所需工作文件依据活动任务及发布意图保留，不能套用终态清理规则删除。
 

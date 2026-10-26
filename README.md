@@ -6,6 +6,8 @@
 
 - 音乐搜索、详情查询与链接解析
 - 后台下载、批量任务、进度订阅与取消
+- 下载失败后严格换源重试，按歌曲名和完整演唱者名单匹配，优先使用历史下载成功率高的平台
+- 显式试听换源接口，返回实际播放平台和已尝试的平台，便于前端提示和继续换源
 - 下载任务持久化与重启恢复
 - 音频校验、标签写入，以及歌词和封面导出
 - 文件访问与媒体流服务
@@ -35,6 +37,7 @@ Docker 教程包含构建、首次初始化、访问 token、持久化目录、�
 - [macOS 使用说明](packaging/macos/README.md)
 - [发布说明](packaging/RELEASING.md)
 - [API 说明](docs/design/cpp20-refactor/backend-service/api-contract.md)
+- [换源与试听接入](docs/design/cpp20-refactor/backend-service/api-contract.md#81-严格匹配与试听换源)
 - [平台账号与 Cookie 接入指南](docs/account-management.md)：新增、切换、停用、会员显示及错误处理
 - [配置说明](config/README.md)
 - [项目文档](docs/README.md)

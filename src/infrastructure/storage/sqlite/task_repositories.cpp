@@ -22,6 +22,18 @@ namespace {
 
 constexpr std::string_view create_method = "POST";
 
+domain::Result<void> record_source_outcome(Connection& db, const std::string& owner,
+                                          const std::string& source, bool success) {
+    if (!domain::SourceId::parse(source)) return domain::Error::validation("source", "invalid statistics source");
+    auto statement = db.prepare("INSERT INTO source_download_statistics (owner_id, source, successes, failures)"
+        " VALUES (?, ?, ?, ?) ON CONFLICT(owner_id, source) DO UPDATE SET"
+        " successes = successes + excluded.successes, failures = failures + excluded.failures");
+    if (!statement) return statement.error();
+    statement->bind(1, owner).bind(2, source).bind(3, std::int64_t{success ? 1 : 0})
+        .bind(4, std::int64_t{success ? 0 : 1});
+    return statement->run();
+}
+
 constexpr std::string_view task_columns =
     "id, owner_id, status, version, execution_id, attempt, wait_reason, next_retry_at, "
     "resume_stage, destination_id, fingerprint_schema, fingerprint_digest, fingerprint, "
@@ -376,6 +388,7 @@ struct CoreInput {
     bool force{false};
     std::optional<std::string> retry_of;
     std::optional<ports::ReuseCandidate> completed;
+    std::optional<std::string> initial_execution_json{};
 };
 
 // Steps 2-4 of a create inside an open transaction: active reuse, completed reuse,
@@ -452,7 +465,7 @@ domain::Result<ports::CreateTaskOutcome> create_core(Connection& db, const CoreI
     auto insert = db.prepare(
         "INSERT INTO download_tasks (id, owner_id, status, version, fingerprint_schema,"
         " fingerprint_digest, fingerprint, normalized_intent, destination_id, original_source,"
-        " retry_of, created_at, updated_at) VALUES (?, ?, 'queued', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        " retry_of, created_at, updated_at, execution) VALUES (?, ?, 'queued', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
     if (!insert) {
         return std::move(insert).error();
     }
@@ -466,7 +479,8 @@ domain::Result<ports::CreateTaskOutcome> create_core(Connection& db, const CoreI
         .bind(8, intent.original_track().source.value())
         .bind(9, in.retry_of)
         .bind(10, now)
-        .bind(11, now);
+        .bind(11, now)
+        .bind(12, in.initial_execution_json);
     if (auto done = insert->run(); !done) {
         return done.error();
     }
@@ -586,7 +600,8 @@ SqliteTaskRepository::create(const ports::CreateTaskCommand& command) {
             return ports::CreateTaskOutcome{std::move(task).value(), response.value("reused", false), true};
         }
 
-        auto outcome = create_core(db, {&intent, command.force, command.retry_of, command.completed}, new_id, now, options_);
+        auto outcome = create_core(db, {&intent, command.force, command.retry_of, command.completed,
+                                        command.initial_execution_json}, new_id, now, options_);
         if (!outcome) {
             return outcome;
         }
@@ -751,6 +766,19 @@ domain::Result<std::vector<ports::TaskRecord>> SqliteTaskRepository::list(const 
     });
 }
 
+domain::Result<std::vector<ports::SourceDownloadStatistics>>
+SqliteTaskRepository::source_statistics(const std::string& owner) {
+    return ctx_.database->read([&](Connection& db) -> domain::Result<std::vector<ports::SourceDownloadStatistics>> {
+        auto query = db.prepare("SELECT source, successes, failures FROM source_download_statistics WHERE owner_id = ? ORDER BY source LIMIT 100");
+        if (!query) return query.error();
+        query->bind(1, owner);
+        return collect<ports::SourceDownloadStatistics>(*query, [](const Statement& row) {
+            return ports::SourceDownloadStatistics{row.text(0), static_cast<std::uint64_t>(row.integer(1)),
+                                                    static_cast<std::uint64_t>(row.integer(2))};
+        });
+    });
+}
+
 domain::Result<ports::TaskRecord> SqliteTaskRepository::get(const std::string& owner_id,
                                                             const std::string& task_id) {
     return ctx_.database->read(
@@ -848,7 +876,9 @@ SqliteTaskRepository::runnable(std::chrono::system_clock::time_point now, std::u
     return ctx_.database->read([&](Connection& db) -> domain::Result<std::vector<ports::RunnableTask>> {
         auto s = db.prepare(
             "SELECT id, owner_id, original_source, due FROM ("
-            " SELECT id, owner_id, original_source, created_at, COALESCE(next_retry_at, created_at) AS due,"
+            " SELECT id, owner_id, CASE WHEN json_extract(execution, '$.source_retry.pending') = 1 THEN ''"
+            " ELSE COALESCE(json_extract(execution, '$.actual_track.source'), original_source) END AS original_source,"
+            " created_at, COALESCE(next_retry_at, created_at) AS due,"
             "  ROW_NUMBER() OVER (PARTITION BY owner_id"
             "   ORDER BY COALESCE(next_retry_at, created_at), created_at, id) AS rank"
             " FROM download_tasks"
@@ -955,6 +985,11 @@ domain::Result<ports::TaskRecord> SqliteTaskRepository::defer(const ports::Defer
         update.clear_checkpoint = command.clear_checkpoint;
         update.progress_json = command.progress_json;
         update.attempt_error = command.error_json;
+        update.execution_json = command.execution_json;
+        if (command.source_failure && !admission) {
+            if (auto saved = record_source_outcome(db, task->owner_id, *command.source_failure, false); !saved)
+                return saved.error();
+        }
         return apply(db, command.task_id, update, now);
     });
 }
@@ -1022,6 +1057,10 @@ SqliteTaskRepository::transition(const ports::TransitionCommand& command) {
         // Waiting or finished tasks belong to no execution; a later claim issues a new one.
         if (command.to != TaskStatus::waiting_retry && !domain::is_terminal(command.to)) {
             update.execution_id = command.execution_id;
+        }
+        if (command.source_failure && command.to == TaskStatus::failed) {
+            if (auto saved = record_source_outcome(db, task->owner_id, *command.source_failure, false); !saved)
+                return saved.error();
         }
         return apply(db, command.task_id, update, now);
     });
@@ -1298,6 +1337,13 @@ SqlitePublicationRepository::complete(const std::string& task_id, const std::str
             return domain::Error::validation("result", "must be a JSON object");
         }
         result["file_id"] = file_id;
+        const auto execution = nlohmann::json::parse(task->execution_json.value_or("{}"), nullptr, false);
+        if (execution.is_object() && execution.contains("actual_track") && execution["actual_track"].is_object()) {
+            const auto source = execution["actual_track"].value("source", std::string{});
+            if (source != "local_ncm") {
+                if (auto saved = record_source_outcome(db, task->owner_id, source, true); !saved) return saved.error();
+            }
+        }
         Update update;
         update.to = TaskStatus::completed;
         update.result_json = result.dump();

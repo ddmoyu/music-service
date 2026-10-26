@@ -45,6 +45,7 @@ add_executable(music_service_unit_tests
     unit/domain/task_status_test.cpp
     unit/application/media_tickets_test.cpp
     unit/application/ports_test.cpp
+    unit/application/source_retry_test.cpp
     unit/application/task_events_test.cpp
     unit/application/transport_rules_test.cpp
     unit/infrastructure/config_test.cpp

@@ -32,6 +32,8 @@ std::string_view to_string(ErrorCode code) noexcept {
         return "QUALITY_UNAVAILABLE";
     case ErrorCode::preview_rejected:
         return "PREVIEW_REJECTED";
+    case ErrorCode::source_exhausted:
+        return "SOURCE_EXHAUSTED";
     case ErrorCode::credentials_required:
         return "CREDENTIALS_REQUIRED";
     case ErrorCode::resource_expired:

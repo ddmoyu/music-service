@@ -88,7 +88,7 @@ TEST_CASE("non-current and incomplete snapshots are rejected", "[domain][intent]
     namespace storage = music_service::infrastructure::storage;
     const auto intent = unwrap(NormalizedDownloadIntent::normalize(base_draft()));
     const auto current = nlohmann::json::parse(storage::encode_intent(intent));
-    for (const auto version : {1, 2, 3, 4, 6}) {
+    for (const auto version : {1, 2, 3, 4, 5, 7}) {
         auto document = current;
         document["schema"] = version;
         CHECK_FALSE(storage::decode_intent(document.dump()));
@@ -159,14 +159,18 @@ TEST_CASE("account bindings are fixed and part of the intent", "[domain][intent]
     CHECK_FALSE(fp(with_user) == fp(with_other_user));
 }
 
-TEST_CASE("bindings for unused sources are dropped and order does not matter",
+TEST_CASE("fallback bindings are fixed in the fingerprint and order does not matter",
           "[domain][intent]") {
     auto extra = base_draft();
     extra.account_bindings.insert(extra.account_bindings.begin(), anonymous("prn_a", "qq"));
     const auto intent = unwrap(NormalizedDownloadIntent::normalize(extra));
-    REQUIRE(intent.account_bindings().size() == 1);
+    REQUIRE(intent.account_bindings().size() == 2);
     CHECK(intent.account_bindings()[0].source() == source("kuwo"));
-    CHECK(fingerprint(intent) == fp(base_draft()));
+    CHECK_FALSE(fingerprint(intent) == fp(base_draft()));
+    std::reverse(extra.account_bindings.begin(), extra.account_bindings.end());
+    CHECK(fingerprint(intent) == fp(extra));
+    CHECK(unwrap(music_service::infrastructure::storage::decode_intent(
+        music_service::infrastructure::storage::encode_intent(intent))).account_bindings().size() == 2);
 }
 
 TEST_CASE("binding errors are rejected", "[domain][intent]") {

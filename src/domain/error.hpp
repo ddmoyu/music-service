@@ -22,6 +22,7 @@ enum class ErrorCode {
     context_required,
     quality_unavailable,
     preview_rejected,
+    source_exhausted,
     credentials_required,
     resource_expired,
     upstream_failed,

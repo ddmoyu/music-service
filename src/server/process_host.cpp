@@ -548,9 +548,10 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
     state->catalog = std::make_shared<application::catalog::CatalogService>(
         catalog_limits, state->registry, state->credentials, state->catalog_executor, clock,
         [ids = inst.ids] { return ids->next("cur_"); });
+    auto source_retry = std::make_shared<application::catalog::SourceRetryService>(state->registry, state->credentials, inst.tasks);
     state->assets = std::make_shared<application::catalog::AssetService>(
         config.lifetimes, config.handles, 4, state->registry, state->credentials, state->upstream, clock,
-        [ids = inst.ids] { return ids->next("ast_"); }, config.catalog.total_budget, handle_budget);
+        [ids = inst.ids] { return ids->next("ast_"); }, config.catalog.total_budget, handle_budget, source_retry);
 
     // With SSE enabled, every committed task version is published to the owner's streams.
     std::shared_ptr<application::ports::TaskRepository> tasks = inst.tasks;
@@ -582,6 +583,7 @@ domain::Result<std::unique_ptr<ProcessHost>> ProcessHost::start(const cfg::Servi
     runner_options.progress_interval = config.event_stream.progress_interval;
     downloads::RunnerServices runner_services;
     runner_services.tasks = tasks;
+    runner_services.source_retry = source_retry;
     runner_services.providers = state->registry;
     runner_services.credentials = state->credentials;
     runner_services.upstream = state->upstream;

@@ -64,7 +64,7 @@ struct DownloadIntentDraft {
 // duplicate_policy are deliberately absent.
 class NormalizedDownloadIntent {
 public:
-    // Bindings must belong to the owner; only the original source is required.
+    // 所有候选源的账号在接单时固定；至少包含原平台，执行中不切换同平台账号。
     static Result<NormalizedDownloadIntent> normalize(DownloadIntentDraft draft);
 
     [[nodiscard]] const std::string& owner_id() const noexcept { return owner_id_; }
@@ -94,7 +94,7 @@ private:
 // Equality compares schema and canonical form, so a digest collision cannot merge
 // two different intents.
 struct DownloadFingerprint {
-    static constexpr std::uint32_t current_schema = 2;
+    static constexpr std::uint32_t current_schema = 3;
 
     std::uint32_t schema_version{current_schema};
     std::string canonical;

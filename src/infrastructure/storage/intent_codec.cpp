@@ -9,7 +9,7 @@ using json = nlohmann::json;
 
 namespace {
 
-constexpr int schema_version = 5;
+constexpr int schema_version = 6;
 
 json ref_to_json(const domain::TrackRef& ref) {
     return {{"source", ref.source.value()}, {"id", ref.id.value()}};

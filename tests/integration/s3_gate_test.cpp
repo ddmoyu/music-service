@@ -150,6 +150,25 @@ public:
     }
 };
 
+class GateSearch final : public ports::ITrackSearch {
+public:
+    domain::Result<ports::TrackSearchPage> search_tracks(const ports::ProviderContext& c,
+                                                        const ports::TrackSearchQuery& query) override {
+        const std::string prefix = "曲目 ";
+        const std::string suffix = " S3 歌手";
+        ports::TrackSearchPage result;
+        if (!query.text.starts_with(prefix) || !query.text.ends_with(suffix)) return result;
+        const auto id = query.text.substr(prefix.size(), query.text.size() - prefix.size() - suffix.size());
+        auto ref = domain::PlatformId::parse(id);
+        if (!ref) return ref.error();
+        auto detail = GateDetail{}.track_detail(c, {c.identity.binding().source(), *ref});
+        if (!detail) return detail.error();
+        result.page.items.push_back(*detail);
+        result.page.page = {query.limit, 1, 1, false};
+        return result;
+    }
+};
+
 class GateResolver final : public ports::IAssetResolver {
 public:
     domain::Result<ports::ResolvedAudio> resolve_audio(const ports::ProviderContext&, const domain::TrackRef& track,
@@ -174,8 +193,12 @@ ports::ProviderBundle gate_source(std::string_view name) {
                                  .name = std::string{name},
                                  .implementation_id = std::string{name} + "-gate",
                                  .implementation_version = "1.0.0"};
-    bundle.capabilities = {{.key = "track_detail"}, {.key = "resolve_audio"}};
+    bundle.capabilities = {{.key = "track_detail"}, {.key = "resolve_audio"}, {.key = "search_tracks"}};
     bundle.bindings = {
+        ports::CapabilityBinding::bind<ports::ITrackSearch>(
+            [](const ports::ProviderSetup&) -> domain::Result<std::shared_ptr<ports::ITrackSearch>> {
+                return std::shared_ptr<ports::ITrackSearch>{std::make_shared<GateSearch>()};
+            }),
         ports::CapabilityBinding::bind<ports::ITrackDetail>(
             [](const ports::ProviderSetup&) -> domain::Result<std::shared_ptr<ports::ITrackDetail>> {
                 return std::shared_ptr<ports::ITrackDetail>{std::make_shared<GateDetail>()};
@@ -586,7 +609,7 @@ TEST_CASE("T32: faults on a loaded runner end in whole files or clear failures, 
         if (!p.completes) {
             CHECK(task["status"] == "failed");
             CHECK(task["result"].is_null());
-            CHECK(task["attempt"] == 5);
+            CHECK(task["attempt"] == 2); // 两个平台各尝试一次，不重复请求失败平台
             continue;
         }
         REQUIRE(task["status"] == "completed");
@@ -610,6 +633,18 @@ TEST_CASE("T32: faults on a loaded runner end in whole files or clear failures, 
         }
     }
     CHECK(final["flac-broken-1"]["error"]["code"] == "AUDIO_INVALID");
+    for (const auto* id : {"mp3-503-1", "mp3-429-1"}) {
+        CHECK(final[id]["actual_track"]["source"] == "s3b");
+        CHECK(final[id]["source_switched"] == true);
+    }
+    const auto statistics = body(api.Get("/api/v1/source-statistics"))["data"]["items"];
+    std::uint64_t successes = 0, failures = 0;
+    for (const auto& item : statistics) {
+        successes += item["successes"].get<std::uint64_t>();
+        failures += item["failures"].get<std::uint64_t>();
+    }
+    CHECK(successes == 16);
+    CHECK(failures == 6); // 503、429 各一次，损坏和消失在两个平台各失败一次
     // Nothing else was published anywhere in the destinations, and no work file is left
     // for completed tasks.
     for (const auto& root : {g.d.dir / "下载", second}) {
@@ -637,7 +672,7 @@ TEST_CASE("T32: faults on a loaded runner end in whole files or clear failures, 
         CHECK(by_id[id][1].status == 206);
     }
     CHECK(by_id["mp3-bad206-1"].size() >= 3); // cut, wrong 206, then from the start
-    CHECK(by_id["mp3-gone-1"].size() == 5);    // one request per attempt
+    CHECK(by_id["mp3-gone-1"].size() == 2);    // one request per source
 
     // 429 with Retry-After: 1 kept that task's next request a second away, while the
     // other source went on meanwhile.

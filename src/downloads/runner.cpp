@@ -221,7 +221,7 @@ public:
 
 private:
     // ---- outcomes
-    RunReport fail(const Error& cause);
+    RunReport fail(const Error& cause, bool platform_failure = false);
     RunReport retry_later(const Error& cause, bool discard_partial = false);
     RunReport pause(TaskStatus resume, std::chrono::system_clock::time_point when);
     RunReport stopped(TaskStatus resume);
@@ -268,6 +268,9 @@ private:
 
     std::optional<domain::NormalizedDownloadIntent> intent_;
     std::optional<domain::TrackRef> actual_; // set by prepare()
+    std::optional<domain::Track> fetched_track_; // 本次已复核的详情，避免重复上游请求
+    application::catalog::SourceRetryState source_retry_;
+    bool source_started_{false};
     std::optional<application::accounts::CredentialLease> lease_;
     std::shared_ptr<const ports::SecretBytes> secret_;
 
@@ -324,6 +327,8 @@ std::string Execution::execution_json() const {
         warnings.push_back(std::string{domain::to_string(w)});
     }
     json out{{"actual_track", ref_json(*actual_)}, {"warnings", std::move(warnings)}};
+    out["source_retry"] = json::parse(application::catalog::encode_source_retry(source_retry_));
+    out["source_switched"] = intent_ && *actual_ != intent_->original_track();
     if (!implementation_.empty()) {
         out["implementation"] = implementation_;
     }
@@ -354,12 +359,13 @@ bool Execution::wait(milliseconds delay) const {
     return !stop_requested();
 }
 
-RunReport Execution::fail(const Error& cause) {
+RunReport Execution::fail(const Error& cause, bool platform_failure) {
+    ports::TransitionCommand command{task_.task_id, execution_id_, task_.version, TaskStatus::failed,
+        {}, {}, {}, progress_.received > 0 ? std::optional<std::string>{progress_.encode()} : std::nullopt,
+        actual_ ? std::optional<std::string>{execution_json()} : std::nullopt, error_json(cause)};
+    if (platform_failure && source_started_ && application::catalog::source_failure(cause.code)) command.source_failure = actual_->source.value();
     auto done = write([&] {
-        return s_.tasks->transition(
-            {task_.task_id, execution_id_, task_.version, TaskStatus::failed, std::nullopt, std::nullopt, std::nullopt,
-             progress_.received > 0 ? std::optional<std::string>{progress_.encode()} : std::nullopt, std::nullopt,
-             error_json(cause)});
+        return s_.tasks->transition(command);
     });
     if (auto ended = adopt(std::move(done))) {
         return *ended;
@@ -370,6 +376,21 @@ RunReport Execution::fail(const Error& cause) {
 // Ends this logical attempt after a real upstream failure: another one later if attempts
 // and the absolute deadline allow, otherwise failed.
 RunReport Execution::retry_later(const Error& cause, bool discard_partial) {
+    const bool switch_source = source_started_ && application::catalog::source_failure(cause.code);
+    if (switch_source) {
+        const bool available = intent_ && std::any_of(intent_->account_bindings().begin(), intent_->account_bindings().end(),
+            [&](const auto& binding) {
+                return std::find(source_retry_.attempted_sources.begin(), source_retry_.attempted_sources.end(),
+                                 binding.source().value()) == source_retry_.attempted_sources.end();
+            });
+        if (!source_retry_.original || !available) {
+            auto failure = cause;
+            failure.retryable = false;
+            failure.details.push_back({"source_retry", source_retry_.original ? "no untried source remains" : "original title and artists are unavailable"});
+            return fail(failure, true);
+        }
+        source_retry_.pending = true;
+    }
     const auto now = s_.clock->now();
     auto backoff = o_.initial_backoff;
     for (std::uint32_t i = 1; i < task_.attempt; ++i) {
@@ -384,7 +405,7 @@ RunReport Execution::retry_later(const Error& cause, bool discard_partial) {
     }
     const auto at = now + backoff;
     if (task_.attempt >= o_.max_attempts || (task_.deadline_at && at >= *task_.deadline_at)) {
-        return fail(cause);
+        return fail(cause, switch_source);
     }
     file_.reset();
     ports::DeferCommand command;
@@ -394,8 +415,13 @@ RunReport Execution::retry_later(const Error& cause, bool discard_partial) {
     command.reason = domain::WaitReason::upstream_retry;
     command.next_retry_at = at;
     command.resume_stage = TaskStatus::resolving;
-    command.clear_checkpoint = discard_partial;
+    command.clear_checkpoint = discard_partial || switch_source;
     command.error_json = error_json(cause);
+    if (actual_) command.execution_json = execution_json();
+    if (switch_source) {
+        command.source_failure = actual_->source.value();
+        command.progress_json = Progress{}.encode();
+    }
     if (auto ended = adopt(write([&] { return s_.tasks->defer(command); }))) {
         return *ended;
     }
@@ -414,6 +440,7 @@ RunReport Execution::pause(TaskStatus resume, std::chrono::system_clock::time_po
     command.next_retry_at = when;
     command.resume_stage = resume;
     command.attempt_used = task_.attempt_open ? attempt_used() : milliseconds{0};
+    if (actual_) command.execution_json = execution_json();
     if (checkpoint_) {
         command.checkpoint_json = checkpoint_->encode();
     }
@@ -464,6 +491,8 @@ RunReport Execution::finish_cancel() {
 }
 
 RunReport Execution::expired() {
+    if (task_.status == TaskStatus::processing)
+        return fail(error(ErrorCode::deadline_exceeded, "local audio processing exceeded its time budget", false));
     if (task_deadline_first_) {
         return fail(error(ErrorCode::deadline_exceeded, "the download did not finish within its time budget", false));
     }
@@ -481,7 +510,7 @@ RunReport Execution::on_error(const Error& e, TaskStatus resume) {
         return expired();
     }
     if (e.code == ErrorCode::canceled) return stopped(resume);
-    if (e.retryable) {
+    if (e.retryable || (source_started_ && application::catalog::source_failure(e.code))) {
         return retry_later(e);
     }
     return fail(e);
@@ -503,23 +532,6 @@ std::optional<RunReport> Execution::prepare() {
     }
 
     actual_ = intent_->original_track();
-    const auto& bindings = intent_->account_bindings();
-    const auto bound = std::find_if(bindings.begin(), bindings.end(),
-                                    [&](const domain::AccountBinding& b) { return b.source() == actual_->source; });
-    if (bound == bindings.end()) {
-        return fail(error(ErrorCode::credentials_required, "the task has no account for its source", false));
-    }
-    // The fixed binding at its latest valid version, never the owner's current default.
-    auto lease = s_.credentials->lease(*bound);
-    if (!lease) {
-        return fail(lease.error());
-    }
-    if (lease->secret) {
-        secret_ = std::make_shared<const ports::SecretBytes>(std::move(*lease->secret));
-        lease->secret.reset();
-    }
-    lease_ = std::move(lease).value();
-
     // The attempt starts once the work really does; an open one continues.
     if (auto ended = adopt(write([&] {
             return s_.tasks->begin_attempt({task_.task_id, execution_id_, task_.version, o_.absolute_budget});
@@ -535,6 +547,63 @@ std::optional<RunReport> Execution::prepare() {
     if (attempt_left <= milliseconds{0} || task_left <= milliseconds{0}) {
         return expired();
     }
+    auto state = application::catalog::decode_source_retry(task_.execution_json, intent_->original_track());
+    if (!state) return fail(state.error());
+    source_retry_ = std::move(state).value();
+    if (task_.execution_json) {
+        const auto saved = json::parse(*task_.execution_json, nullptr, false);
+        if (saved.is_object() && saved.contains("actual_track")) {
+            const auto& ref = saved.at("actual_track");
+            auto source = domain::SourceId::parse(ref.at("source").get<std::string>());
+            auto id = domain::PlatformId::parse(ref.at("id").get<std::string>());
+            if (!source || !id) return fail(error(ErrorCode::internal, "invalid stored actual track", false));
+            actual_ = domain::TrackRef{*source, *id};
+        }
+    }
+    if (!source_retry_.original) {
+        auto metadata_context = context();
+        metadata_context.deadline = std::min(deadline_, s_.clock->steady_now() + std::chrono::seconds{5});
+        auto identity = s_.source_retry->identity(task_.owner_id, intent_->original_track(), metadata_context);
+        if (identity) {
+            fetched_track_ = *identity;
+            source_retry_.original = std::move(identity).value();
+        }
+        else if (stop_requested()) return stopped(resume_stage());
+        // 首次下载不依赖元数据；换源必须先有可信身份。
+    }
+    if (source_retry_.pending) {
+        if (!source_retry_.original)
+            return fail(error(ErrorCode::source_exhausted, "original title and artists are unavailable; strict source retry refused", false));
+        auto selection_context = context();
+        selection_context.deadline = std::min(deadline_, s_.clock->steady_now() + std::chrono::seconds{30});
+        auto selected = s_.source_retry->next(task_.owner_id, *source_retry_.original, intent_->account_bindings(),
+                                             source_retry_.attempted_sources, selection_context);
+        if (!selected) {
+            if (stop_requested() || admission_deferred(selected.error())) return on_error(selected.error(), TaskStatus::resolving);
+            return fail(selected.error());
+        }
+        actual_ = selected->ref;
+        fetched_track_ = std::move(selected).value();
+        source_retry_.pending = false;
+        checkpoint_.reset();
+    }
+    auto& attempted = source_retry_.attempted_sources;
+    if (std::find(attempted.begin(), attempted.end(), actual_->source.value()) == attempted.end())
+        attempted.push_back(actual_->source.value());
+    if (auto ended = adopt(write([&] { return s_.tasks->checkpoint(
+            {task_.task_id, execution_id_, task_.version, {}, execution_json(), {}}); }))) return ended;
+    source_started_ = true;
+    const auto& bindings = intent_->account_bindings();
+    const auto bound = std::find_if(bindings.begin(), bindings.end(),
+        [&](const domain::AccountBinding& b) { return b.source() == actual_->source; });
+    if (bound == bindings.end()) return fail(error(ErrorCode::internal, "actual source has no fixed binding", false));
+    auto lease = s_.credentials->lease(*bound);
+    if (!lease) return on_error(lease.error(), TaskStatus::resolving);
+    if (lease->secret) {
+        secret_ = std::make_shared<const ports::SecretBytes>(std::move(*lease->secret));
+        lease->secret.reset();
+    }
+    lease_ = std::move(lease).value();
     checkpoint_ = Checkpoint::decode(task_.checkpoint_json);
     if (task_.checkpoint_json && !checkpoint_) {
         return fail(error(ErrorCode::internal, "stored checkpoint does not match the current format", false));
@@ -561,11 +630,11 @@ std::optional<RunReport> Execution::resolve() {
     }
     if (audio->actual_track != *actual_) {
         // Switching tracks while transferring is never done silently.
-        return fail(error(ErrorCode::upstream_failed, "the platform returned another track", false));
+        return on_error(error(ErrorCode::upstream_failed, "the platform returned another track", false), resume_stage());
     }
     auto verdict = domain::evaluate_resource(intent_->requirement(), {audio->actual_quality, audio->completeness});
     if (!verdict) {
-        return fail(verdict.error());
+        return on_error(verdict.error(), resume_stage());
     }
     warnings_ = verdict->warnings;
     audio_ = std::move(audio).value();
@@ -592,7 +661,8 @@ std::optional<RunReport> Execution::choose_name() {
         return std::nullopt; // no detail capability: no name and nothing to tag with
     }
     const ports::ProviderContext call{context(), lease_->identity, std::nullopt, secret_};
-    auto track = detail.value()->track_detail(call, *actual_);
+    auto track = fetched_track_ && fetched_track_->ref == *actual_
+        ? domain::Result<domain::Track>{*fetched_track_} : detail.value()->track_detail(call, *actual_);
     if (!track) {
         // The name is cosmetic, but required tags cannot be written without the detail.
         if (stop_requested() || admission_deferred(track.error()) || policy == domain::MetadataPolicy::required) {
@@ -932,7 +1002,7 @@ std::optional<RunReport> Execution::download() {
                 return expired();
             }
             if (!streamed.error().retryable) {
-                return fail(streamed.error());
+                return on_error(streamed.error(), TaskStatus::downloading);
             }
             // An interrupted transfer: retried within the attempt, from what was flushed.
             if (retries_left-- == 0) {
@@ -1010,8 +1080,8 @@ std::optional<RunReport> Execution::download() {
                                      "http_status", std::to_string(status)));
         }
         if (status != 200 && status != 206) {
-            return fail(error(ErrorCode::upstream_failed, "the audio server refused the download", false, "http_status",
-                              std::to_string(status)));
+            return retry_later(error(ErrorCode::upstream_failed, "the audio server refused the download", false, "http_status",
+                                     std::to_string(status)));
         }
         if (cp.total_bytes && file_->size() != *cp.total_bytes) {
             // A short body: continue from what arrived, within the attempt.
@@ -1133,16 +1203,16 @@ std::optional<RunReport> Execution::process() {
         const auto& e = report.error();
         if (e.code == ErrorCode::audio_invalid) {
             // A cut-off or damaged transfer is fetched again from zero; anything else fails.
-            return e.retryable ? retry_later(e, true) : fail(e);
+            return (e.retryable || application::catalog::source_failure(e.code)) ? retry_later(e, true) : fail(e);
         }
         return on_error(e, TaskStatus::downloading);
     }
     auto measured_quality = verified_quality(audio_->actual_quality, report->facts);
-    if (!measured_quality) return fail(measured_quality.error());
+    if (!measured_quality) return on_error(measured_quality.error(), TaskStatus::downloading);
     audio_->actual_quality = *measured_quality;
     auto verdict = domain::evaluate_resource(intent_->requirement(), {audio_->actual_quality, report->completeness});
     if (!verdict) {
-        return fail(verdict.error()); // e.g. measured to be a preview
+        return on_error(verdict.error(), TaskStatus::downloading); // e.g. measured to be a preview
     }
     for (const auto w : verdict->warnings) {
         if (std::find(warnings_.begin(), warnings_.end(), w) == warnings_.end()) {
@@ -1277,7 +1347,10 @@ std::string_view to_string(RunOutcome outcome) noexcept {
 }
 
 DownloadRunner::DownloadRunner(RunnerOptions options, RunnerServices services)
-    : options_(options), services_(std::move(services)) {}
+    : options_(options), services_(std::move(services)) {
+    if (!services_.source_retry) services_.source_retry = std::make_shared<application::catalog::SourceRetryService>(
+        services_.providers, services_.credentials);
+}
 
 RunReport DownloadRunner::run(const ports::TaskRecord& claimed, ExecutionControl& control) {
     const auto started = std::chrono::steady_clock::now();

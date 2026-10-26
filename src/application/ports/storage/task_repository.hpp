@@ -80,6 +80,7 @@ struct CreateTaskCommand {
     // A manual retry of this failed or canceled task.
     std::optional<std::string> retry_of{};
     std::optional<ReuseCandidate> completed{};
+    std::optional<std::string> initial_execution_json{};
 };
 
 struct CreateTaskOutcome {
@@ -107,13 +108,15 @@ struct TransitionCommand {
     std::optional<std::string> progress_json{};
     std::optional<std::string> execution_json{};
     std::optional<std::string> error_json{};
+    // 与任务失败原子提交，仅实际平台失败计数。
+    std::optional<std::string> source_failure{};
 };
 
 // A task the scheduler may claim now: queued, or waiting_retry and due.
 struct RunnableTask {
     std::string task_id;
     std::string owner_id;
-    std::string source; // original track source, for the admission readiness hint
+    std::string source; // 实际平台；待换源时为空，不受原平台冷却阻塞
     std::chrono::system_clock::time_point due;
 };
 
@@ -139,6 +142,8 @@ struct DeferCommand {
     bool clear_checkpoint{false};                  // the partial file must not be resumed
     std::optional<std::string> progress_json{};
     std::optional<std::string> error_json{}; // the failure an upstream_retry waits after
+    std::optional<std::string> execution_json{};
+    std::optional<std::string> source_failure{};
 };
 
 // Progress and resume evidence of the running execution; refused once it was canceled or

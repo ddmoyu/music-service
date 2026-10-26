@@ -452,14 +452,17 @@ TEST_CASE("retry creates a new task from the stored intent", "[downloads]") {
     CHECK(d.service->retry(d.owner, original.view.task.task_id, d.key(3), "retry").error().code ==
           ErrorCode::active_duplicate);
 
-    // Retrying needs the bound account to still be usable; no other account is chosen.
+    // 原账号不可用不阻止后台换源；固定绑定不变，不能改用原平台的另一个账号。
     REQUIRE(d.service->cancel(d.owner, retried.view.task.task_id));
     const auto canceled_replay = unwrap(d.service->retry(d.owner, original.view.task.task_id, d.key(2), "retry"));
     CHECK(canceled_replay.replayed);
     CHECK(canceled_replay.view.task.status == TaskStatus::queued);
     REQUIRE(d.credentials->revoke(d.owner, cookie));
-    CHECK(d.service->retry(d.owner, original.view.task.task_id, d.key(4), "retry").error().code ==
-          ErrorCode::credentials_required);
+    const auto switched = d.service->retry(d.owner, original.view.task.task_id, d.key(4), "retry");
+    REQUIRE(switched);
+    CHECK(switched->view.intent.account_bindings() == original.view.intent.account_bindings());
+    REQUIRE(switched->view.task.execution_json);
+    CHECK(nlohmann::json::parse(*switched->view.task.execution_json)["source_retry"]["pending"] == true);
     CHECK(d.service->retry(d.other, original.view.task.task_id, d.key(5), "retry").error().code == ErrorCode::not_found);
 }
 

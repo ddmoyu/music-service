@@ -345,13 +345,59 @@ function getPayDisplay(pay: TrackPay) {
 | 方法与路径 | 输入 | 成功结果 |
 | --- | --- | --- |
 | `POST /api/v1/assets/resolve` | track、context_ref、quality、quality_policy、allow_preview | 200 AssetDescriptor |
+| `POST /api/v1/assets/switch-source` | 原始 track、attempted_sources、quality、quality_policy、allow_preview | 200 严格匹配且探测可读的新 AssetDescriptor |
 | `POST /api/v1/assets/probe` | asset_id | 200 探测报告及证据，过期 410 |
+| `GET /api/v1/source-statistics` | 无 | 当前调用方的平台下载统计 |
 
-均需要 catalog:read，属于有额度的昂贵控制操作。resolve 中的 track 为 TrackRef，默认 standard、strict、allow_preview=false。音频只从该 TrackRef 指定的平台解析，目录型来源没有 resolve_audio 能力时返回 422 CAPABILITY_UNSUPPORTED，下载同样在创建前拒绝。
+均需要 catalog:read；resolve、switch-source 和 probe 属于有额度的昂贵控制操作，统计查询读取本地数据。resolve 中的 track 为 TrackRef，默认 standard、strict、allow_preview=false。音频只从该 TrackRef 指定的平台解析，目录型来源没有 resolve_audio 能力时返回 422 CAPABILITY_UNSUPPORTED，下载同样在创建前拒绝。
 
 酷我（`source=kuwo`）的 `resolve_audio` 支持 optional `web_cookie`，播放解析和下载共用该能力。新建账号并保存 Cookie 后自动启用和选中；通过 `PUT /api/v1/credential-defaults/kuwo` 提交 credential_id 和新 secret 可切换到已停用账号，同时停用原账号并清理其 Cookie。后续播放解析使用当前启用账号的可用 Cookie，下载也可以显式指定本人的已启用 credential_id。没有可用凭证时按统一选择规则匿名访问。已受理下载保留原账号绑定，该账号停用后不能再租用 Cookie，不会改用另一个账号。取流阶段的失败不会触发匿名重试，Cookie 不传给音频 CDN。会员歌曲是否可播放／下载仍以解析与任务最终结果为准，不能从 Cookie 存在或 pay 标记推断成功。
 
-2026-10-24 已取消跨平台匹配与换源，`/api/v1/tracks/matches` 路由不存在。请求不允许 `fallback` 或 `match_selection`，无论 disabled、空 sources 或 null 均返回 400 VALIDATION_FAILED。解析结果不公开原始 CDN URL、秘密请求头或解密密钥。
+普通 resolve 只解析请求平台，试听换源通过独立的 switch-source 接口显式触发。`/api/v1/tracks/matches` 路由不存在，不接受旧的 `fallback` 或 `match_selection` 字段。解析结果不公开原始 CDN URL、秘密请求头或解密密钥。
+
+### 8.1 严格匹配与试听换源
+
+歌曲名和完整演唱者名单必须一致（歌手顺序可不同，只收敛 ASCII 空白，保留大小写、标点和版本文字）；标题或歌手缺失、歌手重复时拒绝匹配。不推断别名，不移除 Live／Remix／翻唱／伴奏标识，版本类型和标签冲突时拒绝；双方时长已知时差值不超过 2000 ms。搜索候选须再通过详情复核。找不到匹配返回 422 `SOURCE_EXHAUSTED`，不降低匹配标准。
+
+前端先 resolve，再 media-access。解析因上游、权限或资源问题失败时，错误 details 数组中以 field=next_action、reason=/api/v1/assets/switch-source 提示换源；播放器 error／有界加载超时也可触发。停止旧播放后调用 switch-source，始终传最初的 track 和累积的 attempted_sources，不能把 actual_track 当作新匹配基准。
+
+```json
+{
+  "track": {"source": "qq", "id": "original-id"},
+  "attempted_sources": ["qq"],
+  "quality": "standard",
+  "quality_policy": "strict",
+  "allow_preview": false
+}
+```
+
+成功响应仍为 AssetDescriptor，并增加下列字段（此处省略其他字段）：
+
+```json
+{
+  "asset_id": "ast_new",
+  "original_track": {"source": "qq", "id": "original-id"},
+  "actual_track": {"source": "kuwo", "id": "matched-id"},
+  "source_switched": true,
+  "source_retry": {
+    "match_policy": "strict",
+    "attempted_sources": ["qq", "kuwo"],
+    "next_action": "/api/v1/assets/switch-source"
+  }
+}
+```
+
+前端显示“已切换到酷我”，再用新 asset_id 获取 media-access。普通 resolve 也返回 source_switched=false 和初始排除列表。换源先探测可读的音频头，跳过不可读、文件头不符或需后端解密的候选；不保证浏览器能解码整个文件，播放器失败仍可显式换源。“试听操作”不等于允许截短试听片段，allow_preview 默认仍为 false，品质与完整性要求保持不变。
+
+attempted_sources 必填，最多 32 个不重复、已注册的平台，原平台始终被排除。每个平台最多检查首 10 条搜索结果并复核 3 个详情，不翻页；单平台搜索与详情阶段最多 5 秒，整次试听共用 catalog.total_budget。源耗尽、总超时或额度不足明确返回错误，不循环重试。
+
+### 8.2 平台成功率
+
+source-statistics 返回 `items`、`scope=current_principal` 和 `ranking=smoothed_download_success_rate`。每项包含 source、successes、failures、success_rate（0～1）及 ranking_score。无下载样本的平台不列出，排序分数为 0.5。
+
+文件校验并发布完成记一次成功；已开始的逻辑下载尝试因平台取流、权限、品质、CDN、音频校验失败记一次失败。取消、排队、停机、数据库、磁盘和发布失败不计平台失败；同次尝试内的连接恢复、幂等重放不重复计数。统计与状态同事务提交并持久保存，按 principal 隔离。搜索无匹配和试听不计下载成功／失败。
+
+换源按 `(successes + 1) / (successes + failures + 2)` 降序，平分按平台 ID 稳定排序；试听复用下载排名。小样本平滑避免一次成功就长期获得最高优先级。
 
 示例 resolve.data：
 
@@ -393,7 +439,7 @@ function getPayDisplay(pay: TrackPay) {
 
 可选 credential_id 只选择 original_track.source 对应的本人账号；未提供时使用本人的默认凭证，或该能力明确允许的 application／anonymous 模式。手动及 auto 目标来源使用调用方在各来源的默认选择，绝不转交原曲的凭证。接收任务时固定所需 AccountBinding；auto 候选来源的可用绑定固定保存，无可用绑定的来源排除并记录原因，不能在排队后静默改用新默认账号。执行时租用已固定绑定的最新有效版本。destination_id 缺省为调用方默认目标；不接受任意绝对路径、文件名模板或完整歌曲私有扩展。
 
-quality／策略默认见模型，duplicate_policy 为 reuse（默认）或 force；force 仅允许绕过已完成结果，相同活动任务仍 409。仅支持同源下载。
+quality／策略默认见模型，duplicate_policy 为 reuse（默认）或 force；force 仅允许绕过已完成结果，相同活动任务仍 409。首次使用原平台，平台失败后的逻辑重试改为严格换源，按下载成功率排序。缺少可信原始身份或已无候选时明确失败，不重复尝试原平台；磁盘等本地故障不通过换源掩盖。
 
 新任务及手动 retry 要求 destination 存在、本人有权使用且 accept_new_tasks=true；目标无权访问返回 404，已停用新任务入口返回 422 DESTINATION_UNAVAILABLE。旧任务恢复与已发布文件读取使用原 destination 的持久根及当前 ACL，不跟随新的默认目录。
 
@@ -420,6 +466,8 @@ quality／策略默认见模型，duplicate_policy 为 reuse（默认）或 forc
 | `GET /api/v1/downloads/{task_id}` | downloads:read | 公开 Task 快照，支持 If-None-Match |
 | `POST /api/v1/downloads/{task_id}/cancel` | downloads:write | queued／waiting_retry 立即取消返回 200；运行中接受取消返回 202 |
 | `POST /api/v1/downloads/{task_id}/retry` | downloads:write | failed／canceled 创建新任务；必须有新 Idempotency-Key |
+
+retry 继承原始身份、固定平台账号和已尝试平台，在后台选择未尝试的严格匹配来源。自动换源仍属于原任务，受 max_attempts、退避和绝对时限约束。快照增加 source_switched 和 source_retry（match_policy、attempted_sources、pending）；准备前可为 null，pending=true 表示等待换源。actual_track 标明实际平台。切换时清除原平台续传证据，从零下载；入场暂停及同一资源内的连接恢复仍可安全续传。账号失效不会在同平台改用匿名或新默认账号，但可使用接单时固定的其他平台账号。
 
 任务列表稳定按 created_at、task_id 倒序分页，游标绑定过滤条件；不接受随意 SQL 排序字段。默认只看自己的任务，关闭前端不会触发 cancel。
 
@@ -701,7 +749,7 @@ QQ 豪华绿钻的日期精度示例（membership 对象）：
 
 校验使用 2 个独立工作线程、32 项队列，全局最多 34 项、每个调用方最多 4 项在途；包含排队的总预算 15 秒，不自动重试。自动校验过载时 Cookie 已保存，响应返回 verification.error_code=SERVICE_BUSY、retry_after_seconds=1；手动提交过载返回 503。取消立即设为 unknown／CANCELED，旧编号不能取消新任务。撤销与正常停机触发取消；崩溃重启把残留 pending 标记为 unknown／INTERRUPTED。数据库提交失败显示 unknown／STORAGE_UNAVAILABLE，不报告成功。
 
-数据库当前为 schema 7；只接受当前格式，已有开发数据需使用新的 data_dir 初始化，不自动迁移或删除旧数据。
+数据库当前为 schema 8；只接受当前格式，已有开发数据需使用新的 data_dir 初始化，不自动迁移或删除旧数据。
 
 不能将任意他人的 Cookie 作为 query 参数覆盖整个服务的当前账号。用户默认选择通过下列接口写入 SQLite，配置文件不管理用户默认凭证。
 

@@ -2,6 +2,7 @@
 
 #include "application/accounts/credential_service.hpp"
 #include "application/catalog/handle_table.hpp"
+#include "application/catalog/source_retry.hpp"
 #include "application/config/service_config.hpp"
 #include "application/ports/providers/directory.hpp"
 #include "application/ports/runtime/clock.hpp"
@@ -25,6 +26,8 @@ struct ResolveRequest {
     std::string owner_id;
     domain::TrackRef track;
     domain::ResourceRequirement requirement;
+    bool switch_source{false};
+    std::vector<std::string> attempted_sources{};
 };
 
 // The public AssetDescriptor: never the upstream URL or request headers.
@@ -39,6 +42,7 @@ struct AssetDescriptor {
     domain::Completeness completeness{domain::Completeness::unknown};
     std::chrono::system_clock::time_point expires_at;
     std::vector<domain::ResourceWarning> warnings;
+    std::vector<std::string> attempted_sources{};
 };
 
 struct ProbeReport {
@@ -100,8 +104,8 @@ struct DeliveryFacts {
 // Same-source resolve and bounded probe (feature-modules.md, 音源解析与探测). An
 // asset_id is bound to its owner and to the authorization identity that produced
 // it; it lives lifetimes.asset seconds, never past a known upstream expiry minus a
-// safety margin. No automatic fallback: a track whose source cannot resolve audio is
-// CAPABILITY_UNSUPPORTED. Audio is always resolved from the requested source.
+// safety margin. 普通 resolve 使用指定平台；显式 switch_source 使用严格匹配、
+// 排除列表及下载成功率排序，每个新候选还需通过有界音频头探测。
 class AssetService {
 public:
     static constexpr std::chrono::seconds expiry_margin{30};
@@ -111,9 +115,13 @@ public:
                  std::shared_ptr<const ports::ProviderDirectory> providers,
                  std::shared_ptr<accounts::CredentialService> credentials, std::shared_ptr<ports::UpstreamHttp> upstream,
                  std::shared_ptr<const ports::Clock> clock, std::function<std::string()> new_asset_id,
-                 std::chrono::milliseconds budget, std::shared_ptr<ports::MemoryBudget> handle_budget = {});
+                 std::chrono::milliseconds budget, std::shared_ptr<ports::MemoryBudget> handle_budget = {},
+                 std::shared_ptr<SourceRetryService> source_retry = {});
 
     domain::Result<AssetDescriptor> resolve(const ResolveRequest& request);
+    domain::Result<std::vector<ports::SourceDownloadStatistics>> source_statistics(const std::string& owner) {
+        return source_retry_->statistics(owner);
+    }
     void collect_expired();
 
     // RESOURCE_EXPIRED when the asset expired or its account changed since; NOT_FOUND
@@ -147,6 +155,11 @@ public:
 private:
     struct Asset;
 
+    domain::Result<AssetDescriptor> resolve_one(const ResolveRequest& request, const domain::TrackRef& actual,
+        const domain::AccountBinding& binding, ports::OperationContext operation, const std::vector<std::string>& attempted);
+    domain::Result<ProbeReport> probe_until(const std::string& owner, const std::string& asset,
+                                          ports::OperationContext operation);
+
     domain::Result<void> refresh(const std::string& owner_id, const std::string& asset_id);
 
     std::shared_ptr<const ports::ProviderDirectory> providers_;
@@ -156,6 +169,7 @@ private:
     config::Lifetimes lifetimes_;
     std::chrono::milliseconds budget_;
     std::shared_ptr<HandleTable<Asset>> assets_;
+    std::shared_ptr<SourceRetryService> source_retry_;
 };
 
 } // namespace music_service::application::catalog

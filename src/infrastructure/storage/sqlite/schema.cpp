@@ -25,6 +25,14 @@ CREATE TABLE access_tokens (
 ) STRICT;
 CREATE INDEX access_tokens_principal ON access_tokens (principal_id);
 
+CREATE TABLE source_download_statistics (
+    owner_id TEXT NOT NULL REFERENCES principals (id),
+    source TEXT NOT NULL,
+    successes INTEGER NOT NULL CHECK (successes >= 0),
+    failures INTEGER NOT NULL CHECK (failures >= 0),
+    PRIMARY KEY (owner_id, source)
+) STRICT;
+
 CREATE TABLE credentials (
     id TEXT PRIMARY KEY,
     owner_id TEXT NOT NULL REFERENCES principals (id),

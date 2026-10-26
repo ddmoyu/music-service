@@ -91,7 +91,7 @@ struct BatchCancelResult {
 // write transaction: idempotent replays are answered first, then the account binding
 // is fixed, the destination checked and defaults filled; the repository re-checks
 // idempotency, active duplicates, quotas and any completed result in one transaction.
-// Downloads always use the requested source. After a commit the download queue is
+// 首次使用请求平台，平台失败后严格换源。After a commit the download queue is
 // woken, and a cancel of a running task signals its runner.
 class DownloadService {
 public:

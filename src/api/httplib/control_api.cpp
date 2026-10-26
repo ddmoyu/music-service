@@ -109,6 +109,7 @@ int status_for(ErrorCode code) {
     case ErrorCode::context_required:
     case ErrorCode::quality_unavailable:
     case ErrorCode::preview_rejected:
+    case ErrorCode::source_exhausted:
     case ErrorCode::credentials_required:
     case ErrorCode::destination_unavailable:
     case ErrorCode::delivery_unavailable:
@@ -512,6 +513,13 @@ json execution_field(const ports::TaskRecord& task, const char* key) {
     return execution.is_object() && execution.contains(key) ? execution[key] : json(nullptr);
 }
 
+json source_retry_json(const ports::TaskRecord& task) {
+    const auto state = execution_field(task, "source_retry");
+    if (!state.is_object()) return nullptr;
+    return {{"match_policy", state.at("match_policy")}, {"attempted_sources", state.at("attempted_sources")},
+            {"pending", state.at("pending")}};
+}
+
 json task_warnings(const ports::TaskRecord& task) {
     json out = json::array();
     const auto codes = execution_field(task, "warnings");
@@ -549,6 +557,8 @@ json task_json(const application::tasks::TaskView& view) {
                 {"stage", nullptr},
                 {"original_track", ref_json(intent.original_track())},
                 {"actual_track", execution_field(t, "actual_track")},
+                {"source_switched", execution_field(t, "source_switched")},
+                {"source_retry", source_retry_json(t)},
                 {"requested_quality", domain::to_string(requirement.requested)},
                 {"quality_policy", domain::to_string(requirement.policy)},
                 {"allow_preview", requirement.allow_preview},
@@ -1067,6 +1077,20 @@ struct ControlApi::Impl {
         catalog_routes(catalog);
         server.Post("/api/v1/links/parse", guard(Access::scoped, catalog, [this](Call& call) { parse_link(call); }, true));
         server.Post("/api/v1/assets/resolve", guard(Access::scoped, catalog, [this](Call& call) { resolve_asset(call); }, true));
+        server.Post("/api/v1/assets/switch-source", guard(Access::scoped, catalog, [this](Call& call) { resolve_asset(call, true); }, true));
+        server.Get("/api/v1/source-statistics", guard(Access::scoped, catalog, [this](Call& call) {
+            if (!only_params(call, {})) return;
+            auto statistics = services.assets->source_statistics(call.principal());
+            if (!statistics) { call.fail(statistics.error()); return; }
+            json items = json::array();
+            for (const auto& s : *statistics) {
+                const auto samples = s.successes + s.failures;
+                items.push_back({{"source", s.source}, {"successes", s.successes}, {"failures", s.failures},
+                    {"success_rate", samples ? json(static_cast<double>(s.successes) / static_cast<double>(samples)) : json(nullptr)},
+                    {"ranking_score", s.score()}});
+            }
+            call.ok({{"items", items}, {"scope", "current_principal"}, {"ranking", "smoothed_download_success_rate"}});
+        }));
         server.Post("/api/v1/assets/probe", guard(Access::scoped, catalog, [this](Call& call) { probe_asset(call); }, true));
 
         const auto read = accounts::scope::downloads_read;
@@ -1813,6 +1837,9 @@ struct ControlApi::Impl {
         return json{{"asset_id", a.asset_id},
                     {"original_track", ref_json(a.original_track)},
                     {"actual_track", ref_json(a.actual_track)},
+                    {"source_switched", a.original_track != a.actual_track},
+                    {"source_retry", {{"match_policy", "strict"}, {"attempted_sources", a.attempted_sources},
+                                      {"next_action", "/api/v1/assets/switch-source"}}},
                     {"requested_quality", domain::to_string(a.requested_quality)},
                     {"actual_quality", a.actual_quality ? json(domain::to_string(*a.actual_quality)) : json(nullptr)},
                     {"container", optional_string(a.container)},
@@ -1824,11 +1851,13 @@ struct ControlApi::Impl {
                     {"warnings", warnings_json(a.warnings)}};
     }
 
-    void resolve_asset(Call& call) {
+    void resolve_asset(Call& call, bool switch_source = false) {
         if (!only_params(call, {})) {
             return;
         }
-        auto body = body_object(call, {"track", "context_ref", "quality", "quality_policy", "allow_preview"});
+        auto body = switch_source
+            ? body_object(call, {"track", "context_ref", "quality", "quality_policy", "allow_preview", "attempted_sources"})
+            : body_object(call, {"track", "context_ref", "quality", "quality_policy", "allow_preview"});
         if (!body) {
             return;
         }
@@ -1846,6 +1875,15 @@ struct ControlApi::Impl {
         }
         application::catalog::ResolveRequest request{call.principal(), {std::move(source).value(), std::move(id).value()},
                                                      {}};
+        request.switch_source = switch_source;
+        if (switch_source) {
+            const auto tried = body->find("attempted_sources");
+            if (tried == body->end() || !tried->is_array() || tried->size() > 32 ||
+                std::any_of(tried->begin(), tried->end(), [](const json& item) { return !item.is_string(); })) {
+                call.fail(bad_request("attempted_sources", "must be an array of at most 32 unique source ids")); return;
+            }
+            request.attempted_sources = tried->get<std::vector<std::string>>();
+        }
         std::optional<std::string> quality;
         std::optional<std::string> policy;
         if (!read_string(call, *body, "quality", quality) || !read_string(call, *body, "quality_policy", policy)) {
@@ -1875,7 +1913,13 @@ struct ControlApi::Impl {
             request.requirement.allow_preview = preview->get<bool>();
         }
         auto resolved = services.assets->resolve(request);
-        resolved ? call.ok(asset_json(resolved.value())) : call.fail(resolved.error());
+        if (resolved) call.ok(asset_json(*resolved));
+        else {
+            auto error = resolved.error();
+            if (application::catalog::source_failure(error.code))
+                error.details.push_back({"next_action", "/api/v1/assets/switch-source"});
+            call.fail(error);
+        }
     }
 
     void probe_asset(Call& call) {

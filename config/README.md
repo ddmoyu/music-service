@@ -60,7 +60,7 @@ Windows 使用进程句柄监测，避免 PID 重用误判；POSIX 检查指定�
 
 `logging.file_enabled` 默认 false（前台输出到 stderr），Windows 服务模式自动开启文件日志。文件为 `data_dir/logs/music-service.log`；`max_file_bytes` 默认 10 MiB，允许 64 KiB～1 GiB；`retained_files` 默认 5，允许 0～20。默认最多保留当前文件与 5 个编号归档。写入、刷新和轮转由有界后台队列执行。
 
-跨平台匹配、手动与自动换源已取消。`features.automatic_fallback`、`lifetimes.match_seconds`、`handles.matches` 均为未知字段，即使取 false、空值或原默认值也拒绝启动。
+下载失败后按严格匹配换源，试听通过显式 switch-source 接口换源；两者复用现有超时、尝试次数与额度配置，详见 [API 契约](../docs/design/cpp20-refactor/backend-service/api-contract.md#81-严格匹配与试听换源)。`features.automatic_fallback`、`lifetimes.match_seconds`、`handles.matches` 均为未知字段，即使取 false、空值或原默认值也拒绝启动。
 
 ## 容量与超时的实际行为
 
@@ -107,7 +107,7 @@ Windows 使用进程句柄监测，避免 PID 重用误判；POSIX 检查指定�
 
 `best_effort`（默认）下获取失败允许发布音频，结果列出 `METADATA_PARTIAL` 与 `COVER_FETCH_FAILED`／`LYRICS_FETCH_FAILED`；`required` 下获取／写入失败按错误可重试性重试或失败，失败不发布。平台没有提供可信封面、明确没有歌词或不支持歌词时不会使 required 失败。原文 LRC 保持不变，译文以空行、`[translation]`、译文 LRC 独立附加，不按行强行合并。
 
-这些选项全部进入当前持久下载意图 schema 5 和复用指纹，默认值也完整写入。仅解码当前结构，缺字段或非当前 schema 均明确报错。当前版本内幂等重放仍返回最初任务，新的输出选择不复用另一种产物；不存在历史快照转换分支。
+这些选项全部进入当前持久下载意图 schema 6 和复用指纹，默认值也完整写入。仅解码当前结构，缺字段或非当前 schema 均明确报错。当前版本内幂等重放仍返回最初任务，新的输出选择不复用另一种产物；不存在历史快照转换分支。
 
 verbatim 生成增强 LRC：`[mm:ss.mmm]<mm:ss.mmm>词…<行结束时间>`。译文按精确毫秒时间匹配到行后，不按行号拼接；不能匹配的译文原样保留在独立 `[translation]` 段。romanized 使用其自身时间轴，译文仍独立。未提供所选变体时返回 `LYRICS_VARIANT_FALLBACK`；原始 LRC、翻译、罗马音和结构化逐字仍可从歌词 API 分别读取。
 
@@ -172,7 +172,7 @@ redirect_uri 必须与平台登记值一致，路径固定为 `/api/v1/oauth/cal
 
 应用 ID 只允许 1～64 个英文字母、数字、下划线、短横线。client_secret_ref 由 SecretStore 加载，配置文件不放明文 client_secret。变更应用身份时增加 version 并重新授权；原应用凭证不会使用新应用秘密尝试刷新。应用 client credentials token 缓存尚未接入。
 
-当前数据库为 schema 7，只初始化空库或校验结构完全一致的库，不执行逐版迁移。非当前数据库请改用新的 `data_dir` 初始化，已有数据保持原样。当前版本重启会将上次中断的 pending 刷新标记为需要重新授权，并继续处理已停用账号的秘密清理；数据库及 secrets 应配套备份。使用步骤见 [API 契约](../docs/design/cpp20-refactor/backend-service/api-contract.md#oauth-登录会话)。
+当前数据库为 schema 8，只初始化空库或校验结构完全一致的库，不执行逐版迁移。非当前数据库请改用新的 `data_dir` 初始化，已有数据保持原样。当前版本重启会将上次中断的 pending 刷新标记为需要重新授权，并继续处理已停用账号的秘密清理；数据库及 secrets 应配套备份。使用步骤见 [API 契约](../docs/design/cpp20-refactor/backend-service/api-contract.md#oauth-登录会话)。
 
 ## 启动前的组合检查
 

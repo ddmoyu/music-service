@@ -1,4 +1,6 @@
 #include "application/tasks/download_service.hpp"
+#include "application/catalog/source_retry.hpp"
+#include <nlohmann/json.hpp>
 #include "application/media/file_bundle.hpp"
 
 #include <algorithm>
@@ -150,6 +152,9 @@ domain::Result<domain::NormalizedDownloadIntent> DownloadService::prepare(const 
     if (!binding) {
         return std::move(binding).error();
     }
+    catalog::SourceRetryService source_retry{providers_, credentials_};
+    auto bindings = source_retry.bindings(owner_id, binding->binding);
+    if (!bindings) return bindings.error();
     auto destination = destination_for(owner_id, request.destination_id);
     if (!destination) {
         return std::move(destination).error();
@@ -157,7 +162,7 @@ domain::Result<domain::NormalizedDownloadIntent> DownloadService::prepare(const 
     const auto& rule = *destination.value();
     domain::DownloadIntentDraft draft{owner_id,
                                       request.track,
-                                      {binding->binding},
+                                      std::move(bindings).value(),
                                       request.requirement,
                                       request.metadata_policy,
                                       {rule.id, fnv_hex(rule.id + "\x1f" + rule.canonical_root), "naming:" + output_.name_format + ":" + output_.folder_layout,
@@ -395,21 +400,19 @@ domain::Result<CreateResult> DownloadService::retry(const std::string& owner_id,
     if (!intent) {
         return std::move(intent).error();
     }
-    // Today's permissions, capability and destination; the same bindings, leasable now.
-    const auto& source = intent->original_track().source.value();
-    if (auto spec = providers_->describe_capability(source, "resolve_audio"); !spec) {
-        return spec.error();
-    }
+    // 手动重试沿用固定账号和严格身份，跳过已经尝试的平台；匹配在后台完成。
     if (auto destination = destination_for(owner_id, intent->product().destination_id); !destination) {
         return std::move(destination).error();
     }
-    for (const auto& binding : intent->account_bindings()) {
-        if (auto lease = credentials_->lease(binding); !lease) {
-            return std::move(lease).error();
-        }
-    }
+    auto state = catalog::decode_source_retry(original->execution_json, intent->original_track());
+    if (!state) return state.error();
+    const auto& source = intent->original_track().source.value();
+    if (std::find(state->attempted_sources.begin(), state->attempted_sources.end(), source) == state->attempted_sources.end())
+        state->attempted_sources.push_back(source);
+    state->pending = true;
+    const auto seed = nlohmann::json{{"source_retry", nlohmann::json::parse(catalog::encode_source_retry(*state))}}.dump();
     auto outcome = tasks_->create({std::move(intent).value(), idempotency_key, request_hash, false, route, task_id,
-                                   std::nullopt});
+                                   std::nullopt, seed});
     if (!outcome) {
         return std::move(outcome).error();
     }
