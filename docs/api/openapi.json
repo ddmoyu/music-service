@@ -1,0 +1,3922 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "music-service 核心前端接口",
+    "version": "0.1.30",
+    "description": "覆盖能力发现、搜索、解析播放、下载与 SSE。账号管理及完整目录接口见 API 契约；升级要求见对应版本发行说明。"
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:17632",
+      "description": "替换为部署地址或启动器实际地址"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/health/live": {
+      "get": {
+        "operationId": "get_health_live",
+        "summary": "健康检查",
+        "description": "",
+        "x-required-scopes": [],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "operationId": "get_health_ready",
+        "summary": "健康检查",
+        "description": "",
+        "x-required-scopes": [],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/info": {
+      "get": {
+        "operationId": "get_api_v1_info",
+        "summary": "实例、版本与功能发现",
+        "description": "",
+        "x-required-scopes": [
+          "任一有效 scope"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Info"
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/providers": {
+      "get": {
+        "operationId": "get_api_v1_providers",
+        "summary": "查询实际平台能力",
+        "description": "",
+        "x-required-scopes": [
+          "catalog:read"
+        ],
+        "parameters": [
+          {
+            "name": "capability",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "enabled",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "description": ""
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            },
+            "description": ""
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {}
+                          }
+                        },
+                        "page": {
+                          "$ref": "#/components/schemas/Page"
+                        }
+                      },
+                      "required": [
+                        "items",
+                        "page"
+                      ]
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/limits": {
+      "get": {
+        "operationId": "get_api_v1_limits",
+        "summary": "调用方容量与预算",
+        "description": "",
+        "x-required-scopes": [
+          "catalog:read"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {}
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/destinations": {
+      "get": {
+        "operationId": "get_api_v1_destinations",
+        "summary": "有权使用的下载目录",
+        "description": "",
+        "x-required-scopes": [
+          "downloads:read"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "destination_id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "available": {
+                                "type": "boolean"
+                              },
+                              "accept_new_tasks": {
+                                "type": "boolean"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/search/tracks": {
+      "get": {
+        "operationId": "get_api_v1_search_tracks",
+        "summary": "搜索 tracks",
+        "description": "200 可能部分成功，必须保留 meta.partial/source_results；当前实现不支持 page 跳页。",
+        "x-required-scopes": [
+          "catalog:read"
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "description": ""
+          },
+          {
+            "name": "sources",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "逗号分隔或 all；平台是开放字符串。"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            },
+            "description": ""
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "逐源游标使用契约定义的编码，不能当全局页码。"
+          },
+          {
+            "name": "timeout_ms",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1000
+            },
+            "description": ""
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Track"
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/search/playlists": {
+      "get": {
+        "operationId": "get_api_v1_search_playlists",
+        "summary": "搜索 playlists",
+        "description": "200 可能部分成功，必须保留 meta.partial/source_results；当前实现不支持 page 跳页。",
+        "x-required-scopes": [
+          "catalog:read"
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "description": ""
+          },
+          {
+            "name": "sources",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "逗号分隔或 all；平台是开放字符串。"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            },
+            "description": ""
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "逐源游标使用契约定义的编码，不能当全局页码。"
+          },
+          {
+            "name": "timeout_ms",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1000
+            },
+            "description": ""
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {}
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/search/albums": {
+      "get": {
+        "operationId": "get_api_v1_search_albums",
+        "summary": "搜索 albums",
+        "description": "200 可能部分成功，必须保留 meta.partial/source_results；当前实现不支持 page 跳页。",
+        "x-required-scopes": [
+          "catalog:read"
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "description": ""
+          },
+          {
+            "name": "sources",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "逗号分隔或 all；平台是开放字符串。"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            },
+            "description": ""
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "逐源游标使用契约定义的编码，不能当全局页码。"
+          },
+          {
+            "name": "timeout_ms",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1000
+            },
+            "description": ""
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {}
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/search/artists": {
+      "get": {
+        "operationId": "get_api_v1_search_artists",
+        "summary": "搜索 artists",
+        "description": "200 可能部分成功，必须保留 meta.partial/source_results；当前实现不支持 page 跳页。",
+        "x-required-scopes": [
+          "catalog:read"
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "description": ""
+          },
+          {
+            "name": "sources",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "逗号分隔或 all；平台是开放字符串。"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            },
+            "description": ""
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "逐源游标使用契约定义的编码，不能当全局页码。"
+          },
+          {
+            "name": "timeout_ms",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1000
+            },
+            "description": ""
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {}
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tracks/detail": {
+      "get": {
+        "operationId": "get_api_v1_tracks_detail",
+        "summary": "歌曲详情",
+        "description": "",
+        "x-required-scopes": [
+          "catalog:read"
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "context_ref",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Track"
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/assets/resolve": {
+      "post": {
+        "operationId": "post_api_v1_assets_resolve",
+        "summary": "解析指定平台歌曲",
+        "description": "",
+        "x-required-scopes": [
+          "catalog:read"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Asset"
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/assets/switch-source": {
+      "post": {
+        "operationId": "post_api_v1_assets_switch_source",
+        "summary": "严格匹配并显式换源",
+        "description": "始终传最初 track 与累积 attempted_sources；不要将 actual_track 当作原曲。",
+        "x-required-scopes": [
+          "catalog:read"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Asset"
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SwitchRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/assets/probe": {
+      "post": {
+        "operationId": "post_api_v1_assets_probe",
+        "summary": "探测资产",
+        "description": "",
+        "x-required-scopes": [
+          "catalog:read"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {}
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "asset_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "asset_id"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/source-statistics": {
+      "get": {
+        "operationId": "get_api_v1_source_statistics",
+        "summary": "当前调用方平台成功率",
+        "description": "",
+        "x-required-scopes": [
+          "catalog:read"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {}
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/downloads": {
+      "post": {
+        "operationId": "post_api_v1_downloads",
+        "summary": "受理后台下载",
+        "description": "",
+        "x-required-scopes": [
+          "downloads:write"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128,
+              "pattern": "^[!-~]+$"
+            },
+            "description": "一次提交使用一个键；网络不确定时沿用。手动重试任务生成新键。"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AcceptedTask"
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AcceptedTask"
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DownloadRequest"
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "get_api_v1_downloads",
+        "summary": "分页查询任务",
+        "description": "",
+        "x-required-scopes": [
+          "downloads:read"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            },
+            "description": ""
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "batch_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/Task"
+                          }
+                        },
+                        "page": {
+                          "$ref": "#/components/schemas/Page"
+                        }
+                      },
+                      "required": [
+                        "items",
+                        "page"
+                      ]
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/downloads/{task_id}": {
+      "get": {
+        "operationId": "get_api_v1_downloads_task_id",
+        "summary": "查询任务快照",
+        "description": "",
+        "x-required-scopes": [
+          "downloads:read"
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Task"
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "未变化，无响应体；沿用本地快照。"
+          }
+        }
+      }
+    },
+    "/api/v1/downloads/{task_id}/cancel": {
+      "post": {
+        "operationId": "post_api_v1_downloads_task_id_cancel",
+        "summary": "取消任务",
+        "description": "",
+        "x-required-scopes": [
+          "downloads:write"
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Task"
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Task"
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/downloads/{task_id}/retry": {
+      "post": {
+        "operationId": "post_api_v1_downloads_task_id_retry",
+        "summary": "创建换源重试任务",
+        "description": "failed/canceled 可重试；沿用已尝试平台，返回新 task_id。",
+        "x-required-scopes": [
+          "downloads:write"
+        ],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128,
+              "pattern": "^[!-~]+$"
+            },
+            "description": "一次提交使用一个键；网络不确定时沿用。手动重试任务生成新键。"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AcceptedTask"
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/download-batches": {
+      "post": {
+        "operationId": "post_api_v1_download_batches",
+        "summary": "批量提交",
+        "description": "",
+        "x-required-scopes": [
+          "downloads:write"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128,
+              "pattern": "^[!-~]+$"
+            },
+            "description": "一次提交使用一个键；网络不确定时沿用。手动重试任务生成新键。"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {}
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {}
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/DownloadRequest"
+                    },
+                    "minItems": 1,
+                    "maxItems": 100
+                  }
+                },
+                "required": [
+                  "items"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/download-batches/{batch_id}": {
+      "get": {
+        "operationId": "get_api_v1_download_batches_batch_id",
+        "summary": "查询批次",
+        "description": "",
+        "x-required-scopes": [
+          "downloads:read"
+        ],
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {}
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/download-batches/{batch_id}/cancel": {
+      "post": {
+        "operationId": "post_api_v1_download_batches_batch_id_cancel",
+        "summary": "取消批次",
+        "description": "",
+        "x-required-scopes": [
+          "downloads:write"
+        ],
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {}
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {}
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/{file_id}": {
+      "get": {
+        "operationId": "get_api_v1_files_file_id",
+        "summary": "读取文件描述",
+        "description": "",
+        "x-required-scopes": [
+          "files:read"
+        ],
+        "parameters": [
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {}
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "未变化，无响应体。"
+          }
+        }
+      }
+    },
+    "/api/v1/media-access": {
+      "post": {
+        "operationId": "post_api_v1_media_access",
+        "summary": "获取浏览器可用的资源票据 URL",
+        "description": "在线播放需先 resolve。auth=ticket 返回 auth=url，长期服务 Token 不进入 URL。",
+        "x-required-scopes": [
+          "file 需要 files:read；asset 需要 media:read"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "成功；202 仅代表已受理。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/MediaAccess"
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/Meta"
+                    },
+                    "error": {
+                      "type": "null"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta",
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MediaRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/events/v1/downloads": {
+      "get": {
+        "operationId": "get_events_v1_downloads",
+        "summary": "订阅本人全部任务",
+        "description": "fetch + ReadableStream，带 Bearer；stream.ready 后重新查询状态，task.updated 按 version 合并。断开不取消任务。",
+        "x-required-scopes": [
+          "downloads:read"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "UTF-8 SSE，可能跨网络块；心跳不是业务事件。",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "event: stream.ready\ndata: {\"instance_id\":\"inst_demo\",\"sync_required\":true}\n\n"
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "servers": [
+          {
+            "url": "http://127.0.0.1:17634",
+            "description": "必须替换为 info.events_base_url"
+          }
+        ]
+      }
+    },
+    "/media/v1/files/{file_id}": {
+      "get": {
+        "operationId": "get_media_v1_files_file_id",
+        "summary": "读取音频或文件",
+        "description": "",
+        "x-required-scopes": [
+          "files:read"
+        ],
+        "parameters": [
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "If-Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "part",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "audio",
+                "lyrics",
+                "cover"
+              ]
+            },
+            "description": ""
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "二进制；HEAD 无响应体。",
+            "headers": {
+              "Content-Type": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Length": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Range": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "二进制；HEAD 无响应体。",
+            "headers": {
+              "Content-Type": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Length": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Range": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "未变化，无响应体。"
+          }
+        },
+        "servers": [
+          {
+            "url": "http://127.0.0.1:17633",
+            "description": "使用 info.media_base_url 或 media-access 返回的完整 URL"
+          }
+        ]
+      },
+      "head": {
+        "operationId": "head_media_v1_files_file_id",
+        "summary": "读取音频或文件",
+        "description": "",
+        "x-required-scopes": [
+          "files:read"
+        ],
+        "parameters": [
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "If-Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "part",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "audio",
+                "lyrics",
+                "cover"
+              ]
+            },
+            "description": ""
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "二进制；HEAD 无响应体。",
+            "headers": {
+              "Content-Type": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Length": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Range": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "二进制；HEAD 无响应体。",
+            "headers": {
+              "Content-Type": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Length": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Range": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "未变化，无响应体。"
+          }
+        },
+        "servers": [
+          {
+            "url": "http://127.0.0.1:17633",
+            "description": "使用 info.media_base_url 或 media-access 返回的完整 URL"
+          }
+        ]
+      }
+    },
+    "/media/v1/assets/{asset_id}": {
+      "get": {
+        "operationId": "get_media_v1_assets_asset_id",
+        "summary": "读取音频或文件",
+        "description": "",
+        "x-required-scopes": [
+          "media:read"
+        ],
+        "parameters": [
+          {
+            "name": "asset_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "If-Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "二进制；HEAD 无响应体。",
+            "headers": {
+              "Content-Type": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Length": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Range": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "二进制；HEAD 无响应体。",
+            "headers": {
+              "Content-Type": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Length": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Range": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "未变化，无响应体。"
+          }
+        },
+        "servers": [
+          {
+            "url": "http://127.0.0.1:17633",
+            "description": "使用 info.media_base_url 或 media-access 返回的完整 URL"
+          }
+        ]
+      },
+      "head": {
+        "operationId": "head_media_v1_assets_asset_id",
+        "summary": "读取音频或文件",
+        "description": "",
+        "x-required-scopes": [
+          "media:read"
+        ],
+        "parameters": [
+          {
+            "name": "asset_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "If-Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "二进制；HEAD 无响应体。",
+            "headers": {
+              "Content-Type": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Length": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Range": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "二进制；HEAD 无响应体。",
+            "headers": {
+              "Content-Type": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Length": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Range": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "未变化，无响应体。"
+          }
+        },
+        "servers": [
+          {
+            "url": "http://127.0.0.1:17633",
+            "description": "使用 info.media_base_url 或 media-access 返回的完整 URL"
+          }
+        ]
+      }
+    },
+    "/media/v1/tickets/{token}": {
+      "get": {
+        "operationId": "get_media_v1_tickets_token",
+        "summary": "读取音频或文件",
+        "description": "token 是已授权的资源专用票据，不是服务 Bearer；不要记录此 URL。",
+        "x-required-scopes": [],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "If-Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "part",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "audio",
+                "lyrics",
+                "cover"
+              ]
+            },
+            "description": ""
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "二进制；HEAD 无响应体。",
+            "headers": {
+              "Content-Type": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Length": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Range": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "二进制；HEAD 无响应体。",
+            "headers": {
+              "Content-Type": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Length": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Range": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "未变化，无响应体。"
+          }
+        },
+        "security": [],
+        "servers": [
+          {
+            "url": "http://127.0.0.1:17633",
+            "description": "使用 info.media_base_url 或 media-access 返回的完整 URL"
+          }
+        ]
+      },
+      "head": {
+        "operationId": "head_media_v1_tickets_token",
+        "summary": "读取音频或文件",
+        "description": "token 是已授权的资源专用票据，不是服务 Bearer；不要记录此 URL。",
+        "x-required-scopes": [],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "If-Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": ""
+          },
+          {
+            "name": "part",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "audio",
+                "lyrics",
+                "cover"
+              ]
+            },
+            "description": ""
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "二进制；HEAD 无响应体。",
+            "headers": {
+              "Content-Type": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Length": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Range": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "按 HTTP 状态处理错误；429/503 可带 Retry-After。",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "二进制；HEAD 无响应体。",
+            "headers": {
+              "Content-Type": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Length": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Range": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "未变化，无响应体。"
+          }
+        },
+        "security": [],
+        "servers": [
+          {
+            "url": "http://127.0.0.1:17633",
+            "description": "使用 info.media_base_url 或 media-access 返回的完整 URL"
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "TrackRef": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "minLength": 1
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "source",
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {}
+            }
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "retryable",
+          "details"
+        ]
+      },
+      "Meta": {
+        "type": "object",
+        "properties": {
+          "request_id": {
+            "type": "string"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "source_results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {}
+            }
+          }
+        },
+        "required": [
+          "request_id",
+          "partial"
+        ]
+      },
+      "Page": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "limit",
+          "next_cursor"
+        ]
+      },
+      "Info": {
+        "type": "object",
+        "properties": {
+          "service": {
+            "const": "music-service"
+          },
+          "version": {
+            "type": "string"
+          },
+          "api_version": {
+            "const": "v1"
+          },
+          "instance_id": {
+            "type": "string"
+          },
+          "media_base_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "events_base_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "features": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "boolean"
+            }
+          }
+        },
+        "required": [
+          "service",
+          "version",
+          "api_version",
+          "instance_id",
+          "features",
+          "media_base_url",
+          "events_base_url"
+        ]
+      },
+      "Track": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "$ref": "#/components/schemas/TrackRef"
+          },
+          "title": {
+            "type": "string"
+          },
+          "artists": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "album": {},
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "context_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "object",
+            "properties": {}
+          },
+          "artwork": {},
+          "pay": {
+            "type": "object",
+            "properties": {
+              "pay_play": {
+                "enum": [
+                  0,
+                  1,
+                  null
+                ]
+              },
+              "pay_down": {
+                "enum": [
+                  0,
+                  1,
+                  null
+                ]
+              },
+              "pay_month": {
+                "enum": [
+                  0,
+                  1,
+                  null
+                ]
+              }
+            }
+          }
+        },
+        "required": [
+          "ref",
+          "title",
+          "artists",
+          "duration_ms",
+          "context_ref",
+          "pay"
+        ]
+      },
+      "ResolveRequest": {
+        "type": "object",
+        "properties": {
+          "track": {
+            "$ref": "#/components/schemas/TrackRef"
+          },
+          "context_ref": {
+            "type": "string"
+          },
+          "quality": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "high",
+              "lossless",
+              "hires"
+            ],
+            "default": "standard"
+          },
+          "quality_policy": {
+            "enum": [
+              "strict",
+              "allow_lower"
+            ],
+            "default": "strict"
+          },
+          "allow_preview": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "track"
+        ],
+        "additionalProperties": false
+      },
+      "SwitchRequest": {
+        "type": "object",
+        "properties": {
+          "track": {
+            "$ref": "#/components/schemas/TrackRef"
+          },
+          "context_ref": {
+            "type": "string"
+          },
+          "quality": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "high",
+              "lossless",
+              "hires"
+            ],
+            "default": "standard"
+          },
+          "quality_policy": {
+            "enum": [
+              "strict",
+              "allow_lower"
+            ],
+            "default": "strict"
+          },
+          "allow_preview": {
+            "type": "boolean",
+            "default": false
+          },
+          "attempted_sources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "track",
+          "attempted_sources"
+        ],
+        "additionalProperties": false
+      },
+      "Asset": {
+        "type": "object",
+        "properties": {
+          "asset_id": {
+            "type": "string"
+          },
+          "original_track": {
+            "$ref": "#/components/schemas/TrackRef"
+          },
+          "actual_track": {
+            "$ref": "#/components/schemas/TrackRef"
+          },
+          "source_switched": {
+            "type": "boolean"
+          },
+          "source_retry": {
+            "type": "object",
+            "properties": {}
+          },
+          "requested_quality": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "high",
+              "lossless",
+              "hires"
+            ],
+            "default": "standard"
+          },
+          "actual_quality": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "container": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "bitrate_bps": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "completeness": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {}
+            }
+          }
+        },
+        "required": [
+          "asset_id",
+          "original_track",
+          "actual_track",
+          "expires_at"
+        ]
+      },
+      "DownloadRequest": {
+        "type": "object",
+        "properties": {
+          "track": {
+            "$ref": "#/components/schemas/TrackRef"
+          },
+          "context_ref": {
+            "type": "string"
+          },
+          "quality": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "high",
+              "lossless",
+              "hires"
+            ],
+            "default": "standard"
+          },
+          "quality_policy": {
+            "enum": [
+              "strict",
+              "allow_lower"
+            ],
+            "default": "strict"
+          },
+          "allow_preview": {
+            "type": "boolean",
+            "default": false
+          },
+          "credential_id": {
+            "type": "string"
+          },
+          "destination_id": {
+            "type": "string"
+          },
+          "metadata_policy": {
+            "enum": [
+              "best_effort",
+              "required",
+              "skip"
+            ],
+            "default": "best_effort"
+          },
+          "duplicate_policy": {
+            "enum": [
+              "reuse",
+              "force"
+            ],
+            "default": "reuse"
+          }
+        },
+        "required": [
+          "track"
+        ],
+        "additionalProperties": false
+      },
+      "AcceptedTask": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "reused": {
+            "type": "boolean"
+          },
+          "links": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        "required": [
+          "task_id",
+          "status",
+          "reused",
+          "links"
+        ]
+      },
+      "Task": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "resolving",
+              "probing",
+              "downloading",
+              "processing",
+              "finalizing",
+              "waiting_retry",
+              "canceling",
+              "completed",
+              "failed",
+              "canceled"
+            ]
+          },
+          "original_track": {
+            "$ref": "#/components/schemas/TrackRef"
+          },
+          "actual_track": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TrackRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "progress": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "result": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "source_retry": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "version",
+          "status",
+          "progress",
+          "result",
+          "error"
+        ]
+      },
+      "MediaTarget": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "asset",
+              "file"
+            ]
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "MediaRequest": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "$ref": "#/components/schemas/MediaTarget"
+          },
+          "mode": {
+            "enum": [
+              "auto",
+              "direct",
+              "proxy"
+            ],
+            "default": "auto"
+          },
+          "auth": {
+            "enum": [
+              "ticket",
+              "bearer"
+            ],
+            "default": "ticket"
+          },
+          "ttl_seconds": {
+            "type": "integer",
+            "minimum": 15,
+            "maximum": 300
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "additionalProperties": false
+      },
+      "MediaAccess": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "$ref": "#/components/schemas/MediaTarget"
+          },
+          "delivery": {
+            "enum": [
+              "direct",
+              "proxy"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "auth": {
+            "enum": [
+              "url",
+              "bearer"
+            ]
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "content_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "range_supported": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "actual_track": {},
+          "actual_quality": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "target",
+          "delivery",
+          "url",
+          "auth",
+          "expires_at"
+        ]
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "null"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          },
+          "error": {
+            "$ref": "#/components/schemas/Error"
+          }
+        },
+        "required": [
+          "data",
+          "meta",
+          "error"
+        ]
+      }
+    }
+  }
+}

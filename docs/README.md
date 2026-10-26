@@ -2,6 +2,9 @@
 
 服务定位与主要功能见[项目简介](../README.md)。外部项目源码统一存放在 [third_party](../third_party/README.md)，研究与设计文档保留在本目录。
 
+- [第三方前端接入](frontend-integration.md)：本机/远程服务、鉴权、CORS、媒体票据和 SSE；附核心 OpenAPI 及无依赖 JS/TS 示例。
+- [自动构建与预览发布](../packaging/release-workflow.md)：五个平台程序包、校验和、Release 与双架构 GHCR 镜像。
+
 - [Docker 使用教程](../packaging/docker/README.md)：从源码构建、初始化与认证、持久化、端口、Compose 示例及日常管理。
 - [macOS 使用说明](../packaging/macos/README.md)：独立运行库、配置、launchd 启停与签名／公证边界。
 - [发布说明](../packaging/RELEASING.md)：当前交付状态、预览发行范围、二进制和镜像发布前的准备与验证。

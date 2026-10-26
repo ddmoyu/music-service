@@ -1,6 +1,14 @@
 name: ci
 
 on:
+  workflow_call:
+    inputs:
+      target:
+        type: string
+        default: all
+      export_images:
+        type: boolean
+        default: false
   push:
     branches: [main]
   pull_request:
@@ -11,12 +19,16 @@ on:
         type: choice
         default: all
         options: [all, windows, linux, macos, macos-package, docker]
+      export_images:
+        description: Save verified container images for release preparation
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}-${{ inputs.target || 'all' }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ inputs.target || 'all' }}
   cancel-in-progress: true
 
 env:
@@ -29,10 +41,17 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - name: Validate frontend contract and client
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -I packaging/validate_integration.py
+          python -I packaging/test_release.py
+          node --test examples/frontend/client.test.mjs
       - name: Configure, build and test
         shell: cmd
         run: |
-          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSPATH=%%i"
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -prerelease -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSPATH=%%i"
           call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
           cmake --version || exit /b 1
           where cl || exit /b 1
@@ -47,10 +66,13 @@ jobs:
       - name: Runtime smoke test
         shell: pwsh
         run: packaging/windows/smoke.ps1 -Binary out/build/windows-msvc-debug/src/server/music-service.exe
+      - name: Frontend HTTP, CORS and SSE integration
+        shell: pwsh
+        run: node packaging/frontend_smoke.mjs out/build/windows-msvc-debug/src/server/music-service.exe
       - name: Release package
         shell: cmd
         run: |
-          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSPATH=%%i"
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -prerelease -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSPATH=%%i"
           call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
           cmake --preset windows-msvc-release || exit /b 1
           cmake --build --preset windows-msvc-release --target package || exit /b 1
@@ -63,6 +85,28 @@ jobs:
           $dir = Join-Path $env:RUNNER_TEMP 'package'
           Expand-Archive (Get-Item out/build/windows-msvc-release/music-service-*.zip).FullName $dir
           packaging/windows/service_smoke.ps1 -PackageDir (Get-ChildItem $dir -Directory | Select-Object -First 1).FullName
+      - name: Stage verified Windows package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path out/package | Out-Null
+          Copy-Item out/build/windows-msvc-release/music-service-*.zip out/package/
+          python -I packaging/release.py checksums out/package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: music-service-windows-x86_64
+          path: out/package/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Save Windows build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-diagnostics
+          path: |
+            out/build/windows-msvc-*/CMakeFiles/CMakeConfigureLog.yaml
+            out/build/windows-msvc-*/CMakeFiles/fc-stamp/**/*
+            out/build/windows-msvc-*/Testing/Temporary/*
+          retention-days: 14
       # Live Kuwo from an overseas runner may be refused by region; the offline gate
       # ([gate] in ctest) is the required check, this step records what the network allows.
       - name: Kuwo online loop
@@ -105,11 +149,24 @@ jobs:
         run: out/build/linux-gcc-debug/tests/music_service_integration_tests "[online]"
       - name: Runtime smoke test
         run: packaging/linux/smoke.sh out/build/linux-gcc-debug/src/server/music-service
+      - name: Frontend HTTP, CORS and SSE integration
+        run: node packaging/frontend_smoke.mjs out/build/linux-gcc-debug/src/server/music-service
       - name: Release package and systemd service
         run: |
           cmake --preset linux-gcc-release
           cmake --build --preset linux-gcc-release --target package
           sudo bash packaging/linux/package_smoke.sh out/build/linux-gcc-release/music-service-*.tar.gz --service
+      - name: Stage verified Linux package
+        run: |
+          mkdir -p out/package
+          cp out/build/linux-gcc-release/music-service-*.tar.gz out/package/
+          python3 -I packaging/release.py checksums out/package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: music-service-linux-${{ matrix.arch }}
+          path: out/package/*
+          if-no-files-found: error
+          retention-days: 14
       - name: Kuwo online loop
         continue-on-error: true
         run: python3 -I packaging/e2e/kuwo_e2e.py --binary out/build/linux-gcc-debug/src/server/music-service
@@ -154,6 +211,9 @@ jobs:
       - name: Runtime smoke test
         if: inputs.target != 'macos-package'
         run: bash packaging/linux/smoke.sh out/build/macos-clang-debug/src/server/music-service
+      - name: Frontend HTTP, CORS and SSE integration
+        if: inputs.target != 'macos-package'
+        run: node packaging/frontend_smoke.mjs out/build/macos-clang-debug/src/server/music-service
       - name: Release package
         run: |
           python3 -I packaging/macos/test_bundle_runtime.py
@@ -205,9 +265,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build the image
-        run: docker build --build-arg BUILD_JOBS="$CMAKE_BUILD_PARALLEL_LEVEL" -f packaging/docker/Dockerfile -t music-service:ci .
+        run: |
+          docker build --build-arg BUILD_JOBS="$CMAKE_BUILD_PARALLEL_LEVEL" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            -f packaging/docker/Dockerfile -t music-service:ci .
       - name: Container smoke test
         run: packaging/docker/smoke.sh music-service:ci
+      - name: Export verified container image
+        if: inputs.export_images
+        run: |
+          mkdir -p out/image
+          docker save music-service:ci --output "out/image/music-service-image-${{ matrix.arch }}.tar"
+          python3 -I packaging/release.py checksums out/image
+      - uses: actions/upload-artifact@v4
+        if: inputs.export_images
+        with:
+          name: music-service-image-${{ matrix.arch }}
+          path: out/image/*
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 3
       - name: Kuwo online loop in the container
         continue-on-error: true
         run: packaging/docker/e2e.sh music-service:ci

@@ -18,6 +18,17 @@ install(FILES
     "${PROJECT_SOURCE_DIR}/packaging/package/config.example.json"
     DESTINATION ${_share})
 
+# The same dependency-free integration examples accompany every platform package.
+install(FILES "${PROJECT_SOURCE_DIR}/docs/frontend-integration.md"
+    DESTINATION ${_share}/integration/docs)
+install(FILES "${PROJECT_SOURCE_DIR}/docs/api/openapi.json"
+    DESTINATION ${_share}/integration/docs/api)
+install(FILES
+    "${PROJECT_SOURCE_DIR}/examples/frontend/client.mjs"
+    "${PROJECT_SOURCE_DIR}/examples/frontend/client.d.mts"
+    "${PROJECT_SOURCE_DIR}/examples/frontend/usage.mjs"
+    DESTINATION ${_share}/integration/examples/frontend)
+
 # Licenses of what the program contains: the project's own dependencies only (Catch2 is
 # a test dependency and not shipped).
 install(FILES "${music_service_mbedtls_SOURCE_DIR}/LICENSE" DESTINATION ${_share}/licenses RENAME mbedtls-LICENSE.txt)

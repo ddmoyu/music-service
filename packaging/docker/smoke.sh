@@ -21,6 +21,9 @@ volumes=(-v "$data:/data" -v "$downloads:/downloads")
 
 echo "== image"
 docker image inspect "$image" --format 'size={{.Size}} os={{.Os}} arch={{.Architecture}} user={{.Config.User}}'
+docker run --rm --entrypoint test "$image" -s /usr/local/share/music-service/licenses/THIRD-PARTY.md
+docker run --rm --entrypoint test "$image" -s /usr/local/share/music-service/licenses/zlib-LICENSE.txt
+docker run --rm --entrypoint test "$image" -s /usr/local/share/music-service/integration/docs/api/openapi.json
 
 echo "== init"
 docker run --rm "${volumes[@]}" "$image" init

@@ -22,7 +22,8 @@ root=$(find "$deep" -mindepth 1 -maxdepth 1 -type d | head -n 1)
 echo "== unpacked to $root"
 for file in bin/music-service share/music-service/README.md share/music-service/config.example.json \
     share/music-service/licenses/THIRD-PARTY.md share/music-service/service/music-service.service \
-    share/music-service/service/install.sh; do
+    share/music-service/service/install.sh share/music-service/integration/docs/api/openapi.json \
+    share/music-service/integration/examples/frontend/client.mjs; do
     [[ -e "$root/$file" ]] || { echo "missing $file" >&2; exit 1; }
 done
 exe="$root/bin/music-service"

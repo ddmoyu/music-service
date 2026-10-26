@@ -1,0 +1,228 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the selected version tag (false only prepares artifacts)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        env:
+          PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(python3 -I packaging/release.py version)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
+          if [ "$PUBLISH" = true ]; then
+            test "$GITHUB_REF_TYPE" = tag
+            python3 -I packaging/release.py check-tag "$GITHUB_REF_NAME"
+            existing=$(gh release list --limit 1000 --json tagName,isDraft \
+              --jq ".[] | select(.tagName == \"v$version\") | .isDraft")
+            if [ "$existing" = false ]; then
+              echo "::error::This version is already published. Use a new version."
+              exit 1
+            fi
+          fi
+
+  validate:
+    needs: prepare
+    uses: ./.github/workflows/ci.yml
+    with:
+      target: all
+      export_images: true
+    permissions:
+      contents: read
+
+  assemble:
+    needs: [prepare, validate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: music-service-windows-*
+          path: out/artifacts
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: music-service-linux-*
+          path: out/artifacts
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: music-service-macos-*
+          path: out/artifacts
+      - name: Check all five packages and prepare frontend integration files
+        run: |
+          python3 -I packaging/release.py assemble \
+            --artifacts out/artifacts --output out/release --commit "$GITHUB_SHA"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle
+          path: out/release/*
+          if-no-files-found: error
+          retention-days: 14
+
+  push-images:
+    needs: [prepare, assemble]
+    if: needs.prepare.outputs.publish == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            platform: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: music-service-image-${{ matrix.arch }}
+          path: out/image
+      - name: Load the image that passed CI
+        env:
+          ARCH: ${{ matrix.arch }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          python3 -I packaging/release.py verify out/image
+          docker load --input "out/image/music-service-image-$ARCH.tar"
+          test "$(docker inspect music-service:ci --format '{{.Architecture}}')" = "$PLATFORM"
+          test "$(docker inspect music-service:ci --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+      - name: Push and verify by digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          candidate="$image:candidate-$GITHUB_SHA-$PLATFORM"
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker tag music-service:ci "$candidate"
+          docker push "$candidate"
+          digest=$(docker inspect "$candidate" --format '{{index .RepoDigests 0}}')
+          [[ "$digest" == "$image@sha256:"* ]]
+          docker pull "$digest"
+          bash packaging/docker/smoke.sh "$digest"
+          mkdir -p out/digest
+          printf '%s\n' "$digest" > "out/digest/$PLATFORM.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-digest-${{ matrix.platform }}
+          path: out/digest/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Logout
+        if: always()
+        run: docker logout ghcr.io
+
+  manifest:
+    needs: [prepare, push-images]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: image-digest-*
+          path: out/digests
+          merge-multiple: true
+      - name: Publish versioned multi-architecture manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker manifest create "$image:$VERSION" "$(cat out/digests/amd64.txt)" "$(cat out/digests/arm64.txt)"
+          docker manifest push "$image:$VERSION"
+          docker manifest inspect "$image:$VERSION" > out/manifest.json
+          python3 -c 'import json; p=json.load(open("out/manifest.json")); assert {(m["platform"]["os"],m["platform"]["architecture"]) for m in p["manifests"]} == {("linux","amd64"),("linux","arm64")}'
+          docker logout ghcr.io
+          # Public distribution must also work without the workflow token.
+          docker manifest inspect "$image:$VERSION" >/dev/null || {
+            echo "::error::Make this GHCR package public in its package settings, then rerun the failed jobs."
+            exit 1
+          }
+
+  verify-public-image:
+    needs: [prepare, manifest]
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pull the version without registry credentials and run it natively
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:$VERSION"
+          docker pull "$image"
+          bash packaging/docker/smoke.sh "$image"
+
+  publish:
+    needs: [prepare, assemble, verify-public-image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-bundle
+          path: out/release
+      - name: Upload draft, download and verify, then publish preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          tag="v$VERSION"
+          python3 -I packaging/release.py verify out/release
+          existing=$(gh release list --limit 1000 --json tagName,isDraft \
+            --jq ".[] | select(.tagName == \"$tag\") | .isDraft")
+          test "$existing" != false
+          python3 -I packaging/release_notes.py "$VERSION" "$GITHUB_SHA" > out/notes.md
+          if [ "$existing" != true ]; then
+            gh release create "$tag" --verify-tag --draft --prerelease \
+              --title "music-service $VERSION 预览版" --notes-file out/notes.md
+          else
+            gh release edit "$tag" --notes-file out/notes.md --prerelease
+          fi
+          gh release upload "$tag" out/release/* --clobber
+          gh release download "$tag" --dir out/downloaded
+          python3 -I packaging/release.py verify out/downloaded
+          cmp out/release/SHA256SUMS out/downloaded/SHA256SUMS
+          gh release edit "$tag" --draft=false --prerelease --latest=false

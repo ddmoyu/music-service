@@ -1,5 +1,9 @@
 # Docker 使用教程
 
+自动发布流程见[工作流说明](../release-workflow.md)。当某版本的预览 Release 已发布后，可用
+ghcr.io/ddmoyu/music-service:版本号 替换本文的 music-service:local；同一标签自动选择 amd64 或 arm64。
+镜像内 /usr/local/share/music-service 包含许可、配置说明和前端接入材料，接入步骤见[前端指南](../../docs/frontend-integration.md)。
+
 本教程从源码构建镜像，再启动 HTTP 后端服务。当前尚未发布镜像仓库中的版本，不能直接用 `docker pull ghcr.io/ddmoyu/music-service` 获取成品；后续交付安排见[发布说明](../RELEASING.md)。
 
 CI 已在 Linux amd64／arm64 原生环境验证镜像构建、启动、认证、正常停止和同卷重建。Compose 示例、真实 NAS 与网络文件系统尚未运行验收；详细证据见[跨系统验收](../../docs/research/cross-platform-ci.md)。

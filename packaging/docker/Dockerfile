@@ -16,9 +16,13 @@ WORKDIR /src
 COPY CMakeLists.txt CMakePresets.json ./
 COPY cmake cmake
 COPY src src
+COPY packaging packaging
+COPY docs/api docs/api
+COPY docs/frontend-integration.md docs/frontend-integration.md
+COPY examples/frontend examples/frontend
 RUN cmake --preset linux-gcc-release \
  && cmake --build --preset linux-gcc-release --target music_service_server --parallel ${BUILD_JOBS} \
- && strip out/build/linux-gcc-release/src/server/music-service
+ && cmake --install out/build/linux-gcc-release --prefix /opt/music-service --strip
 
 FROM ${BASE}
 # Only the program, its runtime libraries (in the base) and CA certificates for
@@ -29,7 +33,8 @@ RUN apt-get update \
  && useradd --system --uid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin music-service \
  && mkdir -p /data /downloads /etc/music-service \
  && chown music-service:music-service /data /downloads
-COPY --from=build /src/out/build/linux-gcc-release/src/server/music-service /usr/local/bin/music-service
+COPY --from=build /opt/music-service/bin/music-service /usr/local/bin/music-service
+COPY --from=build /opt/music-service/share/music-service /usr/local/share/music-service
 COPY packaging/docker/config.json /etc/music-service/config.json
 USER music-service
 VOLUME ["/data", "/downloads"]

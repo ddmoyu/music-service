@@ -1,8 +1,11 @@
-# Only CMakeLists.txt, CMakePresets.json, cmake/, src/ and packaging/docker are used.
+# Build inputs plus the packaged documentation and license material.
 out/
 build/
 third_party/
-docs/
+docs/**
+!docs/api/
+!docs/api/**
+!docs/frontend-integration.md
 tests/
 .git/
 .github/

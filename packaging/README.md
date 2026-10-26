@@ -4,7 +4,7 @@
 
 Windows、Linux、macOS 和 Docker 共用同一程序 `music-service` 与同一 HTTP 契约。CI（`.github/workflows/ci.yml`）在 main 推送、PR 及手动触发时执行构建、测试与运行验证。
 
-当前 CI 不创建 GitHub Release，也不推送容器镜像。Windows／Linux 的发行包和 Docker 镜像只在各作业中构建、检查；macOS 新增包验证，通过后保存压缩包与 SHA-256 到 Actions 产物，保留 14 天。
+普通 CI 不创建 GitHub Release，也不推送容器镜像；五个平台程序包在运行验证通过后保存到 Actions 产物，附 SHA-256，保留 14 天。发布工作流复用完整 CI，在显式版本标签触发时发布预览 Release 和双架构镜像，详见[自动发布说明](release-workflow.md)。工作流配置不代表某版本已经发布。
 
 2026-10-24 的 macOS ARM64／Intel 独立包与 launchd 已通过原生 CI，下载后哈希也已复核；具体提交、产物和签名状态见 [macOS 独立包验收](../docs/research/macos-package-acceptance.md)。
 

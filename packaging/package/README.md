@@ -9,6 +9,7 @@ repository.
 bin/music-service[.exe]                   the program
 share/music-service/config.example.json  configuration example
 share/music-service/licenses/            third-party licenses (THIRD-PARTY.md)
+share/music-service/integration/         OpenAPI, frontend guide and JS/TS examples
 lib/music-service/                       bundled LLVM runtime (macOS only)
 share/music-service/service/             Windows service, systemd or launchd integration
 ```
@@ -30,6 +31,10 @@ the archive's `macos-package.json` records the actual minimum OS and signing sta
 The default ad-hoc signature does not constitute Developer ID signing or notarization.
 
 ## Running in the foreground
+
+To connect a third-party frontend, read
+share/music-service/integration/docs/frontend-integration.md. The integration files
+include a core OpenAPI description and a dependency-free JavaScript client.
 
 ```text
 music-service --config config.json check-config

@@ -18,7 +18,7 @@
 
 ## 获取与运行
 
-尚无公开 Release 或已发布容器镜像，可从源码构建。macOS CI 在独立包检查通过后保存压缩包与校验和，下载入口和对应提交见 [macOS 独立包验收](docs/research/macos-package-acceptance.md)；Actions 预览产物保留 14 天。
+先查看 [Releases](https://github.com/ddmoyu/music-service/releases) 中的预览发行包；尚未发布的提交可从源码构建，或下载成功 CI 中保存 14 天的程序包和校验和。Windows、Linux、macOS 使用同一 HTTP API，前端接入材料随包交付。
 
 | 使用方式 | 当前支持范围 | 入口 |
 | --- | --- | --- |
@@ -29,9 +29,13 @@
 
 Docker 教程包含构建、首次初始化、访问 token、持久化目录、三个服务端口、日常管理及 Compose 示例。默认只允许宿主机访问；局域网或反向代理部署需要同时调整端口映射与公开地址。
 
-计划先提供 Windows／Linux／macOS 预览发行包和 Docker 双架构镜像，具体准备项见[发布说明](packaging/RELEASING.md)。macOS 默认 ad-hoc 签名，尚非 Developer ID 签名、公证版本。平台与真实上游的验证范围见[跨系统验收](docs/research/cross-platform-ci.md)。
+版本标签可触发五个平台程序包、前端接入包和 Docker 双架构镜像的自动预览发布，流程与权限见[自动发布说明](packaging/release-workflow.md)。实际下载以发布结果为准。macOS 默认 ad-hoc 签名，尚非 Developer ID 签名、公证版本。平台与真实上游的验证范围见[跨系统验收](docs/research/cross-platform-ci.md)。
 
 ## 文档
+
+- [第三方前端快速接入](docs/frontend-integration.md)：服务发现、Token、CORS、搜索、播放、下载及 SSE
+- [核心 OpenAPI](docs/api/openapi.json)与[无依赖 JS/TS 客户端](examples/frontend/client.mjs)
+- [自动构建与预览发布](packaging/release-workflow.md)
 
 - [Docker 使用教程](packaging/docker/README.md)
 - [macOS 使用说明](packaging/macos/README.md)

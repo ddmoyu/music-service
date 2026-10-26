@@ -16,6 +16,10 @@ function Assert([bool]$Condition, [string]$Message) {
 }
 
 $zip = (Resolve-Path $Package).Path
+$archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
+try { $entries = @($archive.Entries | ForEach-Object FullName) } finally { $archive.Dispose() }
+Assert ([bool]($entries -match '/integration/docs/api/openapi.json$')) 'missing OpenAPI contract'
+Assert ([bool]($entries -match '/integration/examples/frontend/client.mjs$')) 'missing frontend client'
 # PowerShell's CreateProcess call leaves lpApplicationName null, so the executable
 # path must fit MAX_PATH even when file I/O supports longer paths. Keep a Chinese,
 # deep installation path without depending on the CI account's temp-path length.
