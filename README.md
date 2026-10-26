@@ -1,47 +1,50 @@
 # music-service
 
-一个基于 C++20 的音乐后端服务，通过 HTTP API 提供音乐搜索、音源解析、下载与任务管理，供独立前端接入。
+[![CI](https://github.com/ddmoyu/music-service/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ddmoyu/music-service/actions/workflows/ci.yml)
+[![预览版本](https://img.shields.io/github/v/release/ddmoyu/music-service?include_prereleases&label=preview)](https://github.com/ddmoyu/music-service/releases)
+[![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white)](cmake/README.md)
+[![系统支持](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-555)](packaging/package/README.md)
 
-## 主要功能
+轻量、跨平台的音乐后端服务，通过 HTTP API 提供搜索、音源解析、下载与任务管理，可供网页、桌面和移动端独立接入。
 
-- 音乐搜索、详情查询与链接解析
-- 后台下载、批量任务、进度订阅与取消
-- 下载失败后严格换源重试，按歌曲名和完整演唱者名单匹配，优先使用历史下载成功率高的平台
-- 显式试听换源接口，返回实际播放平台和已尝试的平台，便于前端提示和继续换源
-- 下载任务持久化与重启恢复
-- 音频校验、标签写入，以及歌词和封面导出
-- 文件访问与媒体流服务
-- Cookie 保存后自动校验登录，查询平台会员类型与到期时间；无法确认时显示未知
-- 同平台多账号记录、单账号启用和全部停用；停用清除 Cookie，再次启用需重新提交
+**[下载预览版](https://github.com/ddmoyu/music-service/releases) · [前端快速接入](docs/frontend-integration.md) · [Docker 部署](packaging/docker/README.md) · [API 文档](docs/design/cpp20-refactor/backend-service/api-contract.md)**
 
-项目仍处于开发阶段，尚未发布正式版。
+## 能做什么
+
+- **搜索与播放**：搜索、详情、音源解析、媒体流，以及返回实际播放来源的显式换源。
+- **后台下载**：单曲与批量任务、进度订阅、取消、持久化与重启恢复。
+- **自动换源**：下载失败时严格匹配歌曲与完整演唱者名单，优先选择历史下载成功率高的来源。
+- **音频整理**：音频校验、标签写入、歌词与封面导出，以及成品文件访问。
+- **账号管理**：Cookie 校验、会员信息查询、多账号保存与启停管理。
+- **前端接入**：统一 HTTP/JSON 接口、SSE 进度事件、核心 OpenAPI 和无依赖 JS/TypeScript 示例。
 
 ## 获取与运行
 
-先查看 [Releases](https://github.com/ddmoyu/music-service/releases) 中的预览发行包；尚未发布的提交可从源码构建，或下载成功 CI 中保存 14 天的程序包和校验和。Windows、Linux、macOS 使用同一 HTTP API，前端接入材料随包交付。
+在 [Releases](https://github.com/ddmoyu/music-service/releases) 下载匹配系统与架构的完整程序包，用同页的 `SHA256SUMS` 校验后解压。运行服务不需要 C++ 工具链。
 
-| 使用方式 | 当前支持范围 | 入口 |
+| 部署环境 | 发行包后缀 / 镜像 | 运行说明 |
 | --- | --- | --- |
-| Docker | Linux amd64／arm64 原生镜像，本地构建后运行 | [Docker 使用教程](packaging/docker/README.md) |
-| Windows | x64，可生成 ZIP 发行包，支持前台运行和 Windows 服务 | [构建与测试](cmake/README.md)、[发行包使用说明](packaging/package/README.md) |
-| Linux | x86_64／ARM64，可生成 tar.gz 发行包，支持前台运行和 systemd | [构建与测试](cmake/README.md)、[发行包使用说明](packaging/package/README.md) |
-| macOS | 15.0 起，Intel／Apple Silicon 独立 tar.gz，内含 LLVM C++ 运行库，支持前台和 launchd | [macOS 使用与签名说明](packaging/macos/README.md) |
+| Windows x64 | `windows-x86_64.zip` | [前台运行或 Windows 服务](packaging/package/README.md) |
+| Linux x86_64 / ARM64 | `linux-x86_64.tar.gz` / `linux-arm64.tar.gz` | [前台运行或 systemd](packaging/package/README.md) |
+| macOS 15.0+ | `macos-x86_64.tar.gz` / `macos-arm64.tar.gz` | [Intel / Apple Silicon 与 launchd](packaging/macos/README.md) |
+| Docker | `ghcr.io/ddmoyu/music-service:0.1.30` | [双架构镜像与持久化部署](packaging/docker/README.md) |
 
-Docker 教程包含构建、首次初始化、访问 token、持久化目录、三个服务端口、日常管理及 Compose 示例。默认只允许宿主机访问；局域网或反向代理部署需要同时调整端口映射与公开地址。
+程序包内附配置、服务脚本、第三方许可与同版前端接入材料。Docker 标签包含 `linux/amd64` 和 `linux/arm64`；初始化、持久化目录和三个服务端口按教程配置。
 
-版本标签可触发五个平台程序包、前端接入包和 Docker 双架构镜像的自动预览发布，流程与权限见[自动发布说明](packaging/release-workflow.md)。实际下载以发布结果为准。macOS 默认 ad-hoc 签名，尚非 Developer ID 签名、公证版本。平台与真实上游的验证范围见[跨系统验收](docs/research/cross-platform-ci.md)。
+当前为开发预览版。macOS 使用 ad-hoc 签名，尚未进行 Developer ID 签名与公证；Linux 原生包以 Ubuntu 24.04 为验证基线。旧系统、不同 NAS 型号及真实音源的可用性见[验证范围](docs/research/cross-platform-ci.md)。
 
-## 文档
+## 接入自己的前端
 
-- [第三方前端快速接入](docs/frontend-integration.md)：服务发现、Token、CORS、搜索、播放、下载及 SSE
-- [核心 OpenAPI](docs/api/openapi.json)与[无依赖 JS/TS 客户端](examples/frontend/client.mjs)
-- [自动构建与预览发布](packaging/release-workflow.md)
+1. 启动后端，取得服务地址与访问 Token；浏览器前端配置对应的 CORS origin。
+2. 使用 [OpenAPI](docs/api/openapi.json) 或 [JS 客户端](examples/frontend/client.mjs)调用接口，先读取服务信息与实际能力。
+3. 通过媒体 URL 播放音频，通过 SSE 或任务查询跟踪下载进度。
 
-- [Docker 使用教程](packaging/docker/README.md)
-- [macOS 使用说明](packaging/macos/README.md)
-- [发布说明](packaging/RELEASING.md)
-- [API 说明](docs/design/cpp20-refactor/backend-service/api-contract.md)
-- [换源与试听接入](docs/design/cpp20-refactor/backend-service/api-contract.md#81-严格匹配与试听换源)
-- [平台账号与 Cookie 接入指南](docs/account-management.md)：新增、切换、停用、会员显示及错误处理
-- [配置说明](config/README.md)
-- [项目文档](docs/README.md)
+Release 中的 `music-service-<版本>-frontend-integration.zip` 包含接入指南、核心 OpenAPI、JS 客户端、TypeScript 类型和搜索 / 播放 / 下载示例。完整步骤见[前端快速接入](docs/frontend-integration.md)，账号和管理接口见[完整 API 契约](docs/design/cpp20-refactor/backend-service/api-contract.md)。
+
+## 开发与文档
+
+- [构建与测试](cmake/README.md) · [配置说明](config/README.md) · [账号接入](docs/account-management.md)
+- [发布与版本切换](packaging/RELEASING.md) · [自动发布工作流](packaging/release-workflow.md)
+- [文档索引](docs/README.md) · [第三方依赖](cmake/dependencies/README.md)
+
+未发布提交可从成功的 [CI 运行](https://github.com/ddmoyu/music-service/actions/workflows/ci.yml)下载保存 14 天的程序包，或按构建文档自行编译。前端应固定配套的后端版本。

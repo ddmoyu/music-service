@@ -34,4 +34,4 @@ CI 使用标准托管运行器：Windows x64，以及 Linux、macOS、Docker 各
 - 基础镜像按多架构索引 digest 固定（`ubuntu:24.04`，见 Dockerfile）；构建阶段用 pip 安装固定版本的 CMake 3.31.6 与 Ninja，因为发行版 CMake 低于工程要求的 3.30。默认最多 3 个编译任务，可通过 `--build-arg BUILD_JOBS=2` 按构建机内存调整。
 - 镜像使用 UID 10001，状态与下载分别位于 `/data`、`/downloads`。`init`、运行和管理命令必须使用相同的卷与配置；身份管理须先停止服务。
 - ENTRYPOINT 为 exec 形式，服务是 PID 1，接收 `docker stop` 的 SIGTERM。`shutdown.soft_seconds` 默认 15 秒，不能用空闲冒烟的停止速度保证负载下在 Docker 默认 10 秒内退出；教程预留 60 秒停止宽限期，修改应用停机预算时也要调整容器设置。
-- x86_64 与 ARM64 原生镜像已通过构建、非 root 运行、健康检查、SIGTERM 与同卷重建，在线结果另见[跨系统验收](../docs/research/cross-platform-ci.md)。Compose 示例与真实 NAS 尚未运行验收，也未发布多架构镜像清单。
+- x86_64 与 ARM64 原生镜像已通过构建、非 root 运行、健康检查、SIGTERM 与同卷重建，在线结果另见[跨系统验收](../docs/research/cross-platform-ci.md)。版本镜像与双架构清单由[发布工作流](release-workflow.md)交付，实际状态见 [Releases](https://github.com/ddmoyu/music-service/releases)。Compose 示例与真实 NAS 尚未运行验收。

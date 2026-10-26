@@ -1,26 +1,33 @@
 # Docker 使用教程
 
-自动发布流程见[工作流说明](../release-workflow.md)。当某版本的预览 Release 已发布后，可用
-ghcr.io/ddmoyu/music-service:版本号 替换本文的 music-service:local；同一标签自动选择 amd64 或 arm64。
+从 [Releases](https://github.com/ddmoyu/music-service/releases) 选择预览版本，本文以 0.1.30 为例。
+成品镜像为 `ghcr.io/ddmoyu/music-service:0.1.30`，同一标签自动选择 amd64 或 arm64。
 镜像内 /usr/local/share/music-service 包含许可、配置说明和前端接入材料，接入步骤见[前端指南](../../docs/frontend-integration.md)。
 
-本教程从源码构建镜像，再启动 HTTP 后端服务。当前尚未发布镜像仓库中的版本，不能直接用 `docker pull ghcr.io/ddmoyu/music-service` 获取成品；后续交付安排见[发布说明](../RELEASING.md)。
+使用明确版本号拉取，不省略标签。自动发布流程与实际发布状态见[工作流说明](../release-workflow.md)和[发布说明](../RELEASING.md)。
 
 CI 已在 Linux amd64／arm64 原生环境验证镜像构建、启动、认证、正常停止和同卷重建。Compose 示例、真实 NAS 与网络文件系统尚未运行验收；详细证据见[跨系统验收](../../docs/research/cross-platform-ci.md)。
 
-## 1. 构建镜像
+## 1. 获取镜像
 
-需要可运行 Linux 容器的 Docker 环境和项目源码，构建时需要联网获取基础镜像、构建工具与固定版本的源码依赖。Windows／macOS 上使用 Linux 容器环境。编译器在构建阶段使用，运行镜像不携带编译工具。
+需要可运行 Linux 容器的 Docker 环境。Windows／macOS 上使用 Linux 容器环境；拉取成品无需项目源码和编译工具。
 
-在仓库根目录执行。下面 Docker 命令均写成单行，可用于 Bash 或 PowerShell；涉及 HTTP 请求时分别给出两种写法。
+下面 Docker 命令均写成单行，可用于 Bash 或 PowerShell；涉及 HTTP 请求时分别给出两种写法。
 
 ```text
 docker version
-docker build --build-arg BUILD_JOBS=3 -f packaging/docker/Dockerfile -t music-service:local .
-docker run --rm music-service:local version
+docker pull ghcr.io/ddmoyu/music-service:0.1.30
+docker run --rm ghcr.io/ddmoyu/music-service:0.1.30 version
 ```
 
-默认构建宿主机对应的 Linux 架构。内存较少时将 `BUILD_JOBS` 改为 `2` 或 `1`；构建时的内存占用不等于服务运行内存。运行镜像基于固定 digest 的 Ubuntu 24.04，包含程序、系统运行库和 CA 证书。
+运行镜像基于固定 digest 的 Ubuntu 24.04，包含程序、系统运行库和 CA 证书。
+需要自行构建时，在仓库根目录执行下面命令，并将后文的版本镜像替换为 `music-service:local`：
+
+```text
+docker build --build-arg BUILD_JOBS=3 -f packaging/docker/Dockerfile -t music-service:local .
+```
+
+构建时联网获取固定依赖，默认构建宿主机对应的 Linux 架构。内存较少时将 `BUILD_JOBS` 改为 `2` 或 `1`；构建时内存不代表服务运行内存。
 
 ## 2. 首次初始化
 
@@ -29,8 +36,8 @@ docker run --rm music-service:local version
 ```text
 docker volume create music-service-data
 docker volume create music-service-downloads
-docker run --rm -v music-service-data:/data -v music-service-downloads:/downloads music-service:local check-config
-docker run --rm -v music-service-data:/data -v music-service-downloads:/downloads music-service:local init
+docker run --rm -v music-service-data:/data -v music-service-downloads:/downloads ghcr.io/ddmoyu/music-service:0.1.30 check-config
+docker run --rm -v music-service-data:/data -v music-service-downloads:/downloads ghcr.io/ddmoyu/music-service:0.1.30 init
 ```
 
 每条命令成功后再继续。`init` 用于首次创建身份，并把 token 写到 `/data/secrets/bootstrap-token.txt`；终端只显示文件位置。重启或重建同一个实例时直接使用原卷，不重复初始化。服务、初始化与后续管理命令必须挂载相同的两个卷；同一个数据卷只运行一个服务实例。
@@ -38,7 +45,7 @@ docker run --rm -v music-service-data:/data -v music-service-downloads:/download
 ## 3. 启动并检查服务
 
 ```text
-docker run -d --name music-service --restart unless-stopped --stop-timeout 60 --log-driver json-file --log-opt max-size=10m --log-opt max-file=3 -p 127.0.0.1:17632:17632 -p 127.0.0.1:17633:17633 -p 127.0.0.1:17634:17634 -v music-service-data:/data -v music-service-downloads:/downloads music-service:local
+docker run -d --name music-service --restart unless-stopped --stop-timeout 60 --log-driver json-file --log-opt max-size=10m --log-opt max-file=3 -p 127.0.0.1:17632:17632 -p 127.0.0.1:17633:17633 -p 127.0.0.1:17634:17634 -v music-service-data:/data -v music-service-downloads:/downloads ghcr.io/ddmoyu/music-service:0.1.30
 docker inspect --format '{{.State.Health.Status}}' music-service
 docker logs --tail 100 music-service
 ```
@@ -95,7 +102,7 @@ docker start music-service
 
 ```text
 docker stop --timeout 60 music-service
-docker run --rm -v music-service-data:/data -v music-service-downloads:/downloads music-service:local token list --principal prn_local
+docker run --rm -v music-service-data:/data -v music-service-downloads:/downloads ghcr.io/ddmoyu/music-service:0.1.30 token list --principal prn_local
 docker start music-service
 ```
 
@@ -141,19 +148,13 @@ docker start music-service
 
 ## 7. Compose 示例
 
-下面是与前述默认配置对应的本地构建示例，保存为仓库根目录的 `compose.yaml`。Compose V2 的用法见 [Docker 官方说明](https://docs.docker.com/reference/cli/docker/compose/run/)。该示例尚未经过项目 CI 的 Compose 运行验收。
+下面是与前述默认配置对应的成品镜像示例，保存为 `compose.yaml`。Compose V2 的用法见 [Docker 官方说明](https://docs.docker.com/reference/cli/docker/compose/run/)。该示例尚未经过项目 CI 的 Compose 运行验收。
 
 ```yaml
 name: music-service
 services:
   music-service:
-    build:
-      context: .
-      dockerfile: packaging/docker/Dockerfile
-      args:
-        BUILD_JOBS: "3"
-    image: music-service:local
-    pull_policy: never
+    image: ghcr.io/ddmoyu/music-service:0.1.30
     restart: unless-stopped
     stop_grace_period: 60s
     ports:
@@ -181,7 +182,7 @@ volumes:
 
 ```text
 docker compose config
-docker compose build
+docker compose pull
 docker compose run --rm music-service check-config
 docker compose run --rm music-service init
 docker compose up -d
@@ -189,7 +190,7 @@ docker compose ps
 docker compose logs --tail 100 music-service
 ```
 
-Compose 生成容器名，后续使用服务名操作：第 4 节读取 token 的命令改为 `docker compose exec -T music-service cat /data/secrets/bootstrap-token.txt`，删除交付文件同样改用 `docker compose exec -T`。停止使用 `docker compose stop`，重建使用 `docker compose up -d --build`；只改应用 JSON 配置并沿用绑定挂载时，校验后执行 `docker compose restart`。以上操作保留外部命名卷。
+Compose 生成容器名，后续使用服务名操作：第 4 节读取 token 的命令改为 `docker compose exec -T music-service cat /data/secrets/bootstrap-token.txt`，删除交付文件同样改用 `docker compose exec -T`。停止使用 `docker compose stop`，重建使用 `docker compose up -d`；只改应用 JSON 配置并沿用绑定挂载时，校验后执行 `docker compose restart`。以上操作保留外部命名卷。
 
 使用第 6 节的自定义配置时，在服务的 `volumes` 列表中再加入 `"<配置文件绝对路径>:/etc/music-service/config.json:ro"`，并按客户端实际访问方式调整 `ports`。Compose 的初始化、检查和运行都会复用该挂载。
 
@@ -197,7 +198,7 @@ Compose 生成容器名，后续使用服务名操作：第 4 节读取 token �
 
 | 现象 | 检查项 |
 | --- | --- |
-| `pull access denied` | 当前须先构建 `music-service:local`；尚无官方已发布镜像 |
+| `pull access denied` | 检查镜像名、显式版本号与 Release 状态；公开 GHCR 镜像无需登录 |
 | `INSTANCE_LOCKED` | 服务或另一条管理命令正在使用同一数据卷，先停止占用者 |
 | 401 | 使用服务 token，检查 Bearer 头；音乐平台 Cookie 不能替代服务 token |
 | 搜索可用，媒体或事件不可达 | 三个端口是否都映射，`public_urls` 是否与客户端实际访问地址一致 |
