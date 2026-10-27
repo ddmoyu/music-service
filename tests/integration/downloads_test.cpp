@@ -75,6 +75,7 @@ struct Downloads {
             tasks, registry, credentials, rules,
             [](const DestinationRule& rule) { return rule.id != "dst_offline"; },
             [this](const std::string& destination, const std::string& path, std::uint64_t size) {
+                ++file_checks;
                 const std::lock_guard lock{files_mutex};
                 const auto found = files.find(destination + "|" + path);
                 return found != files.end() && found->second == size;
@@ -142,6 +143,7 @@ struct Downloads {
     std::string owner;
     std::string other;
     std::mutex files_mutex;
+    std::atomic<int> file_checks{0};
     std::map<std::string, std::uint64_t> files; // "destination|path" -> size on disk
 };
 
@@ -376,6 +378,67 @@ TEST_CASE("completed results are reused only while they still hold", "[downloads
     const auto stale = unwrap(d.tasks->create({intent, d.key(5), "h", false, "/api/v1/downloads", std::nullopt, candidate}));
     CHECK_FALSE(stale.reused);
     CHECK(stale.task.task_id != first.view.task.task_id);
+}
+
+TEST_CASE("missing history does not hide an older reusable download", "[downloads][redownload]") {
+    Downloads d{"missing-history"};
+    const auto first = d.create(d.request(), 1);
+    (void)d.complete("original.mp3");
+    auto force = d.request();
+    force.force = true;
+    for (int i = 0; i < 9; ++i) {
+        d.clock->advance(1s);
+        (void)d.create(force, 10 + i);
+        const auto asset = d.complete("copy-" + std::to_string(i) + ".mp3");
+        REQUIRE(d.publications->mark_missing(asset.id));
+    }
+    d.file_checks = 0;
+    const auto reused = d.create(d.request(), 30);
+    CHECK(reused.reused);
+    CHECK(reused.view.task.task_id == first.view.task.task_id);
+    CHECK(d.file_checks == 1);
+}
+
+TEST_CASE("equal batch intents share one file check only within that request", "[downloads][redownload]") {
+    Downloads d{"batch-file-checks"};
+    const auto first = d.create(d.request(), 1);
+    (void)d.complete("Song.mp3");
+    auto explicit_defaults = d.request();
+    explicit_defaults.destination_id = "dst_main";
+    const std::vector<DownloadRequest> items{d.request(), explicit_defaults, d.request()};
+    d.file_checks = 0;
+    const auto batch = unwrap(d.service->create_batch(d.owner, items, d.key(2), "batch"));
+    CHECK(batch.created_count == 0);
+    CHECK(batch.reused_count == 3);
+    CHECK(d.file_checks == 1);
+    for (const auto& item : batch.items) CHECK(item.task.task_id == first.view.task.task_id);
+    const auto replay = unwrap(d.service->create_batch(d.owner, items, d.key(2), "batch"));
+    CHECK(replay.replayed);
+    CHECK(d.file_checks == 1);
+    d.files.clear();
+    const auto replacement = unwrap(d.service->create_batch(d.owner, items, d.key(3), "new-batch"));
+    CHECK(replacement.created_count == 1);
+    CHECK(replacement.reused_count == 2);
+    CHECK(replacement.items.front().task.task_id != first.view.task.task_id);
+    CHECK(d.file_checks == 2);
+}
+
+TEST_CASE("batch reuse checks do not bypass force or mix distinct product policies", "[downloads][redownload]") {
+    Downloads d{"batch-policy-checks"};
+    const auto first = d.create(d.request(), 1);
+    (void)d.complete("Song.mp3");
+    auto changed = d.request();
+    SECTION("force creates a new task and later duplicates share that task") { changed.force = true; }
+    SECTION("a different metadata policy is a separate download") { changed.metadata_policy = domain::MetadataPolicy::skip; }
+    const std::vector<DownloadRequest> items{d.request(), changed, d.request()};
+    d.file_checks = 0;
+    const auto batch = unwrap(d.service->create_batch(d.owner, items, d.key(2), "batch"));
+    CHECK(batch.created_count == 1);
+    CHECK(batch.reused_count == 2);
+    CHECK(d.file_checks == 1);
+    CHECK(batch.items[0].task.task_id == first.view.task.task_id);
+    CHECK(batch.items[1].task.task_id != first.view.task.task_id);
+    CHECK(batch.items[2].task.task_id == (changed.force ? batch.items[1].task.task_id : first.view.task.task_id));
 }
 
 TEST_CASE("requests are checked before anything is stored", "[downloads]") {

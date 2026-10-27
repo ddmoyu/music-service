@@ -445,6 +445,8 @@ quality／策略默认见模型，duplicate_policy 为 reuse（默认）或 forc
 
 去重按[规范下载意图](data-models.md#幂等与下载去重)，包含 allow_preview、metadata_policy、固定账号绑定及影响产物的有效策略。不同标签要求、试听要求不互相复用。完成结果必须仍满足权限、文件与策略条件才返回 reused=true；不合格结果按新任务处理。force 不改变指纹，也不能绕过活动唯一约束。
 
+已下载文件删除后，使用新的 Idempotency-Key 创建下载即可补下载，无须 force；发布时确认原路径已空闲则沿用原文件名，旧历史记录不会单独导致 `(2)` 后缀。实际文件／目录仍存在或其他任务正在使用该路径时才自动避让，不覆盖现有文件。旧任务与 file_id 保留，旧文件访问返回 FILE_MISSING；新文件使用新的 file_id。沿用仍有效的旧 Idempotency-Key 只会重放首次响应，不重新检查文件或创建任务。
+
 新任务事务提交后返回 202，Location 指向任务查询；去重命中返回 200 和既有 task_id，data.reused=true。返回不等待上游解析与整首下载。
 
 ```json

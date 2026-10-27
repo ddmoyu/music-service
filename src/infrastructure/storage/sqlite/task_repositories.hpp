@@ -71,7 +71,8 @@ public:
 
     domain::Result<application::ports::TaskRecord>
     begin(const application::ports::PublicationIntent& intent,
-          std::uint64_t expected_version) override;
+          std::uint64_t expected_version,
+          const std::optional<application::ports::MissingPathAsset>& missing = {}) override;
     domain::Result<void> set_stage(const std::string& task_id, const std::string& execution_id,
                                    const std::string& stage) override;
     domain::Result<application::ports::CompletedPublication>
@@ -83,7 +84,10 @@ public:
             std::uint64_t expected_version, domain::TaskStatus to,
             const std::string& error_json) override;
     domain::Result<void> relocate(const std::string& task_id, const std::string& execution_id,
-                                  const std::string& reserved_path) override;
+                                  const std::string& reserved_path,
+                                  const std::optional<application::ports::MissingPathAsset>& missing = {}) override;
+    domain::Result<std::optional<application::ports::FileAssetRecord>>
+    asset_at_path(const std::string& destination_id, const std::string& reserved_path) override;
     domain::Result<std::vector<application::ports::PendingPublication>> pending() override;
     domain::Result<std::vector<application::ports::TaskRecord>> in_status(domain::TaskStatus status) override;
     domain::Result<application::ports::FileAssetRecord> get_asset(const std::string& owner_id,

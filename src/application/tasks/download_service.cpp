@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <map>
 #include <optional>
 #include <set>
 #include <utility>
@@ -177,6 +178,7 @@ std::optional<ports::ReuseCandidate> DownloadService::reusable(const domain::Nor
         return std::nullopt; // a lookup failure only means no reuse
     }
     for (const auto& result : results.value()) {
+        if (!result.file_available) continue;
         auto members = media::bundle_members(result.properties_json);
         if (!members) continue;
         bool intact = true;
@@ -188,7 +190,7 @@ std::optional<ports::ReuseCandidate> DownloadService::reusable(const domain::Nor
         if (!intact) continue;
         // The published file must still be there with its recorded size (A46); the
         // transaction re-checks the versions.
-        if (result.file_available && file_intact_ &&
+        if (file_intact_ &&
             file_intact_(result.destination_id, result.relative_path, result.size_bytes)) {
             return result.candidate;
         }
@@ -344,6 +346,9 @@ domain::Result<BatchResult> DownloadService::create_batch(const std::string& own
 
     // All items are checked; the first failure decides the status, all are listed.
     std::vector<ports::BatchItemCommand> commands;
+    // Request-local and bounded by max_batch_items_: repeated entries need only one
+    // history/file check. The write transaction still checks every candidate version.
+    std::map<std::string, std::optional<ports::ReuseCandidate>> checked_results;
     std::optional<Error> first_error;
     std::vector<domain::ErrorDetail> failures;
     for (std::size_t i = 0; i < items.size(); ++i) {
@@ -357,7 +362,13 @@ domain::Result<BatchResult> DownloadService::create_batch(const std::string& own
             }
             continue;
         }
-        auto candidate = items[i].force ? std::nullopt : reusable(intent.value());
+        std::optional<ports::ReuseCandidate> candidate;
+        if (!items[i].force) {
+            const auto key = domain::fingerprint(*intent).canonical;
+            auto [entry, inserted] = checked_results.try_emplace(key);
+            if (inserted) entry->second = reusable(*intent);
+            candidate = entry->second;
+        }
         commands.push_back({std::move(intent).value(), items[i].force, std::move(candidate)});
     }
     if (first_error) {

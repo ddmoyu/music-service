@@ -11,8 +11,9 @@ PublishingPublicationRepository::PublishingPublicationRepository(std::shared_ptr
     : inner_(std::move(inner)), hub_(std::move(hub)) {}
 
 domain::Result<ports::TaskRecord> PublishingPublicationRepository::begin(const ports::PublicationIntent& intent,
-                                                                         std::uint64_t expected_version) {
-    auto task = inner_->begin(intent, expected_version);
+                                                                         std::uint64_t expected_version,
+                                                                         const std::optional<ports::MissingPathAsset>& missing) {
+    auto task = inner_->begin(intent, expected_version, missing);
     if (task) {
         hub_->publish(event_of(task.value()));
     }
@@ -27,8 +28,14 @@ domain::Result<void> PublishingPublicationRepository::set_stage(const std::strin
 
 domain::Result<void> PublishingPublicationRepository::relocate(const std::string& task_id,
                                                                const std::string& execution_id,
-                                                               const std::string& reserved_path) {
-    return inner_->relocate(task_id, execution_id, reserved_path);
+                                                               const std::string& reserved_path,
+                                                               const std::optional<ports::MissingPathAsset>& missing) {
+    return inner_->relocate(task_id, execution_id, reserved_path, missing);
+}
+
+domain::Result<std::optional<ports::FileAssetRecord>>
+PublishingPublicationRepository::asset_at_path(const std::string& destination_id, const std::string& reserved_path) {
+    return inner_->asset_at_path(destination_id, reserved_path);
 }
 
 domain::Result<ports::CompletedPublication>

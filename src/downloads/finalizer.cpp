@@ -64,6 +64,29 @@ domain::Error audio_refused(std::string reason) {
                          {{"audio", std::move(reason)}}};
 }
 
+domain::Result<std::optional<ports::MissingPathAsset>> missing_asset_for_path(
+    ports::PublicationRepository& publications, ports::DestinationFiles& files,
+    const std::string& destination, const std::string& candidate) {
+    auto found = publications.asset_at_path(destination, candidate);
+    if (!found) return found.error();
+    if (!*found) return std::optional<ports::MissingPathAsset>{};
+    const auto& asset = **found;
+    auto members = application::media::bundle_members(asset.properties_json);
+    if (!members) return members.error();
+    auto recorded_path = asset.relative_path;
+    if (!members->empty()) {
+        const auto slash = recorded_path.rfind('/');
+        if (slash == std::string::npos) return domain::Error::validation("bundle", "missing publication directory");
+        recorded_path.resize(slash);
+    }
+    // The requested spelling can be absent on Linux while the recorded spelling
+    // still exists. An offline root or inspection error must never release a name.
+    auto present = files.exists(destination, recorded_path);
+    if (!present) return present.error();
+    if (*present) return std::optional<ports::MissingPathAsset>{};
+    return std::optional<ports::MissingPathAsset>{{asset.id, asset.version}};
+}
+
 } // namespace
 
 std::string candidate_path(std::string_view wanted, std::uint32_t n) {
@@ -180,7 +203,9 @@ domain::Result<std::string> move_to_reservation(ports::PublicationRepository& pu
             if (present.value()) {
                 continue;
             }
-            auto changed = publications.relocate(intent.task_id, intent.execution_id, candidate);
+            auto missing = missing_asset_for_path(publications, files, intent.destination_id, candidate);
+            if (!missing) return missing.error();
+            auto changed = publications.relocate(intent.task_id, intent.execution_id, candidate, *missing);
             if (!changed) {
                 if (changed.error().code == ErrorCode::conflict) {
                     continue;
@@ -294,7 +319,9 @@ domain::Result<ports::CompletedPublication> Finalizer::publish(const FinalizeReq
         if (present.value()) {
             continue; // an unknown file is never a candidate
         }
-        auto begun = publications_->begin(intent, task.version);
+        auto missing = missing_asset_for_path(*publications_, *files_, task.destination_id, intent.reserved_path);
+        if (!missing) return missing.error();
+        auto begun = publications_->begin(intent, task.version, *missing);
         if (begun) {
             finalizing = std::move(begun).value();
         } else if (begun.error().code != ErrorCode::conflict) {

@@ -249,6 +249,26 @@ domain::Error path_reserved() {
     return domain::Error{domain::ErrorCode::conflict, "target path is already reserved", true, {}};
 }
 
+domain::Result<void> release_missing_path(Connection& db, const std::string& destination_id,
+                                           const std::string& key,
+                                           const std::optional<ports::MissingPathAsset>& missing) {
+    if (!missing) return domain::ok();
+    // Schema 8 already has a separate, unique occupancy key. Retain the historical
+    // relative_path and file id, but move this key outside the relative-path namespace.
+    // Never revive the old file id: old task results/tickets must not expose new bytes.
+    auto s = db.prepare("UPDATE file_assets SET status = 'missing', version = version + 1, path_key = ?"
+                        " WHERE id = ? AND version = ? AND destination_id = ? AND path_key = ?");
+    if (!s) return std::move(s).error();
+    s->bind(1, "/missing/" + missing->file_id)
+        .bind(2, missing->file_id)
+        .bind(3, static_cast<std::int64_t>(missing->version))
+        .bind(4, destination_id)
+        .bind(5, key);
+    if (auto done = s->run(); !done) return done;
+    if (db.changes() != 1) return path_reserved();
+    return domain::ok();
+}
+
 domain::Result<std::int64_t> count(Connection& db, std::string_view sql,
                                    const std::optional<std::string>& owner) {
     auto s = db.prepare(sql);
@@ -546,7 +566,8 @@ SqliteTaskRepository::completed_results(const std::string& owner_id, const domai
                             " FROM download_tasks t JOIN task_files tf ON tf.task_id = t.id"
                             " JOIN file_assets f ON f.id = tf.file_id"
                             " WHERE t.owner_id = ? AND t.status = 'completed' AND t.fingerprint_digest = ?"
-                            " AND t.fingerprint = ? AND f.owner_id = ? ORDER BY t.finished_at DESC, t.id DESC LIMIT 8");
+                            " AND t.fingerprint = ? AND f.owner_id = ? AND f.status = 'available'"
+                            " ORDER BY t.finished_at DESC, t.id DESC LIMIT 8");
         if (!s) {
             return std::move(s).error();
         }
@@ -1141,7 +1162,8 @@ domain::Result<ports::TaskRecord> SqliteTaskRepository::request_cancel(const std
 // =============================================================== publication
 
 domain::Result<ports::TaskRecord> SqlitePublicationRepository::begin(const ports::PublicationIntent& intent,
-                                                                     std::uint64_t expected_version) {
+                                                                     std::uint64_t expected_version,
+                                                                     const std::optional<ports::MissingPathAsset>& missing) {
     const auto now = to_millis(ctx_.clock->now());
     const auto key = path_key(intent.reserved_path);
     return ctx_.database->write([&](Connection& db) -> domain::Result<ports::TaskRecord> {
@@ -1154,6 +1176,9 @@ domain::Result<ports::TaskRecord> SqlitePublicationRepository::begin(const ports
         }
         if (task->destination_id != intent.destination_id) {
             return domain::Error::validation("destination_id", "differs from the task's destination");
+        }
+        if (auto released = release_missing_path(db, intent.destination_id, key, missing); !released) {
+            return released.error();
         }
         auto taken = path_taken(db, intent.destination_id, key, intent.task_id);
         if (!taken) {
@@ -1212,7 +1237,8 @@ domain::Result<void> SqlitePublicationRepository::set_stage(const std::string& t
 
 domain::Result<void> SqlitePublicationRepository::relocate(const std::string& task_id,
                                                            const std::string& execution_id,
-                                                           const std::string& reserved_path) {
+                                                           const std::string& reserved_path,
+                                                           const std::optional<ports::MissingPathAsset>& missing) {
     const auto now = to_millis(ctx_.clock->now());
     const auto key = path_key(reserved_path);
     return ctx_.database->write([&](Connection& db) -> domain::Result<void> {
@@ -1228,6 +1254,9 @@ domain::Result<void> SqlitePublicationRepository::relocate(const std::string& ta
         }
         if (!destination.value()) {
             return version_conflict();
+        }
+        if (auto released = release_missing_path(db, *destination.value(), key, missing); !released) {
+            return released;
         }
         auto taken = path_taken(db, *destination.value(), key, task_id);
         if (!taken) {
@@ -1448,6 +1477,17 @@ domain::Result<ports::FileAssetRecord> SqlitePublicationRepository::get_asset(co
             return not_found("file");
         }
         return *found.value();
+    });
+}
+
+domain::Result<std::optional<ports::FileAssetRecord>>
+SqlitePublicationRepository::asset_at_path(const std::string& destination_id, const std::string& reserved_path) {
+    return ctx_.database->read([&](Connection& db) -> domain::Result<std::optional<ports::FileAssetRecord>> {
+        auto s = db.prepare("SELECT " + std::string{asset_columns} +
+                            " FROM file_assets WHERE destination_id = ? AND path_key = ?");
+        if (!s) return std::move(s).error();
+        s->bind(1, destination_id).bind(2, path_key(reserved_path));
+        return first<ports::FileAssetRecord>(*s, read_asset);
     });
 }
 

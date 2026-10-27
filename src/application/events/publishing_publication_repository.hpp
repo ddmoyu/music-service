@@ -15,11 +15,15 @@ public:
                                     std::shared_ptr<TaskEventHub> hub);
 
     domain::Result<ports::TaskRecord> begin(const ports::PublicationIntent& intent,
-                                            std::uint64_t expected_version) override;
+                                            std::uint64_t expected_version,
+                                            const std::optional<ports::MissingPathAsset>& missing = {}) override;
     domain::Result<void> set_stage(const std::string& task_id, const std::string& execution_id,
                                    const std::string& stage) override;
     domain::Result<void> relocate(const std::string& task_id, const std::string& execution_id,
-                                  const std::string& reserved_path) override;
+                                  const std::string& reserved_path,
+                                  const std::optional<ports::MissingPathAsset>& missing = {}) override;
+    domain::Result<std::optional<ports::FileAssetRecord>>
+    asset_at_path(const std::string& destination_id, const std::string& reserved_path) override;
     domain::Result<ports::CompletedPublication> complete(const std::string& task_id, const std::string& execution_id,
                                                          std::uint64_t expected_version,
                                                          const ports::NewFileAsset& asset,

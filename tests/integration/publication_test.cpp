@@ -22,6 +22,9 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <array>
+#include <barrier>
+#include <thread>
 
 using namespace music_service;
 namespace fs = std::filesystem;
@@ -50,7 +53,10 @@ class HookedFiles final : public ports::DestinationFiles {
 public:
     explicit HookedFiles(std::shared_ptr<ports::DestinationFiles> inner) : inner_(std::move(inner)) {}
 
-    domain::Result<bool> exists(const std::string& d, const std::string& p) override { return inner_->exists(d, p); }
+    domain::Result<bool> exists(const std::string& d, const std::string& p) override {
+        if (inspect_error) return *inspect_error;
+        return inner_->exists(d, p);
+    }
     domain::Result<std::optional<ports::FileFingerprint>> fingerprint(const std::string& d,
                                                                       const std::string& p) override {
         return inner_->fingerprint(d, p);
@@ -71,6 +77,7 @@ public:
     }
 
     std::function<void()> before_move;
+    std::optional<domain::Error> inspect_error;
     bool flush_fails{false};
 
 private:
@@ -131,7 +138,7 @@ struct Publishing {
     }
 
     // A claimed task that reached processing.
-    ports::TaskRecord processing(std::string_view track_id) {
+    ports::TaskRecord processing(std::string_view track_id, std::string_view request_suffix = {}) {
         domain::DownloadIntentDraft draft{owner,
                                           test::track("kuwo", track_id),
                                           {test::anonymous(owner, "kuwo")},
@@ -139,7 +146,7 @@ struct Publishing {
                                           domain::MetadataPolicy::best_effort,
                                           {"dst_main", "d1", "n1", "m1"}};
         auto intent = test::unwrap(domain::NormalizedDownloadIntent::normalize(std::move(draft)));
-        REQUIRE(tasks->create({std::move(intent), "key-" + std::string{track_id}, "h", false}));
+        REQUIRE(tasks->create({std::move(intent), "key-" + std::string{track_id} + std::string{request_suffix}, "h", false}));
         auto task = *test::unwrap(tasks->claim_next(clock->now()));
         task = step(task, TaskStatus::downloading);
         return step(task, TaskStatus::processing);
@@ -354,6 +361,203 @@ TEST_CASE("publication never overwrites an unknown file or another reservation",
     CHECK(c.asset.relative_path == "专辑/Track (2).flac");
     CHECK(read_bytes(p.at("专辑/Track.flac")) == "raced in");
     CHECK(read_bytes(p.at("专辑/Track (2).flac")) == "third");
+}
+
+TEST_CASE("a deleted publication keeps its history but releases its original name", "[publication][downloads][redownload]") {
+    Publishing p{"deleted-name"};
+    const auto first = p.processing("1");
+    const auto old = test::unwrap(p.publish(first, "歌手/Song.mp3", p.processed(first, "old audio")));
+    REQUIRE(fs::remove(p.at(old.asset.relative_path)));
+    SECTION("the original schema 8 asset is still marked available") {}
+    SECTION("a file access already marked the old asset missing") {
+        REQUIRE(p.publications->mark_missing(old.asset.id));
+    }
+    p.restart();
+    const auto second = p.processing("1", "-replacement");
+    const auto replacement = test::unwrap(p.publish(second, "歌手/Song.mp3", p.processed(second, "new audio")));
+    CHECK(replacement.asset.relative_path == "歌手/Song.mp3");
+    CHECK(replacement.asset.id != old.asset.id);
+    CHECK(read_bytes(p.at("歌手/Song.mp3")) == "new audio");
+    CHECK_FALSE(fs::exists(p.at("歌手/Song (2).mp3")));
+    const auto historical = test::unwrap(p.publications->get_asset(p.owner, old.asset.id));
+    CHECK(historical.status == ports::FileAssetStatus::missing);
+    CHECK(historical.relative_path == old.asset.relative_path);
+    CHECK(p.get(first.task_id).status == TaskStatus::completed);
+    CHECK(p.get(first.task_id).result_json == old.task.result_json);
+    application::media::FileAccessService access{p.publications, p.real_files,
+        [](const std::string&, const std::string&) { return true; }};
+    const auto old_access = access.open(p.owner, old.asset.id);
+    REQUIRE_FALSE(old_access);
+    CHECK(old_access.error().code == ErrorCode::file_missing);
+    REQUIRE(access.open(p.owner, replacement.asset.id));
+    p.restart();
+    CHECK(p.publications->get_asset(p.owner, old.asset.id)->status == ports::FileAssetStatus::missing);
+    CHECK(p.publications->get_asset(p.owner, replacement.asset.id)->status == ports::FileAssetStatus::available);
+    REQUIRE(fs::remove(p.at(replacement.asset.relative_path)));
+    const auto third = p.processing("1", "-third");
+    const auto again = test::unwrap(p.publish(third, "歌手/Song.mp3", p.processed(third, "third audio")));
+    CHECK(again.asset.relative_path == "歌手/Song.mp3");
+    CHECK(p.publications->get_asset(p.owner, replacement.asset.id)->status == ports::FileAssetStatus::missing);
+}
+
+TEST_CASE("a deleted bundle reuses its directory while a partial bundle keeps its name", "[publication][sidecars][redownload]") {
+    Publishing p{"deleted-bundle"};
+    const auto first = p.processing("1");
+    const auto old = test::unwrap(p.finalizer->publish(bundle_request(p, first)));
+    bool whole_bundle = false;
+    SECTION("the complete bundle was removed") {
+        REQUIRE(fs::remove_all(p.at("Song.files")) > 0);
+        whole_bundle = true;
+    }
+    SECTION("only its audio was removed") {
+        REQUIRE(fs::remove(p.at(old.asset.relative_path)));
+    }
+    const auto second = p.processing("2");
+    const auto replacement = test::unwrap(p.finalizer->publish(bundle_request(p, second)));
+    CHECK(replacement.asset.relative_path == (whole_bundle ? "Song.files/Song.mp3" : "Song (2).files/Song.mp3"));
+    if (whole_bundle) CHECK(p.publications->get_asset(p.owner, old.asset.id)->status == ports::FileAssetStatus::missing);
+    else CHECK(fs::exists(p.at("Song.files/Song.lrc")));
+}
+
+TEST_CASE("a reclaimed name never overwrites a file restored before rename", "[publication][redownload]") {
+    Publishing p{"restored-name"};
+    const auto first = p.processing("1");
+    const auto old = test::unwrap(p.publish(first, "Song.mp3", p.processed(first, "old audio")));
+    REQUIRE(fs::remove(p.at(old.asset.relative_path)));
+    const auto second = p.processing("2");
+    p.files->before_move = [&p] {
+        p.files->before_move = nullptr;
+        write_bytes(p.at("Song.mp3"), "externally restored");
+    };
+    const auto replacement = test::unwrap(p.publish(second, "Song.mp3", p.processed(second, "new audio")));
+    CHECK(replacement.asset.relative_path == "Song (2).mp3");
+    CHECK(read_bytes(p.at("Song.mp3")) == "externally restored");
+    CHECK(read_bytes(p.at("Song (2).mp3")) == "new audio");
+    CHECK(p.publications->get_asset(p.owner, old.asset.id)->status == ports::FileAssetStatus::missing);
+}
+
+TEST_CASE("reclaimed publication names remain exclusive across concurrent tasks", "[publication][redownload]") {
+    Publishing p{"concurrent-name"};
+    const auto old_task = p.processing("1");
+    const auto old = test::unwrap(p.publish(old_task, "Song.mp3", p.processed(old_task, "old audio")));
+    REQUIRE(fs::remove(p.at(old.asset.relative_path)));
+    const auto a = p.processing("2");
+    const auto b = p.processing("3");
+    const auto report_a = p.processed(a, "audio A");
+    const auto report_b = p.processed(b, "audio B");
+    std::array<std::optional<domain::Result<ports::CompletedPublication>>, 2> results;
+    std::barrier start{2};
+    {
+        std::jthread one{[&] { start.arrive_and_wait(); results[0] = p.publish(a, "Song.mp3", report_a); }};
+        std::jthread two{[&] { start.arrive_and_wait(); results[1] = p.publish(b, "Song.mp3", report_b); }};
+    }
+    REQUIRE(results[0].has_value());
+    REQUIRE(results[1].has_value());
+    const auto done_a = test::unwrap(std::move(*results[0]));
+    const auto done_b = test::unwrap(std::move(*results[1]));
+    CHECK(done_a.asset.relative_path != done_b.asset.relative_path);
+    CHECK((done_a.asset.relative_path == "Song.mp3" || done_b.asset.relative_path == "Song.mp3"));
+    CHECK(read_bytes(p.at(done_a.asset.relative_path)) == "audio A");
+    CHECK(read_bytes(p.at(done_b.asset.relative_path)) == "audio B");
+    CHECK(p.publications->get_asset(p.owner, old.asset.id)->status == ports::FileAssetStatus::missing);
+}
+
+TEST_CASE("reclaiming a publication path rolls back on stale evidence or storage failure", "[publication][redownload]") {
+    Publishing p{"reclaim-rollback"};
+    const auto first = p.processing("1");
+    const auto old = test::unwrap(p.publish(first, "Song.mp3", p.processed(first, "old audio")));
+    REQUIRE(fs::remove(p.at(old.asset.relative_path)));
+    const auto next = p.processing("2");
+    (void)p.processed(next, "new audio");
+    ports::PublicationIntent intent{next.task_id, *next.execution_id, "dst_main", p.work_file(next),
+                                    "Song.mp3", "{}", "reserved"};
+    ports::MissingPathAsset claim{old.asset.id, old.asset.version};
+    SECTION("a stale asset version cannot release the path") {
+        REQUIRE(p.publications->mark_missing(old.asset.id));
+    }
+    SECTION("a claim cannot release another path") {
+        intent.reserved_path = "Other.mp3";
+    }
+    SECTION("cancellation wins before any path is released") {
+        REQUIRE(p.tasks->request_cancel(p.owner, next.task_id));
+    }
+    SECTION("a failed reservation insert rolls back the released name") {
+        REQUIRE(p.database->write([](sqlite::Connection& db) {
+            return db.exec("CREATE TRIGGER reject_reservation BEFORE INSERT ON finalization_intents "
+                           "BEGIN SELECT RAISE(ABORT, 'injected reservation failure'); END");
+        }));
+    }
+    const auto before = test::unwrap(p.publications->get_asset(p.owner, old.asset.id));
+    const auto task_before = p.get(next.task_id);
+    REQUIRE_FALSE(p.publications->begin(intent, next.version, claim));
+    const auto after = test::unwrap(p.publications->get_asset(p.owner, old.asset.id));
+    CHECK(after.status == before.status);
+    CHECK(after.version == before.version);
+    const auto occupant = test::unwrap(p.publications->asset_at_path("dst_main", "Song.mp3"));
+    REQUIRE(occupant);
+    CHECK(occupant->id == old.asset.id);
+    CHECK(p.get(next.task_id).status == task_before.status);
+    CHECK(p.publications->pending()->empty());
+}
+
+TEST_CASE("a crash after reclaiming a deleted name recovers at the original path", "[publication][recovery][redownload]") {
+    Publishing p{"reclaim-recovery"};
+    const auto first = p.processing("1");
+    const auto old = test::unwrap(p.publish(first, "Song.mp3", p.processed(first, "old audio")));
+    REQUIRE(fs::remove(p.at(old.asset.relative_path)));
+    const auto second = p.processing("2");
+    SECTION("interrupted before rename") {
+        p.files->before_move = [] { throw std::runtime_error("crash after path reservation"); };
+        REQUIRE_THROWS(p.publish(second, "Song.mp3", p.processed(second, "new audio")));
+    }
+    SECTION("interrupted after rename but before asset commit") {
+        p.files->flush_fails = true;
+        REQUIRE_FALSE(p.publish(second, "Song.mp3", p.processed(second, "new audio")));
+    }
+    CHECK(p.get(second.task_id).status == TaskStatus::finalizing);
+    p.restart();
+    CHECK(p.recover().count(RecoveryAction::completed) == 1);
+    CHECK(read_bytes(p.at("Song.mp3")) == "new audio");
+    CHECK_FALSE(fs::exists(p.at("Song (2).mp3")));
+    CHECK(p.publications->get_asset(p.owner, old.asset.id)->status == ports::FileAssetStatus::missing);
+}
+
+TEST_CASE("an inspection failure never releases an old asset name", "[publication][redownload]") {
+    Publishing p{"reclaim-inspect-failure"};
+    const auto first = p.processing("1");
+    const auto old = test::unwrap(p.publish(first, "Song.mp3", p.processed(first, "old audio")));
+    REQUIRE(fs::remove(p.at(old.asset.relative_path)));
+    SECTION("destination offline") {
+        p.files->inspect_error = domain::Error{ErrorCode::destination_unavailable, "offline", true, {}};
+    }
+    SECTION("permission or disk error") {
+        p.files->inspect_error = domain::Error{ErrorCode::file_system, "inspect failed", false, {}};
+    }
+    const auto second = p.processing("2");
+    const auto result = p.publish(second, "Song.mp3", p.processed(second, "new audio"));
+    REQUIRE_FALSE(result);
+    CHECK(result.error().code == p.files->inspect_error->code);
+    const auto historical = test::unwrap(p.publications->get_asset(p.owner, old.asset.id));
+    CHECK(historical.status == ports::FileAssetStatus::available);
+    CHECK(historical.version == old.asset.version);
+    CHECK(p.publications->pending()->empty());
+}
+
+TEST_CASE("relocation can reclaim a deleted numbered name after an external collision", "[publication][redownload]") {
+    Publishing p{"relocate-reclaim"};
+    const auto first = p.processing("1");
+    const auto old = test::unwrap(p.publish(first, "Song (2).mp3", p.processed(first, "old audio")));
+    REQUIRE(fs::remove(p.at(old.asset.relative_path)));
+    const auto second = p.processing("2");
+    p.files->before_move = [&p] {
+        p.files->before_move = nullptr;
+        write_bytes(p.at("Song.mp3"), "external audio");
+    };
+    const auto result = test::unwrap(p.publish(second, "Song.mp3", p.processed(second, "new audio")));
+    CHECK(result.asset.relative_path == "Song (2).mp3");
+    CHECK(read_bytes(p.at("Song.mp3")) == "external audio");
+    CHECK(read_bytes(p.at("Song (2).mp3")) == "new audio");
+    CHECK(p.publications->get_asset(p.owner, old.asset.id)->status == ports::FileAssetStatus::missing);
 }
 
 TEST_CASE("a file that failed or skipped validation is not published (A19)", "[publication]") {

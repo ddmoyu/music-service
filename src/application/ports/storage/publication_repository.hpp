@@ -63,6 +63,13 @@ struct PendingPublication {
     TaskRecord task;
 };
 
+// The exact asset whose publication path was checked absent outside the transaction.
+// Releasing its name must preserve its identity/history and make it permanently missing.
+struct MissingPathAsset {
+    std::string file_id;
+    std::uint64_t version{0};
+};
+
 // Publication steps that must commit together with task state (data-models.md,
 // 文件与数据库的协调). Each write checks the task's execution id and version.
 class PublicationRepository {
@@ -71,9 +78,11 @@ public:
 
     // processing -> finalizing, plus the intent and its path reservation. A target path
     // already used by an asset or another intent (compared case-insensitively) is
-    // CONFLICT; the task is unchanged then.
+    // CONFLICT. A checked missing asset can release its name in the same transaction;
+    // its version and path must still match. Failure rolls back both changes.
     virtual domain::Result<TaskRecord> begin(const PublicationIntent& intent,
-                                             std::uint64_t expected_version) = 0;
+                                             std::uint64_t expected_version,
+                                             const std::optional<MissingPathAsset>& missing = {}) = 0;
 
     virtual domain::Result<void> set_stage(const std::string& task_id,
                                            const std::string& execution_id,
@@ -83,7 +92,14 @@ public:
     // one, so it is never overwritten. CONFLICT when the new path is taken; the intent
     // keeps its old path then.
     virtual domain::Result<void> relocate(const std::string& task_id, const std::string& execution_id,
-                                          const std::string& reserved_path) = 0;
+                                          const std::string& reserved_path,
+                                          const std::optional<MissingPathAsset>& missing = {}) = 0;
+
+    // Internal publication lookup, including missing assets which still hold their
+    // original name. The caller checks the recorded path (including its original case),
+    // never just the requested spelling. Bundle assets hold the bundle directory name.
+    virtual domain::Result<std::optional<FileAssetRecord>>
+    asset_at_path(const std::string& destination_id, const std::string& reserved_path) = 0;
 
     // finalizing -> completed: inserts the asset and the task-file relation, stores the
     // result (a JSON object, completed with the new "file_id") and removes the intent.
